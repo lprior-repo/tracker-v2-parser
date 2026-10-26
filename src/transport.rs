@@ -287,15 +287,16 @@ fn denied_body(capture: &Capture) -> bool {
 fn failure(error: &anyhow::Error) -> Failure {
     let detail = format!("{error:#}");
     let lower = detail.to_ascii_lowercase();
-    let blocked = error.is::<AccessStopCaptureError>() || [
-        "challenge",
-        "requires authentication",
-        "paywall",
-        "human review",
-        "human handling",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker));
+    let blocked = error.is::<AccessStopCaptureError>()
+        || [
+            "challenge",
+            "requires authentication",
+            "paywall",
+            "human review",
+            "human handling",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker));
     Failure {
         capture: None,
         blocked,

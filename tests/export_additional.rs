@@ -27,7 +27,13 @@ fn workbook_rows(path: &Path, sheet: &str) -> Result<Vec<BTreeMap<String, String
         .collect())
 }
 
-async fn seed_athlete(database: &Database, id: &str, name: &str, state: &str, year: i32) -> Result<()> {
+async fn seed_athlete(
+    database: &Database,
+    id: &str,
+    name: &str,
+    state: &str,
+    year: i32,
+) -> Result<()> {
     let school_id = format!("school-{id}");
     let school = School {
         id: school_id.clone(),
@@ -55,7 +61,8 @@ async fn seed_athlete(database: &Database, id: &str, name: &str, state: &str, ye
 }
 
 #[tokio::test]
-async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_and_years() -> Result<()> {
+async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_and_years()
+-> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
@@ -78,10 +85,17 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
             slow.result_id = Some("an-slow".to_owned());
             let mut fast = records::performance("10.90");
             fast.result_id = Some("an-fast".to_owned());
-            records::persist(&database, &first, &ParsedPage {
-                schools: vec![school], athletes: vec![athletic.clone()],
-                performances: vec![slow, fast], ..ParsedPage::default()
-            }).await?;
+            records::persist(
+                &database,
+                &first,
+                &ParsedPage {
+                    schools: vec![school],
+                    athletes: vec![athletic.clone()],
+                    performances: vec![slow, fast],
+                    ..ParsedPage::default()
+                },
+            )
+            .await?;
             let milesplit = Athlete {
                 profile_url: Some(milesplit_url.to_owned()),
                 ..records::athlete("21")
@@ -89,30 +103,59 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
             let mut mile_mark = records::performance("11.05");
             mile_mark.athlete_id = "21".to_owned();
             mile_mark.result_id = Some("ms-result".to_owned());
-            records::persist(&database, &second, &ParsedPage {
-                athletes: vec![milesplit], performances: vec![mile_mark], ..ParsedPage::default()
-            }).await?;
-            records::persist(&database, &first, &ParsedPage {
-                athletes: vec![Athlete { same_as: vec![milesplit_url.to_owned()], ..athletic }],
-                ..ParsedPage::default()
-            }).await?;
+            records::persist(
+                &database,
+                &second,
+                &ParsedPage {
+                    athletes: vec![milesplit],
+                    performances: vec![mile_mark],
+                    ..ParsedPage::default()
+                },
+            )
+            .await?;
+            records::persist(
+                &database,
+                &first,
+                &ParsedPage {
+                    athletes: vec![Athlete {
+                        same_as: vec![milesplit_url.to_owned()],
+                        ..athletic
+                    }],
+                    ..ParsedPage::default()
+                },
+            )
+            .await?;
             seed_athlete(&database, "31", "Ohio Runner", "OH", 2027).await?;
             seed_athlete(&database, "41", "Later Graduate", "WI", 2028).await?;
             let pending = records::target(Source::MileSplit, "pending");
             database.enqueue(&[pending.clone()], false).await?;
 
             let options = ExportOptions {
-                states: vec!["WI".to_owned()], graduation_years: vec![2027],
-                rows_per_file: 100, per_athlete_sheets: false,
+                states: vec!["WI".to_owned()],
+                graduation_years: vec![2027],
+                rows_per_file: 100,
+                per_athlete_sheets: false,
             };
-            let (snapshot, issues) = database.export_snapshot(&options.states, &options.graduation_years).await?;
+            let (snapshot, issues) = database
+                .export_snapshot(&options.states, &options.graduation_years)
+                .await?;
             assert_eq!(snapshot.len(), 1);
             assert_eq!(snapshot[0].name, "Alex Morgan");
-            assert_eq!(snapshot[0].profiles, vec![athletic_url.to_owned(), milesplit_url.to_owned()]);
+            assert_eq!(
+                snapshot[0].profiles,
+                vec![athletic_url.to_owned(), milesplit_url.to_owned()]
+            );
             assert_eq!(snapshot[0].performances.len(), 3);
-            assert!(issues.iter().any(|issue| issue.url == pending.url && issue.detail.contains("page pending")));
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.url == pending.url && issue.detail.contains("page pending"))
+            );
             let output = test.directory().join("mixed-source.xlsx");
-            assert_eq!(write_spreadsheets_with_issues(&output, &snapshot, &issues, &options)?, vec![output.clone()]);
+            assert_eq!(
+                write_spreadsheets_with_issues(&output, &snapshot, &issues, &options)?,
+                vec![output.clone()]
+            );
             let rows = workbook_rows(&output, "Athletes")?;
             assert_eq!(rows.len(), 1);
             let row = &rows[0];
@@ -120,15 +163,36 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
             assert_eq!(row["graduation_year"], "2027");
             assert_eq!(row["school_names"], "Wisconsin High");
             assert_eq!(row["school_states"], "WI");
-            assert_eq!(row["source_profiles"], format!("{athletic_url}; {milesplit_url}"));
-            assert_eq!(row["best_observed::athleticnet::outdoor::100m::fat::legal::mark"], "10.90");
-            assert_eq!(row["best_observed::athleticnet::outdoor::100m::fat::legal::source_url"], athletic_url);
-            assert_eq!(row["best_observed::milesplit::outdoor::100m::fat::legal::mark"], "11.05");
-            assert_eq!(row["best_observed::milesplit::outdoor::100m::fat::legal::source_url"], milesplit_url);
+            assert_eq!(
+                row["source_profiles"],
+                format!("{athletic_url}; {milesplit_url}")
+            );
+            assert_eq!(
+                row["best_observed::athleticnet::outdoor::100m::fat::legal::mark"],
+                "10.90"
+            );
+            assert_eq!(
+                row["best_observed::athleticnet::outdoor::100m::fat::legal::source_url"],
+                athletic_url
+            );
+            assert_eq!(
+                row["best_observed::milesplit::outdoor::100m::fat::legal::mark"],
+                "11.05"
+            );
+            assert_eq!(
+                row["best_observed::milesplit::outdoor::100m::fat::legal::source_url"],
+                milesplit_url
+            );
             let issue_rows = workbook_rows(&output, "Issues")?;
-            assert!(issue_rows.iter().any(|row| row.values().any(|cell| cell.contains(&pending.url)) && row.values().any(|cell| cell.contains("page pending"))));
+            assert!(
+                issue_rows
+                    .iter()
+                    .any(|row| row.values().any(|cell| cell.contains(&pending.url))
+                        && row.values().any(|cell| cell.contains("page pending")))
+            );
             database.close().await;
             Ok(())
         })
-    }).await
+    })
+    .await
 }

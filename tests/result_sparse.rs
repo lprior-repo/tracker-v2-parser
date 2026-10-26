@@ -1,10 +1,12 @@
 mod support;
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::Value;
 use track_scrapper_v2::{
     database::Database,
-    model::{Athlete, Capture, PageContext, PageKind, ParsedPage, Performance, Source, Sport, Target},
+    model::{
+        Athlete, Capture, PageContext, PageKind, ParsedPage, Performance, Source, Sport, Target,
+    },
 };
 
 fn observation() -> Performance {
@@ -36,50 +38,72 @@ async fn result(pool: &sqlx::PgPool) -> Result<Value> {
 }
 
 #[tokio::test]
-async fn sparse_observations_preserve_known_fields_and_populated_corrections_replace_them() -> Result<()> {
-    support::with_schema(|test| Box::pin(async move {
-        let database = Database::connect(&test.url).await?;
-        let target = Target::get(Source::AthleticNet, PageKind::Athlete, "https://example.test/athlete".into(), PageContext::default());
-        let capture = Capture { url: target.url.clone(), status: 200, content_type: "application/json".into(), body: Vec::new() };
-        let rich = observation();
-        let mut page = ParsedPage { athletes: vec![Athlete { id: rich.athlete_id.clone(), name: "Athlete".into(), ..Athlete::default() }], performances: vec![rich.clone()], ..ParsedPage::default() };
-        database.persist(None, &target, &capture, &page).await?;
-        let original = result(&test.pool).await?;
-        let mut sparse = rich;
-        sparse.event.clear();
-        sparse.mark.clear();
-        sparse.source_row = None;
-        sparse.meet_id = None;
-        sparse.meet_name = Some(" ".into());
-        sparse.date = None;
-        sparse.wind = None;
-        sparse.timing = None;
-        sparse.course = None;
-        sparse.season = None;
-        sparse.grade = None;
-        sparse.gender = None;
-        page.performances = vec![sparse];
-        database.persist(None, &target, &capture, &page).await?;
-        assert_eq!(result(&test.pool).await?, original);
-        let corrected = &mut page.performances[0];
-        corrected.event = "100 Meters".into();
-        corrected.mark = "DNF".into();
-        corrected.meet_name = Some("Corrected meet".into());
-        corrected.wind = Some(0.0);
-        corrected.season = Some(2025);
-        database.persist(None, &target, &capture, &page).await?;
-        let updated = result(&test.pool).await?;
-        assert_eq!(updated["mark"], "DNF");
-        assert_eq!(updated["meet_name"], "Corrected meet");
-        assert_eq!(updated["wind"], json!(0.0));
-        assert_eq!(updated["season"], 2025);
-        assert_eq!(updated["date"], "2026-04-01");
-        assert_eq!(updated["numeric"], Value::Null);
-        assert_eq!(updated["unit"], Value::Null);
-        assert_eq!(updated["status"], "DNF");
-        assert_eq!(updated["raw"]["meet_name"], "Corrected meet");
-        assert_eq!(updated["raw"]["date"], "2026-04-01");
-        database.close().await;
-        Ok(())
-    })).await
+async fn sparse_observations_preserve_known_fields_and_populated_corrections_replace_them()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = Target::get(
+                Source::AthleticNet,
+                PageKind::Athlete,
+                "https://www.athletic.net/athlete/athlete-1".into(),
+                PageContext::default(),
+            );
+            let capture = Capture {
+                url: target.url.clone(),
+                status: 200,
+                content_type: "application/json".into(),
+                body: Vec::new(),
+            };
+            let rich = observation();
+            let mut page = ParsedPage {
+                athletes: vec![Athlete {
+                    id: rich.athlete_id.clone(),
+                    name: "Athlete".into(),
+                    ..Athlete::default()
+                }],
+                performances: vec![rich.clone()],
+                ..ParsedPage::default()
+            };
+            database.persist(None, &target, &capture, &page).await?;
+            let original = result(&test.pool).await?;
+            let mut sparse = rich;
+            sparse.event.clear();
+            sparse.mark.clear();
+            sparse.source_row = None;
+            sparse.meet_id = None;
+            sparse.meet_name = Some(" ".into());
+            sparse.date = None;
+            sparse.wind = None;
+            sparse.timing = None;
+            sparse.course = None;
+            sparse.season = None;
+            sparse.grade = None;
+            sparse.gender = None;
+            page.performances = vec![sparse];
+            database.persist(None, &target, &capture, &page).await?;
+            assert_eq!(result(&test.pool).await?, original);
+            let corrected = &mut page.performances[0];
+            corrected.event = "100 Meters".into();
+            corrected.mark = "DNF".into();
+            corrected.meet_name = Some("Corrected meet".into());
+            corrected.wind = Some(0.0);
+            corrected.season = Some(2025);
+            database.persist(None, &target, &capture, &page).await?;
+            let updated = result(&test.pool).await?;
+            assert_eq!(updated["mark"], "DNF");
+            assert_eq!(updated["meet_name"], "Corrected meet");
+            assert_eq!(updated["wind"].as_f64(), Some(0.0));
+            assert_eq!(updated["season"], 2025);
+            assert_eq!(updated["date"], "2026-04-01");
+            assert_eq!(updated["numeric"], Value::Null);
+            assert_eq!(updated["unit"], Value::Null);
+            assert_eq!(updated["status"], "DNF");
+            assert_eq!(updated["raw"]["meet_name"], "Corrected meet");
+            assert_eq!(updated["raw"]["date"], "2026-04-01");
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
 }

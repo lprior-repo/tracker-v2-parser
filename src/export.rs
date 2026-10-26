@@ -105,9 +105,10 @@ fn write_parts(
     match (result, cleanup) {
         (Ok(()), Ok(())) => Ok(destinations),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(error.context(
-            "all workbook parts were published, but temporary-file cleanup failed",
-        )),
+        (Ok(()), Err(error)) => {
+            Err(error
+                .context("all workbook parts were published, but temporary-file cleanup failed"))
+        }
         (Err(error), Err(cleanup)) => Err(error.context(cleanup.to_string())),
     }
 }
@@ -151,8 +152,11 @@ fn stage(
 
 fn publish_parts(staged: &[PathBuf], destinations: &[PathBuf]) -> Result<()> {
     let mut published: Vec<&Path> = Vec::with_capacity(destinations.len());
-    staged.iter().zip(destinations).try_for_each(|(temporary, path)| {
-        fs::hard_link(temporary, path).with_context(|| {
+    staged
+        .iter()
+        .zip(destinations)
+        .try_for_each(|(temporary, path)| {
+            fs::hard_link(temporary, path).with_context(|| {
             let published = published
                 .iter()
                 .map(|path| path.display().to_string())
@@ -164,9 +168,9 @@ fn publish_parts(staged: &[PathBuf], destinations: &[PathBuf]) -> Result<()> {
                 published
             )
         })?;
-        published.push(path.as_path());
-        Ok::<(), anyhow::Error>(())
-    })
+            published.push(path.as_path());
+            Ok::<(), anyhow::Error>(())
+        })
 }
 
 fn cleanup_staged(staged: &[PathBuf]) -> Result<()> {
@@ -178,7 +182,11 @@ fn cleanup_staged(staged: &[PathBuf]) -> Result<()> {
                 .map(|error| format!("{}: {error}", path.display()))
         })
         .collect::<Vec<_>>();
-    anyhow::ensure!(errors.is_empty(), "removing temporary workbooks: {}", errors.join("; "));
+    anyhow::ensure!(
+        errors.is_empty(),
+        "removing temporary workbooks: {}",
+        errors.join("; ")
+    );
     Ok(())
 }
 
@@ -194,8 +202,14 @@ mod publication_tests {
     #[test]
     fn concurrent_destination_preserves_other_file_and_reports_published_part() -> Result<()> {
         let directory = tempfile::tempdir()?;
-        let staged = [directory.path().join("stage-1"), directory.path().join("stage-2")];
-        let destinations = [directory.path().join("part-1"), directory.path().join("part-2")];
+        let staged = [
+            directory.path().join("stage-1"),
+            directory.path().join("stage-2"),
+        ];
+        let destinations = [
+            directory.path().join("part-1"),
+            directory.path().join("part-2"),
+        ];
         fs::write(&staged[0], b"first workbook")?;
         fs::write(&staged[1], b"second workbook")?;
         fs::write(&destinations[1], b"other user's file")?;
@@ -203,7 +217,11 @@ mod publication_tests {
         let error = publish_parts(&staged, &destinations)
             .err()
             .ok_or_else(|| anyhow::anyhow!("publication unexpectedly succeeded"))?;
-        assert!(error.to_string().contains(&destinations[0].display().to_string()));
+        assert!(
+            error
+                .to_string()
+                .contains(&destinations[0].display().to_string())
+        );
         assert_eq!(fs::read(&destinations[0])?, b"first workbook");
         assert_eq!(fs::read(&destinations[1])?, b"other user's file");
         cleanup_staged(&staged)?;

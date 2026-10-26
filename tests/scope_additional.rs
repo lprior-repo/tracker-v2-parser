@@ -52,13 +52,16 @@ async fn seed(
 }
 
 #[tokio::test]
-async fn given_school_state_without_athlete_state_when_scoped_then_record_is_not_forced_to_review() -> Result<()> {
+async fn given_school_state_without_athlete_state_when_scoped_then_record_is_not_forced_to_review()
+-> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             seed(&database, "11", None, Some("WI"), Some(2027), false, false).await?;
             seed(&database, "12", None, Some("WI"), Some(2027), true, false).await?;
-            let records = database.athlete_records_for(&["WI".to_owned()], &[2027]).await?;
+            let records = database
+                .athlete_records_for(&["WI".to_owned()], &[2027])
+                .await?;
             assert_eq!(records.len(), 2);
             assert!(!records[0].needs_review);
             assert_eq!(records[0].schools[0].state.as_deref(), Some("WI"));
@@ -66,22 +69,58 @@ async fn given_school_state_without_athlete_state_when_scoped_then_record_is_not
             database.close().await;
             Ok(())
         })
-    }).await
+    })
+    .await
 }
 
 #[tokio::test]
-async fn given_linked_school_states_when_scoped_then_school_and_cohort_determine_candidates() -> Result<()> {
+async fn given_linked_school_states_when_scoped_then_school_and_cohort_determine_candidates()
+-> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
-            seed(&database, "21", Some("OH"), Some(" wi "), Some(2027), false, false).await?;
-            seed(&database, "22", Some("OH"), Some("WI"), Some(2027), false, true).await?;
-            seed(&database, "23", Some("WI"), Some("OH"), Some(2027), false, false).await?;
+            seed(
+                &database,
+                "21",
+                Some("OH"),
+                Some(" wi "),
+                Some(2027),
+                false,
+                false,
+            )
+            .await?;
+            seed(
+                &database,
+                "22",
+                Some("OH"),
+                Some("WI"),
+                Some(2027),
+                false,
+                true,
+            )
+            .await?;
+            seed(
+                &database,
+                "23",
+                Some("WI"),
+                Some("OH"),
+                Some(2027),
+                false,
+                false,
+            )
+            .await?;
             seed(&database, "24", Some("OH"), None, None, false, false).await?;
             seed(&database, "25", None, Some("WI"), Some(2028), false, false).await?;
-            let records = database.athlete_records_for(&["WI".to_owned()], &[2027]).await?;
-            assert_eq!(records.iter().map(|record| record.name.as_str()).collect::<Vec<_>>(),
-                       vec!["Runner 21", "Runner 22", "Runner 24"]);
+            let records = database
+                .athlete_records_for(&["WI".to_owned()], &[2027])
+                .await?;
+            assert_eq!(
+                records
+                    .iter()
+                    .map(|record| record.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["Runner 21", "Runner 22", "Runner 24"]
+            );
             assert_eq!(records[1].schools[0].state.as_deref(), Some("WI"));
             assert!(records[2].needs_review);
             let all = database.athlete_records_for(&[], &[]).await?;
@@ -89,5 +128,6 @@ async fn given_linked_school_states_when_scoped_then_school_and_cohort_determine
             database.close().await;
             Ok(())
         })
-    }).await
+    })
+    .await
 }

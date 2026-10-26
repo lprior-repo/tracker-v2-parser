@@ -443,8 +443,7 @@ fn given_explicit_person_identity_link_when_parsed_then_only_owned_same_as_is_em
 }
 
 #[test]
-fn given_nonwinning_status_rows_when_parsed_then_statuses_and_row_evidence_survive()
--> Result<()> {
+fn given_nonwinning_status_rows_when_parsed_then_statuses_and_row_evidence_survive() -> Result<()> {
     let original = parse(&raw_target(), RAW)?;
     let original_id = original
         .unassigned_results
@@ -474,11 +473,23 @@ fn given_nonwinning_status_rows_when_parsed_then_statuses_and_row_evidence_survi
 }
 
 #[test]
-fn given_raw_row_replacement_at_same_position_when_parsed_then_identity_does_not_overwrite() -> Result<()> {
+fn given_raw_row_replacement_at_same_position_when_parsed_then_identity_does_not_overwrite()
+-> Result<()> {
     let original = parse(&raw_target(), RAW)?;
-    let changed = parse(&raw_target(), &RAW.replacen("Jeydyn Fields", "Another Runner", 1))?;
-    let first = original.unassigned_results.first().ok_or_else(|| anyhow::anyhow!("missing row"))?;
-    let replacement = changed.unassigned_results.first().ok_or_else(|| anyhow::anyhow!("missing replacement"))?;
+    let changed = parse(
+        &raw_target(),
+        &RAW.replacen("Jeydyn Fields", "Other Runners", 1),
+    )?;
+    let first = original
+        .unassigned_results
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing row"))?;
+    let replacement = changed
+        .unassigned_results
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing replacement"))?;
+    assert_eq!(first.raw["name"], "Jeydyn Fields");
+    assert_eq!(replacement.raw["name"], "Other Runners");
     assert_eq!(first.mark, replacement.mark);
     assert_ne!(first.result_id, replacement.result_id);
     Ok(())

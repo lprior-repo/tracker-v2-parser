@@ -103,11 +103,16 @@ pub(super) fn athlete(
     })
 }
 
-pub(super) fn source_row(row: &Value, coordinate: String) -> String {
+pub(super) fn source_row(row: &Value, coordinate: &str) -> String {
     text(row, "shortCode")
         .or_else(|| text(row, "ShortCode"))
         .map_or_else(
-            || format!("{coordinate}:content:{:x}", Sha256::digest(row.to_string().as_bytes())),
+            || {
+                format!(
+                    "{coordinate}:content:{:x}",
+                    Sha256::digest(row.to_string().as_bytes())
+                )
+            },
             |id| format!("shortCode:{id}"),
         )
 }

@@ -25,7 +25,8 @@ fn performance() -> Performance {
 }
 
 #[test]
-fn given_unknown_courses_when_source_rows_differ_then_comparison_keys_stay_separate() -> anyhow::Result<()> {
+fn given_unknown_courses_when_source_rows_differ_then_comparison_keys_stay_separate()
+-> anyhow::Result<()> {
     let first = performance();
     let mut second = first.clone();
     second.source_row = Some("resultsXC:2".to_owned());
@@ -42,7 +43,8 @@ fn given_unknown_courses_when_source_rows_differ_then_comparison_keys_stay_separ
 }
 
 #[test]
-fn given_unknown_courses_when_result_or_page_differs_then_comparison_keys_stay_separate() -> anyhow::Result<()> {
+fn given_unknown_courses_when_result_or_page_differs_then_comparison_keys_stay_separate()
+-> anyhow::Result<()> {
     let first = performance();
     let mut second = first.clone();
     second.result_id = Some("result-2".to_owned());

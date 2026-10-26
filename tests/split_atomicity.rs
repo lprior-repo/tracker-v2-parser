@@ -35,7 +35,10 @@ fn options() -> ExportOptions {
 fn later_part_write_failure_leaves_no_published_or_temporary_files() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let output = directory.path().join("export.xlsx");
-    let records = [athlete(1, "First".to_owned()), athlete(2, "x".repeat(32_768))];
+    let records = [
+        athlete(1, "First".to_owned()),
+        athlete(2, "x".repeat(32_768)),
+    ];
 
     assert!(write_spreadsheets(&output, &records, &options()).is_err());
     assert_eq!(fs::read_dir(directory.path())?.count(), 0);
@@ -48,7 +51,10 @@ fn existing_later_part_is_preserved_and_nothing_else_is_published() -> Result<()
     let output = directory.path().join("export.xlsx");
     let existing = directory.path().join("export-0002.xlsx");
     fs::write(&existing, b"other user's file")?;
-    let records = [athlete(1, "First".to_owned()), athlete(2, "Second".to_owned())];
+    let records = [
+        athlete(1, "First".to_owned()),
+        athlete(2, "Second".to_owned()),
+    ];
 
     assert!(write_spreadsheets(&output, &records, &options()).is_err());
     assert_eq!(fs::read(&existing)?, b"other user's file");
@@ -60,14 +66,26 @@ fn existing_later_part_is_preserved_and_nothing_else_is_published() -> Result<()
 fn successful_split_publishes_verified_parts_without_temporary_files() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let output = directory.path().join("export.xlsx");
-    let records = [athlete(1, "First".to_owned()), athlete(2, "Second".to_owned())];
+    let records = [
+        athlete(1, "First".to_owned()),
+        athlete(2, "Second".to_owned()),
+    ];
 
     let parts = write_spreadsheets(&output, &records, &options())?;
-    assert_eq!(parts, vec![directory.path().join("export-0001.xlsx"), directory.path().join("export-0002.xlsx")]);
+    assert_eq!(
+        parts,
+        vec![
+            directory.path().join("export-0001.xlsx"),
+            directory.path().join("export-0002.xlsx")
+        ]
+    );
     for (part, name) in parts.iter().zip(["First", "Second"]) {
         let mut workbook = open_workbook_auto(part)?;
         let sheet = workbook.worksheet_range("Athletes")?;
-        assert_eq!(sheet.get_value((1, 1)).map(ToString::to_string).as_deref(), Some(name));
+        assert_eq!(
+            sheet.get_value((1, 1)).map(ToString::to_string).as_deref(),
+            Some(name)
+        );
     }
     assert_eq!(fs::read_dir(directory.path())?.count(), 2);
     Ok(())

@@ -4,7 +4,9 @@ mod retained;
 use anyhow::{Result, ensure};
 use scraper::{ElementRef, Html};
 
-use crate::model::{Athlete, PageContext, PageKind, ParsedPage, Performance, School, Source, Target};
+use crate::model::{
+    Athlete, PageContext, PageKind, ParsedPage, Performance, School, Source, Target,
+};
 
 use super::{html, meets, targets};
 
@@ -110,11 +112,10 @@ fn read_line(
     let row = columns::row(&line, columns);
     reader.rows = reader.rows.saturating_add(1);
     let Some(row) = row else {
-        reader.page.unassigned_results.push(retained::unassigned(
-            &scope,
-            None,
-            school.as_deref(),
-        )?);
+        reader
+            .page
+            .unassigned_results
+            .push(retained::unassigned(&scope, None, school.as_deref())?);
         reader.page.notes.push(format!(
             "Incomplete raw column parsing at source line {}; original row retained losslessly",
             ordinal.saturating_add(1)

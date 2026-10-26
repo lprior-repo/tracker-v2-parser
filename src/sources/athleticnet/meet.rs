@@ -139,8 +139,10 @@ fn retain_block(
             } else {
                 retain_individual(target, block, row, &label, athletes, page);
             }
-            let source_row =
-                v::source_row(row, format!("flatEvents:{block_ordinal}:results:{ordinal}"));
+            let source_row = v::source_row(
+                row,
+                &format!("flatEvents:{block_ordinal}:results:{ordinal}"),
+            );
             if page.performances.len() > performances {
                 if let Some(result) = page.performances.last_mut() {
                     result.source_row = Some(source_row);

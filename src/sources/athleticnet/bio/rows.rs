@@ -19,7 +19,7 @@ pub(super) fn retain(
         return;
     };
     for (ordinal, row) in rows.iter().enumerate() {
-        let source_row = v::source_row(row, format!("{key}:{ordinal}"));
+        let source_row = v::source_row(row, &format!("{key}:{ordinal}"));
         match project(body, key, row, athlete) {
             Some(performance) if performance.is_relay => {
                 let mut result = unassigned(body, key, row, requested);
@@ -66,7 +66,7 @@ pub(super) fn retain_unidentified(body: &Value, requested: Sport, page: &mut Par
             .enumerate()
             .for_each(|(ordinal, row)| {
                 let mut result = unassigned(body, key, row, requested);
-                result.source_row = Some(v::source_row(row, format!("{key}:{ordinal}")));
+                result.source_row = Some(v::source_row(row, &format!("{key}:{ordinal}")));
                 if result.is_relay {
                     retain_members(body, row, &mut result);
                 }

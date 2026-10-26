@@ -3,8 +3,8 @@ mod records;
 mod support;
 
 use anyhow::Result;
-use serde_json::json;
 use records::{athlete, performance, persist, target};
+use serde_json::json;
 use track_scrapper_v2::{
     database::Database,
     model::{Athlete, ParsedPage, Source},
@@ -97,27 +97,59 @@ async fn later_conflict_moves_existing_results_and_does_not_remerge_on_replay() 
 
 #[tokio::test]
 async fn sparse_profile_replay_preserves_published_details_and_links() -> Result<()> {
-    support::with_schema(|test| Box::pin(async move {
-        let database = Database::connect(&test.url).await?;
-        let first = Athlete {
-            gender: Some("female".to_owned()),
-            grade: Some("10".to_owned()),
-            profile_url: Some("https://www.athletic.net/athlete/11".to_owned()),
-            same_as: vec!["https://www.milesplit.com/athletes/21".to_owned()],
-            ..athlete("11")
-        };
-        let target = target(Source::AthleticNet, "11");
-        persist(&database, &target, &ParsedPage { athletes: vec![first], ..ParsedPage::default() }).await?;
-        let sparse = Athlete { id: "11".to_owned(), name: "Alex Morgan".to_owned(), ..Athlete::default() };
-        persist(&database, &target, &ParsedPage { athletes: vec![sparse], ..ParsedPage::default() }).await?;
-        let details: serde_json::Value = sqlx::query_scalar("SELECT details FROM athlete_sources WHERE source='athleticnet'")
-            .fetch_one(&test.pool).await?;
-        assert_eq!(details["gender"], json!("female"));
-        assert_eq!(details["grade"], json!("10"));
-        assert_eq!(details["graduation_year"], json!(2027));
-        assert_eq!(details["profile_url"], json!("https://www.athletic.net/athlete/11"));
-        assert_eq!(details["same_as"], json!(["https://www.milesplit.com/athletes/21"]));
-        database.close().await;
-        Ok(())
-    })).await
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let first = Athlete {
+                gender: Some("female".to_owned()),
+                grade: Some("10".to_owned()),
+                profile_url: Some("https://www.athletic.net/athlete/11".to_owned()),
+                same_as: vec!["https://www.milesplit.com/athletes/21".to_owned()],
+                ..athlete("11")
+            };
+            let target = target(Source::AthleticNet, "11");
+            persist(
+                &database,
+                &target,
+                &ParsedPage {
+                    athletes: vec![first],
+                    ..ParsedPage::default()
+                },
+            )
+            .await?;
+            let sparse = Athlete {
+                id: "11".to_owned(),
+                name: "Alex Morgan".to_owned(),
+                ..Athlete::default()
+            };
+            persist(
+                &database,
+                &target,
+                &ParsedPage {
+                    athletes: vec![sparse],
+                    ..ParsedPage::default()
+                },
+            )
+            .await?;
+            let details: serde_json::Value = sqlx::query_scalar(
+                "SELECT details FROM athlete_sources WHERE source='athleticnet'",
+            )
+            .fetch_one(&test.pool)
+            .await?;
+            assert_eq!(details["gender"], json!("female"));
+            assert_eq!(details["grade"], json!("10"));
+            assert_eq!(details["graduation_year"], json!(2027));
+            assert_eq!(
+                details["profile_url"],
+                json!("https://www.athletic.net/athlete/11")
+            );
+            assert_eq!(
+                details["same_as"],
+                json!(["https://www.milesplit.com/athletes/21"])
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
 }
