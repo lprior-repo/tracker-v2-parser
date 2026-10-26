@@ -1,0 +1,1409 @@
+{
+"sport": "tf",
+"sport1": "tf",
+"sport2": "tfo",
+"meet": {
+"Location": {
+"LanesOval": null,
+"LanesStraight": null,
+"Indoor": false,
+"TrackType": null,
+"TrackLength": null,
+"TrackMeasure": null,
+"OpenedDate": null,
+"RetiredDate": null,
+"Meets": [],
+"ID": 93244,
+"Name": "Sun Prairie HS",
+"Address": "888 Grove Street, Sun Prairie, WI",
+"City": "Sun Prairie",
+"State": "WI",
+"PostalCode": "53593",
+"Country": "US",
+"Country3": "USA",
+"Venue": null,
+"Verified": false,
+"Notes": null,
+"Altitude": null,
+"TimezoneID": "America/Chicago",
+"Lat": 43.1734796,
+"Long": -89.2087698,
+"GoogleData": {
+"results": [
+{
+"address_components": [
+{
+"long_name": "888",
+"short_name": "888",
+"types": [
+"street_number"
+]
+},
+{
+"long_name": "Grove Street",
+"short_name": "Grove St",
+"types": [
+"route"
+]
+},
+{
+"long_name": "Sun Prairie",
+"short_name": "Sun Prairie",
+"types": [
+"locality",
+"political"
+]
+},
+{
+"long_name": "Dane County",
+"short_name": "Dane County",
+"types": [
+"administrative_area_level_2",
+"political"
+]
+},
+{
+"long_name": "Wisconsin",
+"short_name": "WI",
+"types": [
+"administrative_area_level_1",
+"political"
+]
+},
+{
+"long_name": "United States",
+"short_name": "US",
+"types": [
+"country",
+"political"
+]
+},
+{
+"long_name": "53590",
+"short_name": "53590",
+"types": [
+"postal_code"
+]
+}
+],
+"formatted_address": "888 Grove St, Sun Prairie, WI 53590, USA",
+"geometry": {
+"location": {
+"lat": 43.1734796,
+"lng": -89.2087698
+},
+"location_type": "ROOFTOP",
+"viewport": {
+"northeast": {
+"lat": 43.1748285802915,
+"lng": -89.20742081970849
+},
+"southwest": {
+"lat": 43.1721306197085,
+"lng": -89.21011878029151
+}
+}
+},
+"place_id": "ChIJQ2CZNNX3BogRh5BB7dfiYXw",
+"types": [
+"establishment",
+"point_of_interest",
+"school"
+]
+}
+],
+"status": "OK"
+}
+},
+"FieldStart": "2026-05-15T15:30:00",
+"TrackStart": "2026-05-15T15:45:00",
+"AcceptOverrides": 1,
+"StandardizeSeeds": 1,
+"HistoryListID": 0,
+"HasRounds": false,
+"FieldMeasure": "E",
+"MaxUsedEventNum": null,
+"MaxAthleteEvents": 4,
+"RelayAlternates": 2,
+"RelayAthletesRequired": 4,
+"EventEntriesPerTeam": 3,
+"RelayEntriesPerTeam": 1,
+"RelayMode": 0,
+"ShowEvents": 1,
+"LockSeeds": 0,
+"LockSeedsTS": null,
+"AcceptRelayOverrides": 1,
+"ScratchEnd": null,
+"Sessions": {
+"T": [
+{
+"day": 1,
+"dayOfMeet": 1,
+"sessions": [
+{
+"sessionId": 1000,
+"sessionTitle": "Track - Day 1",
+"sessionGUID": "a06b6c1c-d016-472c-8499-49fe3204a78f"
+}
+]
+}
+],
+"F": [
+{
+"day": 1,
+"dayOfMeet": 1,
+"sessions": [
+{
+"sessionId": 2000,
+"sessionTitle": "Field - Day 1",
+"sessionGUID": "60c370b6-f1c9-431a-9ff2-bc363add157c"
+}
+]
+}
+],
+"M": [
+{
+"day": 1,
+"dayOfMeet": 1,
+"sessions": [
+{
+"sessionId": 3000,
+"sessionTitle": "Multi-Event - Day 1",
+"sessionGUID": "c098ef16-e122-4876-83c6-cbec51525ba8"
+}
+]
+}
+]
+},
+"TeamScores": [
+{
+"division": {
+"anetId": 1366830,
+"id": 1,
+"levelMask": 4,
+"name": "Varsity",
+"nameShort": "V"
+},
+"eventsCompleted": {
+"M": 18,
+"F": 18,
+"X": 0
+},
+"eventsTotal": {
+"M": 18,
+"F": 18,
+"X": 0
+},
+"regular": {
+"M": [
+{
+"rank": 1,
+"team": {
+"anetId": 2840,
+"code": "VERO",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Verona Area",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 139.0
+},
+{
+"rank": 2,
+"team": {
+"anetId": 3011,
+"code": "SPES",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 137.0
+},
+{
+"rank": 3,
+"team": {
+"anetId": 3135,
+"code": "JAPA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Parker",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 94.0
+},
+{
+"rank": 4,
+"team": {
+"anetId": 3204,
+"code": "MIDD",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Middleton",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 86.0
+},
+{
+"rank": 5,
+"team": {
+"anetId": 83745,
+"code": "SPWS",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 84.0
+},
+{
+"rank": 6,
+"team": {
+"anetId": 3177,
+"code": "MALA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison La Follette",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 63.0
+},
+{
+"rank": 7,
+"team": {
+"anetId": 3173,
+"code": "MAME",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison Memorial",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 40.0
+},
+{
+"rank": 8,
+"team": {
+"anetId": 3133,
+"code": "JACR",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Craig",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 25.0
+},
+{
+"rank": 9,
+"team": {
+"anetId": 3175,
+"code": "MAWE",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 22.0
+},
+{
+"rank": 10,
+"team": {
+"anetId": 3174,
+"code": "MAEA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 12.0
+}
+],
+"F": [
+{
+"rank": 1,
+"team": {
+"anetId": 3011,
+"code": "SPES",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 157.5
+},
+{
+"rank": 2,
+"team": {
+"anetId": 2840,
+"code": "VERO",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Verona Area",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 135.0
+},
+{
+"rank": 3,
+"team": {
+"anetId": 3204,
+"code": "MIDD",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Middleton",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 81.5
+},
+{
+"rank": 4,
+"team": {
+"anetId": 3173,
+"code": "MAME",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison Memorial",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 65.0
+},
+{
+"rank": 5,
+"team": {
+"anetId": 3177,
+"code": "MALA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison La Follette",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 64.0
+},
+{
+"rank": 6,
+"team": {
+"anetId": 3135,
+"code": "JAPA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Parker",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 56.0
+},
+{
+"rank": 7,
+"team": {
+"anetId": 3175,
+"code": "MAWE",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 50.0
+},
+{
+"rank": 8,
+"team": {
+"anetId": 3133,
+"code": "JACR",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Craig",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 38.0
+},
+{
+"rank": 9,
+"team": {
+"anetId": 83745,
+"code": "SPWS",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 28.0
+},
+{
+"rank": 10,
+"team": {
+"anetId": 3174,
+"code": "MAEA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 27.0
+}
+],
+"X": null
+},
+"doubleDual": null,
+"show": true,
+"teamGroupName": null,
+"timestamp": null
+},
+{
+"division": {
+"anetId": 1366831,
+"id": 2,
+"levelMask": 4,
+"name": "Wheelchair",
+"nameShort": "WC"
+},
+"eventsCompleted": {
+"M": 4,
+"F": 5,
+"X": 0
+},
+"eventsTotal": {
+"M": 4,
+"F": 5,
+"X": 0
+},
+"regular": {
+"M": [
+{
+"rank": 1,
+"team": {
+"anetId": 3173,
+"code": "MAME",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison Memorial",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 38.0
+},
+{
+"rank": 2,
+"team": {
+"anetId": 3011,
+"code": "SPES",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 34.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 2840,
+"code": "VERO",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Verona Area",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3133,
+"code": "JACR",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Craig",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3135,
+"code": "JAPA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Parker",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3174,
+"code": "MAEA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3175,
+"code": "MAWE",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3177,
+"code": "MALA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison La Follette",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3204,
+"code": "MIDD",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Middleton",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 83745,
+"code": "SPWS",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+}
+],
+"F": [
+{
+"rank": 1,
+"team": {
+"anetId": 3011,
+"code": "SPES",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": 74.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 2840,
+"code": "VERO",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Verona Area",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3133,
+"code": "JACR",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Craig",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3135,
+"code": "JAPA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Janesville Parker",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3173,
+"code": "MAME",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison Memorial",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3174,
+"code": "MAEA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison East",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3175,
+"code": "MAWE",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3177,
+"code": "MALA",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Madison La Follette",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 3204,
+"code": "MIDD",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Middleton",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+},
+{
+"rank": 0,
+"team": {
+"anetId": 83745,
+"code": "SPWS",
+"country": "USA",
+"exhibition": false,
+"level": 4,
+"name": "Sun Prairie West",
+"nonScoring": 0,
+"unattached": false
+},
+"points": -1.0
+}
+],
+"X": null
+},
+"doubleDual": null,
+"show": true,
+"teamGroupName": null,
+"timestamp": null
+}
+],
+"SeedBuilderSettings": {
+"depth": 9999,
+"eventType": 0,
+"page": 1,
+"fat": false,
+"official": false,
+"wind": -1,
+"altitude": false,
+"trackType": "any",
+"season": 2026,
+"conversion": 0,
+"convertToEvents": [],
+"primaryMeasure": "E",
+"followed": "noFilter",
+"bestCollegeSeedWins": true,
+"seedBuilderVersion": 18,
+"showItems": false
+},
+"ID": 634313,
+"SeasonID": 2026,
+"LevelMask": 4,
+"OwnerID": 89010,
+"Name": "Big 8 Conference",
+"LocationID": 93244,
+"Website": "https://www.pttiming.com/event/2714?pt=schedule",
+"MeetDate": "2026-05-15T00:00:00",
+"StartDate": "2026-05-15T00:00:00",
+"EndDate": "2026-05-15T00:00:00",
+"HasResults": 1,
+"CalendarLock": 0,
+"UCalendarLock": 0,
+"RegStart": "2026-05-06T05:00:00+00:00",
+"AthleteLock": "2026-05-14T01:00:00+00:00",
+"RegEnd": "2026-05-14T01:00:00+00:00",
+"PublicEntries": null,
+"PublicEntriesUTC": null,
+"RegLock": false,
+"DivisionLock": true,
+"ShowAds": true,
+"ReplacementID": 0,
+"UploadLock": 0,
+"ResultLock": 0,
+"FinalizedReason": 30,
+"Finalized": "2026-05-15T19:03:46.08-07:00",
+"PublicPublished": 0,
+"OfficialSeeds": 0,
+"SeedSource": 0,
+"AllowCorrections": 2,
+"GradeType": 0,
+"DfpTag": null,
+"PostBranding": null,
+"LocationFilter": null,
+"AthleteFilter": null,
+"WaiverFilter": null,
+"ImportLocked": true,
+"ImportScratched": false,
+"ReviewLevel": 142,
+"Template": "PriorMeet - 634309",
+"ContactUserID": 1524314,
+"SetupState": "{\"sport\":\"tfo\",\"type\":\"manager\",\"agreeStart\":{\"id\":1524314,\"ip\":\"98.144.66.17\",\"ts\":\"2026-01-30T19:40:59.397Z\"},\"template\":\"done\",\"info\":\"done\",\"divisions\":\"done\",\"options\":\"done\",\"seeds\":\"done\",\"fees\":\"skip\",\"bibs\":\"skip\",\"events\":\"done\",\"activate\":{\"id\":1524314,\"ip\":\"98.144.66.17\",\"ts\":\"2026-01-30T19:46:37.794Z\"},\"when\":\"later\",\"showWelcome\":true}",
+"RegEnabled": true,
+"Timezone_DST": "CT_1",
+"VideoURL": null,
+"AcceptanceStatus": 10,
+"RawResults": false,
+"NCSA": null,
+"AauEventCd": null,
+"AthleteBio": null,
+"CustomForms": null,
+"Bolt": 2,
+"BoltInitTS": "2026-05-15T02:47:14.39+00:00",
+"Virtual": false,
+"Gender": "B",
+"UstfcccaID": null,
+"LiveID": 73767,
+"LivePublished": false,
+"AthleteAgeOn": null,
+"WaMeetID": null,
+"BaseDivID": null,
+"TimerID": null,
+"ModifiedTS": "2026-05-16T02:03:46.92+00:00",
+"Settings": "{\"download\":{\"unatFormat\":1},\"regNumType\":null,\"regNumSource\":null,\"compNumType\":null,\"compNumSource\":null,\"maxMeetAthletes\":{},\"maxTeamAthletes\":{},\"acceptIndividualSeedOverride\":true,\"autoConfirmTeams\":1,\"hostAddedTeams\":0,\"maxTeamEntries\":{\"omitRelays\":1,\"M\":null,\"F\":null},\"msAtEnd\":1,\"VideoSettings\":{\"allowViewingIfTagged\":false,\"trackRequireAPlus\":true,\"trackRequireRsPlus\":true,\"fieldRequireAPlus\":true,\"fieldRequireRsPlus\":true,\"trackFreeVideoHours\":0,\"fieldFreeVideoHours\":0,\"isDrmProtected\":false,\"streamWatermarkS3Location\":null,\"downloadWatermarkS3Location\":null,\"downloadOptions\":2,\"overlay\":0}}"
+},
+"meetRecordSetInfo": {
+"id": 0,
+"visibility": 0
+},
+"hostIsSS": true,
+"coverRsUrl": null,
+"eventDivsWithResults": [
+{
+"e": 1,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 1,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 2,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 3,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 3,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 4,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 4,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 7,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 1
+},
+{
+"eventId": 1
+},
+{
+"eventId": 1
+},
+{
+"eventId": 1
+}
+]
+},
+{
+"e": 8,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 3
+},
+{
+"eventId": 3
+},
+{
+"eventId": 3
+},
+{
+"eventId": 3
+}
+]
+},
+{
+"e": 9,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 10,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 11,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 12,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 12,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 13,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 16,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 17,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 18,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 19,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 19,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 20,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 21,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 21,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 22,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 22,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 25,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 19
+},
+{
+"eventId": 19
+},
+{
+"eventId": 19
+},
+{
+"eventId": 19
+}
+]
+},
+{
+"e": 26,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 21
+},
+{
+"eventId": 21
+},
+{
+"eventId": 21
+},
+{
+"eventId": 21
+}
+]
+},
+{
+"e": 27,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 28,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 29,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 30,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 30,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 31,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 34,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 35,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 36,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 39,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 4
+},
+{
+"eventId": 4
+},
+{
+"eventId": 4
+},
+{
+"eventId": 4
+}
+]
+},
+{
+"e": 50,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 2
+},
+{
+"eventId": 2
+},
+{
+"eventId": 2
+},
+{
+"eventId": 2
+}
+]
+},
+{
+"e": 51,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 20
+},
+{
+"eventId": 20
+},
+{
+"eventId": 20
+},
+{
+"eventId": 20
+}
+]
+},
+{
+"e": 52,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 53,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 53,
+"d": 2,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 60,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 61,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": null
+},
+{
+"e": 67,
+"d": 1,
+"t": null,
+"pE": null,
+"ge_p": null,
+"cE": [
+{
+"eventId": 22
+},
+{
+"eventId": 22
+},
+{
+"eventId": 22
+},
+{
+"eventId": 22
+}
+]
+}
+],
+"teamScores": [],
+"tfDivisions": [
+{
+"IDMeetDiv": 1366830,
+"MeetID": 634313,
+"IDDiv": 1,
+"DivisionShort": "V",
+"Division": "Varsity",
+"LevelMask": 4,
+"DestMeet": null,
+"DestDiv": null,
+"DestDepth": null,
+"DestRelayDepth": null,
+"DestTitle": null,
+"DestMode": 0,
+"MaxAthleteEvents": 4,
+"SourceList": null,
+"TeamScoresJson": null,
+"MaxAthleteTrackEvents": 3,
+"MaxAthleteFieldEvents": 3,
+"DestMultiDepth": null,
+"QStandardList": null,
+"MaxTeamEntriesPerGender": 36,
+"MaxTeamOmitRelays": false
+},
+{
+"IDMeetDiv": 1366831,
+"MeetID": 634313,
+"IDDiv": 2,
+"DivisionShort": "WC",
+"Division": "Wheelchair",
+"LevelMask": 4,
+"DestMeet": null,
+"DestDiv": null,
+"DestDepth": null,
+"DestRelayDepth": null,
+"DestTitle": null,
+"DestMode": 0,
+"MaxAthleteEvents": 4,
+"SourceList": null,
+"TeamScoresJson": null,
+"MaxAthleteTrackEvents": 3,
+"MaxAthleteFieldEvents": 3,
+"DestMultiDepth": null,
+"QStandardList": null,
+"MaxTeamEntriesPerGender": null,
+"MaxTeamOmitRelays": false
+}
+],
+"xcDivisions": null,
+"addOns": null,
+"hasSchedule": true,
+"contactInfoExists": true,
+"timer": null
+}

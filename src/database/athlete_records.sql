@@ -1,0 +1,73 @@
+WITH school_links AS (
+    SELECT p.athlete_id, p.school_id FROM athlete_sources p
+    WHERE p.school_id IS NOT NULL
+    UNION
+    SELECT p.athlete_id, r.represented_school_id FROM results r
+    JOIN athlete_sources p ON p.id = r.athlete_source_id
+    WHERE r.represented_school_id IS NOT NULL
+), school_states AS (
+    SELECT sl.athlete_id,
+           bool_or(NULLIF(btrim(s.state), '') IS NOT NULL) AS has_state,
+           bool_or(EXISTS (
+               SELECT 1 FROM unnest($1::text[]) AS selected(state)
+               WHERE lower(selected.state) = lower(btrim(s.state))
+           )) AS matches_state
+    FROM school_links sl JOIN schools s ON s.id = sl.school_id
+    GROUP BY sl.athlete_id
+), selected AS (
+    SELECT a.*,
+           a.needs_review OR (a.state IS NULL AND NOT COALESCE(ss.has_state, false))
+               OR a.graduation_year IS NULL AS report_needs_review
+    FROM athletes a
+    LEFT JOIN school_states ss ON ss.athlete_id = a.id
+    WHERE a.name IS NOT NULL
+      AND (cardinality($1::text[]) = 0 OR NOT COALESCE(ss.has_state, false)
+           OR COALESCE(ss.matches_state, false))
+      AND (cardinality($2::integer[]) = 0 OR a.graduation_year = ANY($2) OR a.graduation_year IS NULL)
+), profile_data AS (
+    SELECT p.athlete_id,
+           COALESCE(jsonb_agg(DISTINCT p.profile_url ORDER BY p.profile_url)
+                    FILTER (WHERE p.profile_url IS NOT NULL), '[]'::jsonb) AS profiles
+    FROM athlete_sources p JOIN selected a ON a.id = p.athlete_id
+    GROUP BY p.athlete_id
+), school_data AS (
+    SELECT sl.athlete_id,
+           jsonb_agg(jsonb_build_object(
+               'id', s.source_id, 'name', s.name, 'state', s.state, 'city', s.city,
+               'address', s.address, 'postal_code', s.postal_code, 'website', s.website,
+               'public_email', s.public_email
+           ) ORDER BY s.source, s.source_id) AS schools
+    FROM school_links sl JOIN schools s ON s.id = sl.school_id
+    GROUP BY sl.athlete_id
+), coach_data AS (
+    SELECT sl.athlete_id,
+           jsonb_agg(jsonb_build_object(
+               'school_id', s.source_id, 'name', c.name, 'role', c.role, 'email', c.email,
+               'sport', CASE WHEN c.sport = 'xc' THEN 'cross_country' ELSE c.sport END
+           ) ORDER BY s.source, s.source_id, c.id) AS coaches
+    FROM school_links sl JOIN schools s ON s.id = sl.school_id
+    JOIN contacts c ON c.school_id = s.id AND c.kind = 'coach'
+    GROUP BY sl.athlete_id
+), performance_data AS (
+    SELECT p.athlete_id,
+           jsonb_agg(jsonb_build_object(
+               'source', r.source, 'url', r.source_url, 'performance', r.raw
+           ) ORDER BY r.source, r.id) AS performances
+    FROM results r JOIN athlete_sources p ON p.id = r.athlete_source_id
+    JOIN selected a ON a.id = p.athlete_id
+    GROUP BY p.athlete_id
+)
+SELECT jsonb_build_object(
+    'id', a.id, 'name', a.name, 'gender', a.gender, 'grade', a.grade,
+    'graduation_year', a.graduation_year, 'needs_review', a.report_needs_review,
+    'schools', COALESCE(sd.schools, '[]'::jsonb),
+    'coaches', COALESCE(cd.coaches, '[]'::jsonb),
+    'profiles', COALESCE(pd.profiles, '[]'::jsonb),
+    'performances', COALESCE(pr.performances, '[]'::jsonb)
+)
+FROM selected a
+LEFT JOIN profile_data pd ON pd.athlete_id = a.id
+LEFT JOIN school_data sd ON sd.athlete_id = a.id
+LEFT JOIN coach_data cd ON cd.athlete_id = a.id
+LEFT JOIN performance_data pr ON pr.athlete_id = a.id
+ORDER BY a.id

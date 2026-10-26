@@ -1,0 +1,32 @@
+{
+  "primary_repository": "/home/lewis/src/ad-law-scrape/athletic-rust-pipeline",
+  "primary_revision": "main280492f",
+  "fixtures": [
+    {
+      "path": "miramonte-staff.html",
+      "original_path": "crates/census-crawl/tests/fixtures/sidearm_staff/gomats.org__staff-directory__full.html",
+      "original_capture_path": "research/sources/coach-coverage-bundle-20261004/probes/sidearm_miramonte/raw/gomats.org__staff-directory__full.html",
+      "url": "https://gomats.org/staff-directory",
+      "captured_at": "2026-10-04",
+      "capture_precision": "date only; primary probe has no network timestamp",
+      "sha256": "8b392547b16ad80dde77bd7941df182804d1c59ee6151308a8da40fdab99b4b8",
+      "transformation": "none; byte-exact copied public capture"
+    },
+    {
+      "path": "scoped-school.html",
+      "kind": "synthetic deterministic parser scenario, not a public capture",
+      "url": "https://school.example.edu/athletics/staff",
+      "captured_at": null,
+      "purpose": "School-matched JSON-LD postal association versus district footer; track/XC coaching cards versus unrelated teacher and parent mailboxes; labeled public athletics office mailbox kept separate from coaching identities; published link constraints"
+    }
+  ],
+  "ported_rules": [
+    "crates/census-crawl/src/school_sites/parse/staff.rs",
+    "crates/census-crawl/src/school_sites/parse/hits/coaches.rs",
+    "crates/census-crawl/src/school_sites/parse/patterns.rs",
+    "crates/census-crawl/src/coach_directories/generic/coach_blocks.rs",
+    "crates/census-crawl/src/coach_directories/generic/offices.rs",
+    "crates/census-crawl/src/sidearm_staff/parse.rs"
+  ],
+  "new_rules": "School/EducationalOrganization JSON-LD and explicitly school-identified HTML postal extraction are new enrichment rules; no generic JSON-LD School address parser exists in the primary repository."
+}

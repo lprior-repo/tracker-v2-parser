@@ -1,0 +1,27 @@
+# Select only source-published graduation cohorts; unknown years stay unknown.
+states = [
+  "AL", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "ID", "IL", "IN",
+  "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+  "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA",
+  "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
+]
+graduation_years = [2027]
+season = 2026
+
+[limits]
+requests_per_second = 1.0
+max_pages = 100
+max_attempts = 3
+concurrency = 1
+
+[sources.athleticnet]
+enabled = true
+transport = "browser"
+
+[sources.milesplit]
+enabled = true
+transport = "http"
+
+[export]
+rows_per_file = 100000
+per_athlete_sheets = false

@@ -2,11 +2,11 @@
 
 ## Scope and skills
 
-Part 1 is a minimal Rust CLI with SQLx + SQLite, not a scraper port. It opens or
-creates `DATABASE_URL` (default `sqlite://track-scrapper.sqlite3`), checks database
-readiness, and exits. The parent directory must exist. `.env.example` documents
-shell exports; the app does not automatically load `.env`. No domain tables or
-migrations yet; introduce the first migration with the first real model.
+This is a single-crate Rust scraper and XLSX exporter using SQLx and PostgreSQL.
+The CLI provides `scrape` and `export`. Configuration selects states, graduation
+years, sources and bounded limits. The application loads `.env` when present.
+The application schema has six tables; SQLx migration metadata is separate.
+Browser transport is currently disabled pending safe network enforcement.
 
 Read local skills matching the task before editing, plus their applicable linked
 references:
@@ -19,9 +19,9 @@ references:
 
 These are vendored user skills, with supporting resources and original content
 preserved. This file and checked-in task configuration define this project's
-scope and runnable commands. Generic skill examples do not require beads, old
-repo wrappers, extra tool stacks, remote caches, telemetry services, or a new
-architecture. Do not set up machinery merely because an example mentions it.
+scope and runnable commands. Generic skill examples do not require old repo
+wrappers, remote caches, telemetry services, or a new architecture. Beads uses
+its own Dolt database for issue tracking, separate from PostgreSQL application data.
 
 ## Commands and evidence
 
@@ -41,19 +41,23 @@ moon ci --force
 
 `moon ci --force` is the canonical CI gate; `pipeline:run` is a local CLI action,
 not a CI lane. Diagnose the failing lane before rerunning the full gate. Do not
-weaken checks, suppress source warnings, or change assertions to hide a bug.
+weaken checks, suppress source warnings, or change assertions to hide a bug. The
+user explicitly approved disabling only `clippy::missing_errors_doc` to honor the
+no-code-comments requirement.
 
 Manual tasks use `env -u CI` because Moon skips tasks marked `runInCI: false`
 when the calling environment already has `CI` set.
 
-Require actual CLI smoke evidence, not just compilation: run with an isolated
-SQLite file and verify creation, preservation on a second run, and nonzero
-failure with useful diagnostics for a corrupt file and missing parent directory.
-Tests use real SQLite and deterministic, isolated Given/When/Then scenarios.
-Record commands, observed output, exit status, and any untested behavior honestly.
+Require actual CLI smoke evidence, not just compilation: use an isolated
+PostgreSQL schema to replay a source fixture twice, verify persistence without
+duplicates, and export and reopen an XLSX workbook. Tests use real PostgreSQL and
+deterministic, isolated scenarios. Record commands, observed output, exit status,
+and any untested behavior honestly.
 Keep README instructions aligned with the exercised CLI behavior.
 
 ## Implementation rules
+
+- Do not add code comments, including Rust documentation comments.
 
 - Separate **Data** (inert types), **Calculations** (pure transformations), and
   **Actions** (configuration, filesystem, database, and other I/O). Keep this
@@ -75,7 +79,7 @@ Keep README instructions aligned with the exercised CLI behavior.
 Migrate one observable behavior at a time using real, representative fixtures and
 parity assertions. Retain fixture/data provenance (source URL, capture time, and
 relevant attribution/permission), without committing secrets or sensitive data.
-Keep SQLx/SQLite as the storage boundary unless the user changes the contract.
+Keep SQLx/PostgreSQL as the storage boundary unless the user changes the contract.
 Future scraping must respect site policies, rate limits, bounded concurrency,
 request timeouts, response-size limits, and finite retry budgets. Stop for human
 handling of CAPTCHA or other access challenges; do not bypass them.

@@ -1,26 +1,24 @@
-mod database;
+#![recursion_limit = "256"]
 
-use std::env::{self, VarError};
+use std::io::ErrorKind;
 
 use anyhow::{Context, Result, anyhow};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    load_environment()?;
     tracing_subscriber::fmt()
         .with_target(false)
+        .with_writer(std::io::stderr)
         .try_init()
         .map_err(|error| anyhow!("initializing logging: {error}"))?;
-    run().await
+    track_scrapper_v2::cli::run().await
 }
 
-#[tracing::instrument]
-async fn run() -> Result<()> {
-    let database_url = match env::var("DATABASE_URL") {
-        Ok(value) => value,
-        Err(VarError::NotPresent) => String::from("sqlite://track-scrapper.sqlite3"),
-        Err(error) => return Err(error).context("reading DATABASE_URL"),
-    };
-    let version = database::check_database(&database_url).await?;
-    tracing::info!(sqlite_version = %version, "SQLite database ready");
-    Ok(())
+fn load_environment() -> Result<()> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(dotenvy::Error::Io(error)) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).context("loading local .env configuration"),
+    }
 }

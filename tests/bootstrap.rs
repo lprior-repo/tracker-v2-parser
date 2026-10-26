@@ -1,116 +1,156 @@
-use std::process::{Command, Output};
+mod support;
 
-use anyhow::{Context, Result};
-use sqlx::{Connection, SqliteConnection};
+use anyhow::Result;
+use support::{assert_success, import_bio, run_cli, with_schema};
 use tempfile::tempdir;
 
-fn run_app(directory: &std::path::Path, database_url: Option<&str>) -> Result<Output> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_track-scrapper-v2"));
-    command.current_dir(directory).env_remove("DATABASE_URL");
-    if let Some(url) = database_url {
-        command.env("DATABASE_URL", url);
+#[tokio::test]
+async fn given_persisted_results_when_replay_restarts_then_migrations_preserve_original_marks()
+-> Result<()> {
+    with_schema(|test| Box::pin(async move {
+        assert_success(&import_bio(test).await?);
+        let before: Vec<(String, String)> = sqlx::query_as("SELECT event, raw_mark FROM results ORDER BY event, raw_mark")
+            .fetch_all(&test.pool).await?;
+        assert_eq!(before.len(), 53);
+        assert_success(&import_bio(test).await?);
+        let after: Vec<(String, String)> = sqlx::query_as("SELECT event, raw_mark FROM results ORDER BY event, raw_mark")
+            .fetch_all(&test.pool).await?;
+        assert_eq!(after, before);
+        assert!(after.contains(&("200 Meters".to_owned(), "23.33a".to_owned())));
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT tablename::text FROM pg_tables WHERE schemaname=current_schema() AND tablename <> '_sqlx_migrations' ORDER BY tablename")
+            .fetch_all(&test.pool).await?;
+        assert_eq!(tables, vec!["athlete_sources", "athletes", "contacts", "results", "schools", "scrape_pages"]);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_no_arguments_when_started_then_help_does_not_connect_to_database() -> Result<()> {
+    let directory = tempdir()?;
+    let output = run_cli(
+        directory.path(),
+        Some("postgres://unavailable:unavailable@127.0.0.1:1/absent"),
+        &[],
+    )
+    .await?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(text.contains("scrape"));
+    assert!(text.contains("export"));
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_removed_commands_when_invoked_then_cli_rejects_each_without_database_access()
+-> Result<()> {
+    let directory = tempdir()?;
+    for obsolete in ["db-check", "status", "import"] {
+        let output = run_cli(directory.path(), None, &[obsolete]).await?;
+        assert!(!output.status.success(), "obsolete command {obsolete}");
+        assert!(!output.stderr.is_empty());
     }
-    command.output().context("running the bootstrap CLI")
-}
-
-#[tokio::test]
-async fn given_no_configuration_when_started_then_creates_a_usable_database() -> Result<()> {
-    // Given an isolated working directory and no DATABASE_URL.
-    let directory = tempdir()?;
-
-    // When the actual executable starts.
-    let output = run_app(directory.path(), None)?;
-
-    // Then it succeeds and leaves a real writable SQLite database.
-    assert!(output.status.success(), "{output:?}");
-    assert!(directory.path().join("track-scrapper.sqlite3").is_file());
-    let url = format!(
-        "sqlite://{}",
-        directory.path().join("track-scrapper.sqlite3").display()
-    );
-    let mut connection = SqliteConnection::connect(&url).await?;
-    sqlx::query("CREATE TABLE smoke (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
-        .execute(&mut connection)
-        .await?;
-    sqlx::query("INSERT INTO smoke (id, name) VALUES (1, 'athlete')")
-        .execute(&mut connection)
-        .await?;
-    let name: String = sqlx::query_scalar("SELECT name FROM smoke WHERE id = 1")
-        .fetch_one(&mut connection)
-        .await?;
-    assert_eq!(name, "athlete");
-    connection.close().await?;
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn given_existing_data_when_restarted_then_preserves_it_at_the_configured_path() -> Result<()>
-{
-    // Given a database created at an explicitly configured path containing spaces.
+async fn given_unsupported_scheme_when_scrape_starts_then_failure_does_not_create_a_local_store()
+-> Result<()> {
     let directory = tempdir()?;
-    let url = format!(
-        "sqlite://{}",
-        directory.path().join("existing results.sqlite3").display()
-    );
-    let first = run_app(directory.path(), Some(&url))?;
-    assert!(first.status.success(), "{first:?}");
-    let mut connection = SqliteConnection::connect(&url).await?;
-    sqlx::query("CREATE TABLE results (athlete TEXT NOT NULL)")
-        .execute(&mut connection)
-        .await?;
-    sqlx::query("INSERT INTO results (athlete) VALUES ('retained athlete')")
-        .execute(&mut connection)
-        .await?;
-    connection.close().await?;
-
-    // When the CLI starts again against the same file.
-    let second = run_app(directory.path(), Some(&url))?;
-
-    // Then it succeeds without resetting previously stored data.
-    assert!(second.status.success(), "{second:?}");
-    let mut connection = SqliteConnection::connect(&url).await?;
-    let athlete: String = sqlx::query_scalar("SELECT athlete FROM results")
-        .fetch_one(&mut connection)
-        .await?;
-    assert_eq!(athlete, "retained athlete");
-    assert!(!directory.path().join("track-scrapper.sqlite3").exists());
-    connection.close().await?;
+    let input = support::fixture("athleticnet/bio-28872883.json");
+    let output = run_cli(
+        directory.path(),
+        Some("https://localhost/database"),
+        &[
+            "scrape",
+            "--input",
+            input
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("UTF-8 input path"))?,
+            "--source",
+            "athleticnet",
+            "--kind",
+            "athlete",
+            "--url",
+            "https://www.athletic.net/athlete/28872883",
+        ],
+    )
+    .await?;
+    assert!(!output.status.success());
+    assert!(!output.stderr.is_empty());
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
     Ok(())
 }
 
-#[test]
-fn given_a_missing_parent_when_started_then_fails_instead_of_using_another_database() -> Result<()>
+#[tokio::test]
+async fn given_closed_endpoint_when_scrape_starts_then_connection_failure_is_visible() -> Result<()>
 {
-    // Given a configured database under a nonexistent parent directory.
+    let socket = tokio::net::TcpSocket::new_v4()?;
+    socket.bind("127.0.0.1:0".parse()?)?;
     let directory = tempdir()?;
     let url = format!(
-        "sqlite://{}/missing/results.sqlite3",
-        directory.path().display()
+        "postgres://unavailable:unavailable@127.0.0.1:{}/absent?connect_timeout=1",
+        socket.local_addr()?.port()
     );
-
-    // When startup attempts to open it.
-    let output = run_app(directory.path(), Some(&url))?;
-
-    // Then failure is visible and no fallback database is created.
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(!directory.path().join("track-scrapper.sqlite3").exists());
+    let input = support::fixture("athleticnet/bio-28872883.json");
+    let output = run_cli(
+        directory.path(),
+        Some(&url),
+        &[
+            "scrape",
+            "--input",
+            input
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("UTF-8 input path"))?,
+            "--source",
+            "athleticnet",
+            "--kind",
+            "athlete",
+            "--url",
+            "https://www.athletic.net/athlete/28872883",
+        ],
+    )
+    .await?;
+    assert!(!output.status.success());
+    assert!(!output.stderr.is_empty());
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
     Ok(())
 }
 
-#[test]
-fn given_a_corrupt_database_when_started_then_fails_without_replacing_the_file() -> Result<()> {
-    // Given an existing file that is not a SQLite database.
-    let directory = tempdir()?;
-    let path = directory.path().join("corrupt.sqlite3");
-    let contents = b"not a SQLite database";
-    std::fs::write(&path, contents)?;
-    let url = format!("sqlite://{}", path.display());
-
-    // When startup checks the file.
-    let output = run_app(directory.path(), Some(&url))?;
-
-    // Then it reports failure and preserves the bytes for investigation.
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(std::fs::read(path)?, contents);
-    Ok(())
+#[tokio::test]
+async fn given_out_of_contract_configuration_when_scrape_starts_then_limits_and_unknown_fields_are_rejected()
+-> Result<()> {
+    with_schema(|test| Box::pin(async move {
+        let config = test.directory().join("invalid-config.toml");
+        support::write_config(&config)?;
+        let valid = std::fs::read_to_string(&config)?;
+        let mutations = [
+            valid.replace("max_attempts = 3","max_attempts = 0"),
+            valid.replace("max_attempts = 3","max_attempts = 4"),
+            valid.replace("concurrency = 1","concurrency = 2"),
+            valid.replace("requests_per_second = 1.0","requests_per_second = 0.0"),
+            valid.replace("requests_per_second = 1.0","requests_per_second = 1.1"),
+            format!("unknown_configuration = true\n{valid}"),
+        ];
+        let input = support::fixture("athleticnet/bio-28872883.json");
+        for mutation in mutations {
+            std::fs::write(&config,mutation)?;
+            let output = test.cli(&["scrape","--config",config.to_str().ok_or_else(|| anyhow::anyhow!("UTF-8 config path"))?,
+                "--input",input.to_str().ok_or_else(|| anyhow::anyhow!("UTF-8 input path"))?,
+                "--source","athleticnet","--kind","athlete","--url",
+                "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
+                "--athlete-id","28872883","--state","WI"]).await?;
+            assert!(!output.status.success());
+            assert!(!output.stderr.is_empty());
+        }
+        assert_success(&import_bio(test).await?);
+        let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results").fetch_one(&test.pool).await?;
+        assert_eq!(results,53);
+        Ok(())
+    })).await
 }

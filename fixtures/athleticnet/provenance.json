@@ -1,0 +1,120 @@
+{
+  "source_checkout": "ad-law-scrape/athletic-rust-pipeline at 280492f7263c20a43ff1705a840699bc6f6e6d92",
+  "attribution": "Athletic.net public published results and team directory; retained as parser contract evidence. No redistribution license or additional permission is asserted. No private session/account data retained.",
+  "result_retention": {
+    "individual_rows": "Raw published marks, including DNS/DNF/DQ, remain individual results when source athlete identity is public.",
+    "team_and_unidentified_rows": "One UnassignedResult per published relay-team or unidentified result. A relay team mark is never duplicated into individual leg performances or PRs.",
+    "members": "Published athlete IDs are encoded athleticnet:<id>; a reported name is used only if an ID is absent. UnassignedResult.raw preserves the original row and available relayLegs.",
+    "bio_counts": {"individual_results": 41, "relay_team_results": 12, "total_source_rows": 53},
+    "meet_counts": {"individual_results": 686, "relay_team_results": 72, "published_memberships": 288, "total_source_rows": 758}
+  },
+  "ported_source_functions": [
+    "crates/census-crawl/src/athleticnet/mod.rs: BIO_ENDPOINT and Scope::parameter",
+    "crates/census-crawl/src/athleticnet/parse.rs: Bio, BioAthlete, BioTeam, BioSeason::sport, BioMeet::date, TfRow, XcRow, gender_of",
+    "crates/census-crawl/src/athleticnet/absorb.rs: school_names, season_sports and grade evidence joins (without legacy census admission filters)",
+    "crates/census-crawl/src/athleticnet/absorb/rows/projection.rs: store_tf_row and store_xc_row field projection",
+    "crates/census-crawl/src/athleticnet/map.rs: profile_url, school_for and meet_for source joins (without legacy canonical/store coupling)",
+    "crates/census-crawl/src/athleticnet/meet/wire.rs: MeetData, PublishedMeet, AllResults, FlatEvent, FlatRow, PublishedLeg and PublishedTeam wire shapes",
+    "research/sources/athleticnet/SOURCE_REPORT.md: GetDivChildren/GetStatesCountries2/GetNavInfo/GetRankings shapes and public access boundaries",
+    "2026-10-26 anonymous browser captures: TeamHome/GetTeamCore and token-scoped TeamHome/GetAthletes roster"
+  ],
+  "captures": [
+    {
+      "fixture": "bio-28872883.json",
+      "original_relative_path": "research/sources/athleticnet/samples/live-getathletebiodata-28872883-2026-09-20.json",
+      "url": "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
+      "captured_at": "2026-09-20 (filename; original exact time unavailable)",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "meet-634313.json",
+      "original_relative_path": "research/sources/athleticnet/samples/live-meetdata-634313.redacted.json",
+      "url": "https://www.athletic.net/api/v1/Meet/GetMeetData?meetId=634313&sport=tf",
+      "captured_at": "Exact capture date unavailable in retained metadata; retained in source report by 2026-09-22.",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "results-634313.json",
+      "original_relative_path": "research/sources/athleticnet/samples/live-allresults-634313.redacted.json",
+      "url": "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=634313&sport=tf&rawResults=false&showTips=false",
+      "captured_at": "Exact capture date unavailable in retained metadata; retained in source report by 2026-09-22.",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "team-3204.json",
+      "original_relative_path": "research/sources/athleticnet/samples/har2-teamnav-3204.json",
+      "url": "https://www.athletic.net/api/v1/TeamNav/Team?team=3204&sport=tf&season=2026",
+      "captured_at": "2026-09-18T19:21:00.210Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "directory-root.json",
+      "original_relative_path": "research/sources/athleticnet/samples/atn-probe-divchildren-168416.json",
+      "url": "https://www.athletic.net/api/v1/SiteHeader/GetDivChildren?sport=tf&divId=168416",
+      "captured_at": "2026-09-22T04:01:59Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "directory-wi.json",
+      "original_relative_path": "research/sources/athleticnet/samples/atn-probe-divchildren-170770.json",
+      "url": "https://www.athletic.net/api/v1/SiteHeader/GetDivChildren?sport=tf&divId=170770",
+      "captured_at": "2026-09-22T04:01:57Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "states.json",
+      "original_relative_path": "research/sources/athleticnet/samples/atn-probe-statescountries-anon.json",
+      "url": "https://www.athletic.net/api/v1/public/GetStatesCountries2",
+      "captured_at": "2026-09-22T04:06:09Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "navigation.json",
+      "original_relative_path": "research/sources/athleticnet/samples/har1-getnavinfo-wi-2026-hs-boys.json",
+      "url": "https://www.athletic.net/api/v1/tfRankings/GetNavInfo?seasonId=2026&level=4&gender=m&recordSetId=0&locationId=0&teamId=0&indoor=false",
+      "captured_at": "2026-09-18T18:54:42.948Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "rankings-public.json",
+      "original_relative_path": "research/sources/athleticnet/samples/atn-probe-getrankings-anon.json",
+      "url": "https://www.athletic.net/api/v1/tfRankings/GetRankings",
+      "captured_at": "2026-09-22T04:07:10Z",
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+    },
+    {
+      "fixture": "team-core-3204.json",
+      "original_relative_path": "local://athletic-team-live-contracts.json (parent browser capture)",
+      "url": "https://www.athletic.net/api/v1/TeamHome/GetTeamCore?teamId=3204&sport=tfo&year=2026",
+      "captured_at": "2026-10-26T18:41:04.744Z",
+      "source_page": "https://www.athletic.net/team/3204/track-and-field-outdoor/2026",
+      "authentication": "anonymous browser; no login or challenge bypass",
+      "transformations": "Extracted response body and removed all jwt/token/cookie/authorization keys recursively."
+    },
+    {
+      "fixture": "team-core-3204-tfi.json",
+      "original_relative_path": "local://athletic-sport-core-contracts.json (parent anonymous browser capture)",
+      "url": "https://www.athletic.net/api/v1/TeamHome/GetTeamCore?teamId=3204&sport=tfi&year=2026",
+      "captured_at": "2026-10-26T18:47:02.948Z",
+      "authentication": "Anonymous public browser; no login; transient jwtTeamHome removed.",
+      "transformations": "Extracted response body and removed all jwt/token/cookie/authorization keys recursively."
+    },
+    {
+      "fixture": "team-core-3204-xc.json",
+      "original_relative_path": "local://athletic-sport-core-contracts.json (parent anonymous browser capture)",
+      "url": "https://www.athletic.net/api/v1/TeamHome/GetTeamCore?teamId=3204&sport=xc&year=2026",
+      "captured_at": "2026-10-26T18:47:02.948Z",
+      "authentication": "Anonymous public browser; no login; transient jwtTeamHome removed.",
+      "transformations": "Extracted response body and removed all jwt/token/cookie/authorization keys recursively."
+    },
+    {
+      "fixture": "roster-3204.json",
+      "original_relative_path": "local://athletic-team-live-contracts.json (parent browser capture)",
+      "url": "https://www.athletic.net/api/v1/TeamHome/GetAthletes?seasonId=2026",
+      "captured_at": "2026-10-26T18:41:04.744Z",
+      "source_page": "https://www.athletic.net/team/3204/track-and-field-outdoor/2026",
+      "authentication": "anonymous browser; no login or challenge bypass",
+      "transformations": "Extracted response body and removed all jwt/token/cookie/authorization keys recursively."
+    }
+  ]
+}

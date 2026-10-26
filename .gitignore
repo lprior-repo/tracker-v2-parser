@@ -16,3 +16,11 @@
 .dolt/
 .beads-credential-key
 .beads/proxieddb/
+/.beads/dolt/
+/.beads/backup/
+debug
+target
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+rustc-ice-*.txt

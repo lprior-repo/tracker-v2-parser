@@ -4,17 +4,33 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 publish = false
-description = "Incremental athletics pipeline rebuild using SQLx and SQLite"
+description = "Athletic.net and MileSplit recruiting data pipeline using SQLx and PostgreSQL"
 
 [dependencies]
 anyhow = "1.0"
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }
-tokio = { version = "1", features = ["macros", "rt", "time"] }
+base64 = "0.22"
+calamine = "0.37"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+futures = "0.3"
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "query", "gzip"] }
+rust_xlsxwriter = "0.101"
+scraper = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "json", "chrono", "migrate", "macros"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "fs", "process", "net", "io-util"] }
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"

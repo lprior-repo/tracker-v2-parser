@@ -1,0 +1,78 @@
+{
+  "source_repository": "/home/lewis/src/ad-law-scrape/athletic-rust-pipeline",
+  "source_revision": "main280492f",
+  "captures": [
+    {
+      "fixture": "teams-oh.html",
+      "original_path": "research/sources/milesplit-national/samples/teams-oh.html",
+      "url": "https://oh.milesplit.com/teams",
+      "captured_at": "2026-09-22T03:31:14Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "16aeb07faea60cde7b58cd9edc5945342b253dc643407eb1774cb90176b656c4",
+      "projection": false
+    },
+    {
+      "fixture": "roster-oh-mason.html",
+      "original_path": "research/sources/milesplit-national/samples/roster-oh-mason.html",
+      "url": "https://oh.milesplit.com/teams/10002-mason/roster",
+      "captured_at": "2026-09-22T03:32:14Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "d0607541bc5c73480d73bdab4936d4468ceb3150768d98514904a997830548f1",
+      "projection": false
+    },
+    {
+      "fixture": "team-oh-10002-mason.html",
+      "original_path": "research/sources/milesplit-national/samples/team-oh-10002-mason.html",
+      "url": "https://oh.milesplit.com/teams/10002-mason",
+      "captured_at": "2026-09-22T03:32:46Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "efde1573ba5d7fda4937d548ca2729f27572420f47827c0987c70539d9a3f211",
+      "projection": false
+    },
+    {
+      "fixture": "athlete-oh-15005189.html",
+      "original_path": "research/sources/milesplit-national/samples/athlete-oh-15005189.html",
+      "url": "https://oh.milesplit.com/athletes/15005189-brice-fuller",
+      "captured_at": "2026-09-22T03:32:44Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "9998a9b7658e3447312b3c2c447524a58a5e4e7691a28f3caace1b8a8389697f",
+      "projection": false
+    },
+    {
+      "fixture": "athlete-www-13966799.html",
+      "original_path": "research/sources/milesplit-national/samples/athlete-www-13966799.html",
+      "url": "https://ny.milesplit.com/athletes/13966799-abigail-burt",
+      "captured_at": "2026-09-22T03:32:47Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "54aa601a1e2533c49d95f0049677359a387cd633a4669b1a66a27fe1a313739a",
+      "projection": false
+    },
+    {
+      "fixture": "results-oh.html",
+      "original_path": "research/sources/milesplit-national/samples/results-oh.html",
+      "url": "https://oh.milesplit.com/results/ohio-meet-results?&page=1",
+      "captured_at": "2026-09-22T03:32:15Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "b8fab875d5ed53b2dd73cecab4e7d14ad09a6666f20bc3ca3ea6ff29a1d62522",
+      "projection": false
+    },
+    {
+      "fixture": "meet-oh-770621-results.html",
+      "original_path": "research/sources/milesplit-national/samples/meet-oh-770621-results.html",
+      "url": "https://oh.milesplit.com/meets/770621-beaver-eastern-invite-2026/results",
+      "captured_at": "2026-09-22T03:55:44Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md",
+      "sha256": "e14ef7beb9359dfe9cfd4c62f05f17fc1a9fc2ccface8ab892180f34f7dd93e5",
+      "projection": false
+    },
+    {
+      "fixture": "oh_meet_770621_rs1321880_raw.html",
+      "original_path": "crates/census-crawl/tests/fixtures/milesplit/oh_meet_770621_rs1321880_raw.html",
+      "url": "https://oh.milesplit.com/meets/770621-beaver-eastern-invite-2026/results/1321880/raw",
+      "captured_at": "2026-09-22T03:55:59Z",
+      "date_evidence": "research/sources/milesplit-national/samples/CAPTURES.md wave 2 raw-oh-770621-rs1321880.txt",
+      "sha256": "51dc94aa321dc3885b5963a37540655187f68b0c871f0548a568200c89ad7d58",
+      "projection": false
+    }
+  ]
+}

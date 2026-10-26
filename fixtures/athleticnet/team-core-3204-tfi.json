@@ -1,0 +1,49 @@
+{
+  "team": {
+    "IDTeam": 3204,
+    "Name": "Middleton",
+    "TeamCode": "MIDD",
+    "Level": 4,
+    "MascotUrl": "//lh3.googleusercontent.com/EYbdkkKTMlSXSNdBtsk9yB2xE9yuvpvXkbDm_JU5hmWF-evSXbhNEq6oNrCy6k66t6DVb2xxURubdLbnXogayPvPnhvWRsz-vYQ",
+    "CoverPhoto": null,
+    "TwitterUser": null,
+    "ShowPSW": 1,
+    "Address": "2100 Bristol St",
+    "City": "Middleton",
+    "State": "WI",
+    "ZipCode": "53562-2699",
+    "Country": "USA",
+    "Phone": null,
+    "Fax": "608-831-1995",
+    "Website": "https://sites.google.com/mcpasd.k12.wi.us/mhsxc/home",
+    "RegionID": 58,
+    "LegacySS": 0,
+    "WebsiteSport": null,
+    "mHeadCoachIdSport": 1832580,
+    "fHeadCoachIdSport": 1832580
+  },
+  "isTeamAthlete": false,
+  "currentSiteSupport": false,
+  "seasonInfo": {
+    "year": 2026,
+    "seasonId": 12026,
+    "seasons": [
+      12026,
+      12025,
+      12024,
+      12023,
+      12022,
+      12019,
+      12018,
+      12017,
+      12016,
+      12015,
+      12014,
+      12013,
+      12010,
+      12009
+    ],
+    "seasonSiteSupport": false
+  },
+  "teamCode": null
+}

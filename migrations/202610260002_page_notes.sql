@@ -1,0 +1,1 @@
+ALTER TABLE scrape_pages ADD COLUMN notes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

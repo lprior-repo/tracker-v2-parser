@@ -1,98 +1,71 @@
 # Track scrapper v2
 
-Part 1 of an incremental Rust athletics pipeline rebuild. SQLite through SQLx is
-the storage choice for this repository. The executable currently opens or creates
-a database, runs SQLite's integrity check, logs readiness and the SQLite version,
-and exits. It does not scrape, import athletes, or start a service.
+A Rust CLI for collecting published athletics data into PostgreSQL and exporting
+observed, comparable results to XLSX. The reference `athletic-rust-pipeline` uses
+Fjall and Restate; this application uses neither for its runtime storage or
+orchestration.
 
 ## Prerequisites
 
-- Git, Rustup, and a C compiler/linker (SQLite is bundled; no database server or
-  system SQLite installation is required).
-- Moon **2.2.4**. With Node.js 22+ and npm: `npm install --global @moonrepo/cli@2.2.4`.
-- Rust **nightly-2026-04-27**, pinned in `rust-toolchain.toml` with Clippy and
-  rustfmt. Rustup reads that file when Cargo runs. The initial build needs network
-  access to download the toolchain and locked dependencies.
+- PostgreSQL and a database URL with permission to apply the SQLx migrations.
+- The Rust toolchain pinned in `rust-toolchain.toml`.
+- Moon 2.2.4 for the project tasks.
+- For database integration tests, `TEST_DATABASE_URL` pointing to a disposable
+  PostgreSQL database where the test user may create and drop schemas.
+- Browser transport is currently disabled: the WebDriver adapter cannot yet
+  enforce public-address restrictions and per-request pacing for Chromium.
 
-## Run
+## Configuration and commands
 
-From the repository root:
+Edit `config.toml` to select states, graduation years, source transports, request
+limits, and export settings. Set `DATABASE_URL` to a PostgreSQL URL, or supply
+`--database-url` on the command line. The CLI also loads a local `.env` file if
+one exists; keep credentials out of version control.
 
 ```sh
-env -u CI moon run pipeline:run
+cargo run -- scrape --config config.toml
+cargo run -- export --config config.toml --output athletes.xlsx
+cargo run -- scrape --help
+cargo run -- export --help
 ```
 
-The default file is `track-scrapper.sqlite3` in the current working directory.
-For another location:
+Scraping uses bounded attempts and checkpoints; access challenges require human
+handling. Export reads database records without scraping, writes new XLSX files,
+and does not overwrite an existing output. The Issues worksheet identifies
+unresolved or incomplete data. See [the scraper contract](docs/contract.md) for
+identity, comparison, and checkpoint requirements.
+
+Athletic.net results without a published result ID use its row code where
+available (including the meet API's `ShortCode`). Without a code, the key
+includes the original source-array coordinates and a digest of the entire
+published row, not the mark alone. Reordering or changing such a row can create
+duplicates, but cannot overwrite a different row merely because it occupied the
+same coordinates. Existing keys are not rewritten or deleted; refreshing older
+records can also create duplicates requiring manual reconciliation. No automatic
+match is safe when the provider supplies insufficient identity evidence.
+Other rows without either an ID or source row use their page position and full
+parsed result content, with the same duplication risk after changes or reorder.
+MileSplit raw-result identifiers likewise include the full published line as
+well as its coordinates; correcting or moving a line can therefore create a
+duplicate rather than overwrite an unrelated result.
+
+## Checks
 
 ```sh
-export DATABASE_URL='sqlite://./results.sqlite3'
-env -u CI moon run pipeline:run
-```
-
-The parent directory must already exist. `.env.example` is a shell configuration
-example; `.env` files are **not** loaded automatically. Database files and `.env`
-are ignored by Git. Do not point smoke checks at production or historical data.
-
-A successful run logs `SQLite database ready` and exits with status 0. Invalid
-configuration, an inaccessible path, or a corrupt database produces an error and
-nonzero status; startup does not fall back to a different database. Existing
-records are retained on subsequent runs. File-backed databases use WAL, foreign
-keys, and a five-second busy timeout with one connection, explicitly closed at
-shutdown. There are no domain tables or migrations yet: add the first SQLx
-migration with the first real persisted model.
-
-## Development checks
-
-```sh
+moon run pipeline:fmt
+moon run pipeline:check
+moon run pipeline:lint-src
+moon run pipeline:test
 moon ci --force
 ```
 
-This runs every CI lane, bypassing affected-file filtering and task caching. A
-single Moon project orchestrates Cargo; there is no custom build wrapper or local
-cache service requirement.
+Integration tests require `TEST_DATABASE_URL`; they create isolated PostgreSQL
+schemas and remove them afterward. Do not point tests or smoke checks at a
+production database.
 
-| Task | Command | Purpose |
-|---|---|---|
-| Formatting | `moon run pipeline:fmt` | Check Rust formatting |
-| Compile | `moon run pipeline:check` | Check all targets and features with the lockfile |
-| Source lint | `moon run pipeline:lint-src` | Clippy with warnings denied; excludes test-style linting |
-| Behavior tests | `moon run pipeline:test` | Real executable and isolated SQLite files |
-| Release build | `moon run pipeline:build` | Build `target/release/track-scrapper-v2` |
-| Documentation | `moon run pipeline:doc` | Build Rust docs with warnings denied |
+## Issue tracking
 
-To format files, run `env -u CI moon run pipeline:fmt-write`. Manual tasks unset
-`CI` because Moon otherwise skips tasks configured with `runInCI: false`.
-
-The four integration scenarios cover creation of a usable database, persistence
-across restarts at a configured path containing spaces, a nonexistent parent
-without fallback, and a corrupt file without destructive replacement.
-
-## CI and delivery
-
-[GitHub Actions](.github/workflows/ci.yml) runs the same full Moon gate for pull
-requests, pushes to `main`, manual dispatches, and `v*` tags. Successful runs upload
-a Linux x86-64 release archive and `SHA256SUMS` as workflow artifacts. A `v*` tag
-also creates a GitHub release containing those gated files after checksum
-verification. No crates.io publishing or service deployment is configured.
-
-The workflow uses Ubuntu 24.04, pinned action revisions, the checked-in Rust
-nightly, and the exact Moon version. Publishing uses the built-in `GITHUB_TOKEN`
-with write access only in the tag-release job. A GitHub remote and a push are
-required to exercise the hosted workflow; local checks do not publish anything.
-
-## Agent workflow and later ports
-
-Read [AGENTS.md](AGENTS.md). Portable copies of the user's Rust, async Rust, Moon,
-and BDD skills live in `.agents/skills/`, including their supporting references.
-No home-directory symlinks or external skill installation is needed to read them.
-
-Setup conventions were selected from the `athletic-rust-pipeline-integrate`
-checkout: the Moon pin, dated Rust toolchain, strict source linting, and separate
-behavior tests. No scraper, Fjall storage, Restate orchestration, old gate
-wrappers, or historical data was copied. Keep pure data/calculations separate
-from I/O without inventing a multi-crate architecture before it is needed.
-
-Next: choose one scraper behavior from the old pipeline, capture a representative
-fixture with provenance, get it working here end-to-end, then introduce only the
-SQLite schema required for that behavior.
+Beads stores project issues in its own Dolt database, separate from the
+application's PostgreSQL database. Synchronize issue changes with `bd dolt push`
+and retrieve remote changes with `bd dolt pull`. The configured DoltHub remote
+is `priorlewis43/track-scrapper-v2`.
