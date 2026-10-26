@@ -1,0 +1,46 @@
+[package]
+name = "track-scrapper-v2"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+description = "Incremental athletics pipeline rebuild using SQLx and SQLite"
+
+[dependencies]
+anyhow = "1.0"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite-bundled"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+get_unwrap = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+let_underscore_must_use = "deny"
+await_holding_lock = "deny"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

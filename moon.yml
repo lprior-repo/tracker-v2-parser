@@ -1,0 +1,82 @@
+language: rust
+toolchains:
+  default: system
+fileGroups:
+  rustInputs:
+    - 'Cargo.toml'
+    - 'Cargo.lock'
+    - 'rust-toolchain.toml'
+    - '.cargo/**/*.toml'
+    - 'src/**/*'
+    - 'tests/**/*'
+    - 'examples/**/*'
+    - 'build.rs'
+    - 'moon.yml'
+    - '.moon/**/*.yml'
+    - 'migrations/**/*'
+    - 'config/**/*'
+    - '.config/**/*'
+    - '.sqlx/**/*'
+    - '.github/**/*'
+    - '.env.example'
+    - '.clippy.toml'
+    - 'clippy.toml'
+    - 'rustfmt.toml'
+    - '.rustfmt.toml'
+tasks:
+  fmt:
+    command: 'cargo fmt --all -- --check'
+    toolchains: [system]
+    inputs: &rustInputs
+      - '@group(rustInputs)'
+    options: &qualityOptions
+      shell: false
+      cache: false
+      runInCI: true
+      mutex: rust-build
+  check:
+    command: 'cargo check --workspace --all-targets --all-features --locked'
+    toolchains: [system]
+    inputs: *rustInputs
+    options: *qualityOptions
+  lint-src:
+    command: 'cargo clippy --workspace --bins --examples --all-features --locked -- -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro'
+    toolchains: [system]
+    inputs: *rustInputs
+    options: *qualityOptions
+  test:
+    command: 'cargo test --workspace --all-features --locked'
+    toolchains: [system]
+    inputs: *rustInputs
+    options: *qualityOptions
+  build:
+    command: 'cargo build --workspace --release --all-features --locked'
+    toolchains: [system]
+    inputs: *rustInputs
+    outputs:
+      - 'target/release/track-scrapper-v2'
+    options: *qualityOptions
+  doc:
+    command: 'cargo doc --workspace --all-features --no-deps --locked'
+    toolchains: [system]
+    env:
+      RUSTDOCFLAGS: '-D warnings'
+    inputs: *rustInputs
+    options: *qualityOptions
+  ci-source:
+    deps: [fmt, check, lint-src]
+    options:
+      cache: false
+      runInCI: false
+  fmt-write:
+    command: 'cargo fmt --all'
+    toolchains: [system]
+    options: &manualOptions
+      shell: false
+      cache: false
+      runInCI: false
+      mutex: rust-build
+  run:
+    command: 'cargo run --locked'
+    toolchains: [system]
+    options: *manualOptions

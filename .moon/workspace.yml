@@ -1,0 +1,16 @@
+projects:
+  pipeline: '.'
+versionConstraint: '=2.2.4'
+telemetry: false
+hasher:
+  optimization: accuracy
+  walkStrategy: glob
+pipeline:
+  installDependencies: false
+  syncWorkspace: false
+  syncProjects: false
+  syncProjectDependencies: false
+vcs:
+  client: git
+  provider: github
+  defaultBranch: main

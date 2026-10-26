@@ -1,0 +1,13 @@
+/target/
+/.moon/cache/
+/.moon/docker/
+/.moon/logs/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-*
