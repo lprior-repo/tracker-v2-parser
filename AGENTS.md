@@ -34,13 +34,17 @@ moon run pipeline:lint-src
 moon run pipeline:test
 moon run pipeline:build
 moon run pipeline:doc
-moon run pipeline:run
+env -u CI moon run pipeline:fmt-write
+env -u CI moon run pipeline:run
 moon ci --force
 ```
 
 `moon ci --force` is the canonical CI gate; `pipeline:run` is a local CLI action,
 not a CI lane. Diagnose the failing lane before rerunning the full gate. Do not
 weaken checks, suppress source warnings, or change assertions to hide a bug.
+
+Manual tasks use `env -u CI` because Moon skips tasks marked `runInCI: false`
+when the calling environment already has `CI` set.
 
 Require actual CLI smoke evidence, not just compilation: run with an isolated
 SQLite file and verify creation, preservation on a second run, and nonzero

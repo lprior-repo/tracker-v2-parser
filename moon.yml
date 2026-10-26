@@ -10,7 +10,7 @@ fileGroups:
     - 'src/**/*'
     - 'tests/**/*'
     - 'examples/**/*'
-    - 'build.rs'
+    - '*.rs'
     - 'moon.yml'
     - '.moon/**/*.yml'
     - 'migrations/**/*'
@@ -19,10 +19,8 @@ fileGroups:
     - '.sqlx/**/*'
     - '.github/**/*'
     - '.env.example'
-    - '.clippy.toml'
-    - 'clippy.toml'
-    - 'rustfmt.toml'
-    - '.rustfmt.toml'
+    - '*clippy.toml'
+    - '*rustfmt.toml'
 tasks:
   fmt:
     command: 'cargo fmt --all -- --check'

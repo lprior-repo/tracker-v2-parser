@@ -24,7 +24,10 @@ async fn given_no_configuration_when_started_then_creates_a_usable_database() ->
     // Then it succeeds and leaves a real writable SQLite database.
     assert!(output.status.success(), "{output:?}");
     assert!(directory.path().join("track-scrapper.sqlite3").is_file());
-    let url = format!("sqlite://{}", directory.path().join("track-scrapper.sqlite3").display());
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("track-scrapper.sqlite3").display()
+    );
     let mut connection = SqliteConnection::connect(&url).await?;
     sqlx::query("CREATE TABLE smoke (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
         .execute(&mut connection)
@@ -41,10 +44,14 @@ async fn given_no_configuration_when_started_then_creates_a_usable_database() ->
 }
 
 #[tokio::test]
-async fn given_existing_data_when_restarted_then_preserves_it_at_the_configured_path() -> Result<()> {
+async fn given_existing_data_when_restarted_then_preserves_it_at_the_configured_path() -> Result<()>
+{
     // Given a database created at an explicitly configured path containing spaces.
     let directory = tempdir()?;
-    let url = format!("sqlite://{}", directory.path().join("existing results.sqlite3").display());
+    let url = format!(
+        "sqlite://{}",
+        directory.path().join("existing results.sqlite3").display()
+    );
     let first = run_app(directory.path(), Some(&url))?;
     assert!(first.status.success(), "{first:?}");
     let mut connection = SqliteConnection::connect(&url).await?;
@@ -72,10 +79,14 @@ async fn given_existing_data_when_restarted_then_preserves_it_at_the_configured_
 }
 
 #[test]
-fn given_a_missing_parent_when_started_then_fails_instead_of_using_another_database() -> Result<()> {
+fn given_a_missing_parent_when_started_then_fails_instead_of_using_another_database() -> Result<()>
+{
     // Given a configured database under a nonexistent parent directory.
     let directory = tempdir()?;
-    let url = format!("sqlite://{}/missing/results.sqlite3", directory.path().display());
+    let url = format!(
+        "sqlite://{}/missing/results.sqlite3",
+        directory.path().display()
+    );
 
     // When startup attempts to open it.
     let output = run_app(directory.path(), Some(&url))?;
