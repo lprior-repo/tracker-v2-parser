@@ -49,15 +49,29 @@ fn school_row(target: &Target, row: ElementRef<'_>, mut page: ParsedPage) -> Res
         page.notes.push(format!("Foreign or unrecognized school location retained only in capture: team {id}, {location:?}"));
         return Ok(page);
     }
+    let name = html::text(link);
+    if name.is_empty() {
+        let context = crate::model::PageContext {
+            school_id: Some(id.clone()),
+            school_name: None,
+            state: published_state.or_else(|| target.context.state.clone()),
+            ..target.context.clone()
+        };
+        page.notes.push(format!(
+            "MileSplit school {id} has no published directory name; queued its team page"
+        ));
+        page.next
+            .push(Target::get(Source::MileSplit, PageKind::Team, url, context));
+        return Ok(page);
+    }
     let school = School {
         id: id.clone(),
-        name: html::text(link),
+        name,
         state: published_state.or_else(|| target.context.state.clone()),
         city,
         postal_code: location.as_deref().and_then(html::postal),
         ..School::default()
     };
-    ensure!(!school.name.is_empty(), "MileSplit school {id} has no name");
     let context = crate::model::PageContext {
         school_id: Some(id),
         school_name: Some(school.name.clone()),

@@ -107,7 +107,10 @@ impl Runner {
             };
             acquire_job(database, config, &job, transport).await?;
         }
-        check_source_stops(database, config).await?;
+        ensure!(
+            next_enabled_job(database, config).await?.is_none(),
+            "page budget exhausted; unfinished checkpoints remain"
+        );
         Ok(())
     }
 

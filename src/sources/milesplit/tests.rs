@@ -63,6 +63,43 @@ fn given_native_team_index_when_parsed_then_school_identity_and_roster_frontier_
 }
 
 #[test]
+fn given_colorado_directory_with_unnamed_team_when_parsed_then_all_teams_are_queued() -> Result<()>
+{
+    let target = seeds(&["CO".to_owned()], 2026)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing Colorado directory seed"))?;
+    let page = parse(
+        &target,
+        include_str!("../../../fixtures/milesplit/teams-co.html"),
+    )?;
+    assert_eq!(page.schools.len(), 429);
+    assert_eq!(page.next.len(), 430);
+    assert!(page.schools.iter().all(|school| !school.name.is_empty()));
+    let unnamed = page
+        .next
+        .iter()
+        .find(|target| target.url == "https://co.milesplit.com/teams/29997")
+        .ok_or_else(|| anyhow::anyhow!("missing unnamed team target"))?;
+    assert_eq!(unnamed.kind, PageKind::Team);
+    assert_eq!(unnamed.context.school_id.as_deref(), Some("29997"));
+    assert_eq!(unnamed.context.school_name, None);
+    assert_eq!(unnamed.context.state.as_deref(), Some("CO"));
+    assert!(page.notes.iter().any(|note| note.contains("29997")));
+    let named = page
+        .schools
+        .iter()
+        .find(|school| school.id == "14818")
+        .ok_or_else(|| anyhow::anyhow!("missing Abraham Lincoln High School"))?;
+    assert_eq!(named.name, "Abraham Lincoln High School");
+    assert_eq!(named.city.as_deref(), Some("Denver"));
+    assert!(page.next.iter().any(|target| {
+        target.url == "https://co.milesplit.com/teams/14818-abraham-lincoln-high-school"
+    }));
+    Ok(())
+}
+
+#[test]
 fn given_domestic_and_foreign_locations_when_parsed_then_country_is_respected() {
     assert_eq!(
         super::html::location("Mason, OH, USA"),

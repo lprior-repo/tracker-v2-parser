@@ -48,9 +48,9 @@ impl fmt::Display for Failure {
 impl std::error::Error for Failure {}
 
 #[derive(Debug)]
-struct AccessStopCaptureError {
-    status: u16,
-    error: anyhow::Error,
+pub(crate) struct AccessStopCaptureError {
+    pub(crate) status: u16,
+    pub(crate) error: anyhow::Error,
 }
 
 impl fmt::Display for AccessStopCaptureError {
@@ -65,7 +65,7 @@ impl fmt::Display for AccessStopCaptureError {
 
 impl std::error::Error for AccessStopCaptureError {}
 
-const fn access_stop_status(status: u16) -> bool {
+pub(crate) const fn access_stop_status(status: u16) -> bool {
     matches!(status, 401 | 402 | 403 | 429 | 451)
 }
 
@@ -117,7 +117,7 @@ impl Transport {
             .one(&preflight, &BTreeMap::new())
             .await
             .map_err(|error| failure(&error))?;
-        if !(200..300).contains(&response.status) || denied_body(&response) {
+        if !(200..300).contains(&response.status) || denied_capture(&response) {
             return check_response(response).map(|_| BTreeMap::new());
         }
         let token = public_token(&response.body, url).map_err(|error| failure(&error))?;
@@ -141,8 +141,6 @@ impl Transport {
         if !self.uses_browser(target) {
             return self.fetch_http(target, headers).await;
         }
-        crate::browser::ensure_safe_transport::<()>()?;
-        policy::public_addresses(&url).await?;
         if self.browser.is_none() {
             self.browser = Some(
                 Browser::start(
@@ -154,11 +152,16 @@ impl Transport {
             );
         }
         self.pace(target).await?;
-        self.browser
-            .as_mut()
+        let interval = Duration::try_from_secs_f64(self.options.rps.recip())
+            .context("browser request interval is not representable")?;
+        let result = self
+            .browser
+            .as_ref()
             .context("browser session was not initialized")?
-            .fetch(target, headers)
-            .await
+            .fetch(target, headers, interval)
+            .await;
+        self.pace(target).await?;
+        result
     }
 
     const fn uses_browser(&self, target: &Target) -> bool {
@@ -230,8 +233,8 @@ fn public_token(body: &[u8], url: &str) -> Result<String> {
     Ok(token.to_owned())
 }
 
-fn check_response(mut capture: Capture) -> Result<Capture, Failure> {
-    let denied = denied_body(&capture);
+pub(crate) fn check_response(mut capture: Capture) -> Result<Capture, Failure> {
+    let denied = denied_capture(&capture);
     let blocked = access_stop_status(capture.status) || denied;
     capture.body = redact::body(&capture.body).map_err(|error| {
         let mut failure = failure(&error);
@@ -262,7 +265,23 @@ fn check_response(mut capture: Capture) -> Result<Capture, Failure> {
     Ok(capture)
 }
 
-fn denied_body(capture: &Capture) -> bool {
+pub(crate) fn denied_capture(capture: &Capture) -> bool {
+    denied_url(&capture.url) || denied_body(capture)
+}
+
+pub(crate) fn denied_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        url.path_segments().is_some_and(|parts| {
+            parts.take(4).any(|part| {
+                ["login", "signin", "subscribe"]
+                    .iter()
+                    .any(|name| part.eq_ignore_ascii_case(name))
+            })
+        })
+    })
+}
+
+pub(crate) fn denied_body(capture: &Capture) -> bool {
     let Ok(text) = std::str::from_utf8(&capture.body) else {
         return false;
     };
@@ -318,37 +337,39 @@ mod tests {
     use super::{Mode, Options, Transport};
     use crate::model::{PageContext, PageKind, Source, Target};
 
-    #[tokio::test]
-    async fn browser_modes_fail_before_driver_or_network_access() {
+    #[test]
+    fn access_stop_urls_require_complete_path_segments() {
+        assert!(super::denied_url(
+            "https://example.com/account/LOGIN?next=/"
+        ));
+        assert!(super::denied_url("https://example.com/subscribe"));
+        assert!(!super::denied_url("https://example.com/login-results"));
+        assert!(!super::denied_url(
+            "https://example.com/results?next=/login"
+        ));
+    }
+
+    #[test]
+    fn browser_mode_selects_athleticnet_without_changing_contact_transport() {
+        let mut target = Target::get(
+            Source::AthleticNet,
+            PageKind::Athlete,
+            "https://www.athletic.net/athlete/1".to_owned(),
+            PageContext::default(),
+        );
         for mode in [Mode::Auto, Mode::Browser] {
-            let options = Options {
+            let transport = Transport::new(Options {
                 mode,
-                driver_url: Some("not a driver URL".to_owned()),
-                profile: "/dev/null/invalid-profile".into(),
+                driver_url: None,
+                profile: "/tmp/browser-test".into(),
                 headless: true,
                 rps: 1.0,
-            };
-            let mut transport = Transport::new(options).expect("valid options");
-            let mut target = Target::get(
-                Source::AthleticNet,
-                PageKind::Athlete,
-                "https://www.athletic.net/athlete/1".to_owned(),
-                PageContext::default(),
-            );
-            target.token_url = Some("https://www.athletic.net/token".to_owned());
-            let error = transport
-                .fetch(&target)
-                .await
-                .expect_err("browser must fail closed");
-            assert!(error.detail.contains("browser transport disabled"));
-            assert!(
-                error
-                    .detail
-                    .contains("redirects, subresources, DNS resolution")
-            );
-            assert!(!error.blocked);
-            assert!(transport.browser.is_none());
-            assert!(transport.next_request.is_empty());
+            })
+            .expect("valid options");
+            assert!(transport.uses_browser(&target));
+            target.kind = PageKind::Contacts;
+            assert!(!transport.uses_browser(&target));
+            target.kind = PageKind::Athlete;
         }
     }
 }

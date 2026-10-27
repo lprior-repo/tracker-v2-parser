@@ -3,6 +3,14 @@
   "source_revision": "main280492f",
   "captures": [
     {
+      "fixture": "teams-co.html",
+      "url": "https://co.milesplit.com/teams",
+      "recorded_at": "2026-10-27T03:36:17Z",
+      "capture_source": "direct HTTPS GET, HTTP 200",
+      "sha256": "5c9dea3fd6f5cc29f5eda92ce9ef371876bff6d578838adc2aac40caa9cfebc5",
+      "projection": false
+    },
+    {
       "fixture": "teams-oh.html",
       "original_path": "research/sources/milesplit-national/samples/teams-oh.html",
       "url": "https://oh.milesplit.com/teams",

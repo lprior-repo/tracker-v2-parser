@@ -12,9 +12,12 @@ orchestration.
 - Moon 2.2.4 for the project tasks.
 - For database integration tests, `TEST_DATABASE_URL` pointing to a disposable
   PostgreSQL database where the test user may create and drop schemas.
-- Browser transport is currently disabled: the WebDriver adapter cannot yet
-  enforce public-address restrictions and per-request pacing for Chromium.
-- Application and test code use Rust, with no first-party JavaScript or Python.
+- Chromium or Chrome installed and discoverable on `PATH` for browser transport.
+  Chromiumoxide launches a dedicated headless profile by default. Browser pages
+  execute their JavaScript; normal certificate verification remains enabled.
+  An optional transport `driver_url` is a Chromium DevTools HTTP or WebSocket
+  endpoint, not a WebDriver endpoint; externally managed browsers retain their
+  own profile and are not shut down by the scraper.
   Captured source fixtures retain their original third-party HTML and scripts.
 
 ## Configuration and commands
@@ -36,6 +39,18 @@ handling. Export reads database records without scraping, writes new XLSX files,
 and does not overwrite an existing output. The Issues worksheet identifies
 unresolved or incomplete data. See [the scraper contract](docs/contract.md) for
 identity, comparison, and checkpoint requirements.
+
+Browser mode uses a fresh tab per target and reuses the browser profile for
+session cookies. When a target supplies a browser origin, it opens that page
+before issuing the GET or POST in its browser context. Source requests are paced
+at no more than one per second, including the origin navigation; page-initiated
+subresources and JavaScript requests are not individually rate-limited. Browser
+responses are limited to 16 MiB, requests have timeouts, and access challenges
+stop acquisition for human handling rather than being bypassed.
+
+The crawl reports an error if `limits.max_pages` is exhausted while checkpoints
+remain pending. Increase the limit if needed and run the scrape again to resume
+from its persisted checkpoints.
 
 Athletic.net results without a published result ID use its row code where
 available (including the meet API's `ShortCode`). Without a code, the key

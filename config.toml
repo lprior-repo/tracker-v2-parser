@@ -10,7 +10,7 @@ season = 2026
 
 [limits]
 requests_per_second = 1.0
-max_pages = 100
+max_pages = 100000
 max_attempts = 3
 concurrency = 1
 
