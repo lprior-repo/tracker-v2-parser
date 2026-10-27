@@ -70,10 +70,14 @@ fn school(target: &Target, root: ElementRef<'_>, id: String) -> Result<School> {
         .map(html::text)
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    let location = spans.iter().find(|value| html::location(value).1.is_some());
+    let mut locations = spans
+        .iter()
+        .filter(|value| html::location(value).1.is_some());
+    let location = locations.next().filter(|_| locations.next().is_none());
     let (city, state) = location.map_or((None, None), |value| html::location(value));
     let postal_code = location.and_then(|value| html::postal(value));
-    let address = spans.iter().find(|value| Some(*value) != location).cloned();
+    let mut streets = spans.iter().filter(|value| html::street(value));
+    let address = streets.next().filter(|_| streets.next().is_none()).cloned();
     let website = root
         .select(&html::selector(
             ".jumbotron-content .profile .info a[href]",
@@ -104,6 +108,7 @@ fn school(target: &Target, root: ElementRef<'_>, id: String) -> Result<School> {
         website,
         postal_code,
         public_email,
+        uuid: None,
     })
 }
 
@@ -151,10 +156,8 @@ fn roster_row(
         || published.clone(),
         |(last, first)| format!("{} {}", first.trim(), last.trim()),
     );
-    let grad = html::value(row, ".column-grad-year")?
-        .filter(|value| value != "-" && value != "--")
-        .map(|value| value.parse::<i32>())
-        .transpose()?;
+    let claim = html::value(row, ".column-grad-year")?;
+    let grad = html::graduation_year(claim.as_deref())?;
     let gender = html::value(row, ".column-gender")?
         .as_deref()
         .and_then(html::gender);

@@ -61,6 +61,8 @@ pub struct PageContext {
     pub subject_id: Option<String>,
     pub meet_name: Option<String>,
     pub meet_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub result_set_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +101,8 @@ impl Target {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct School {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
     pub name: String,
     pub state: Option<String>,
     pub city: Option<String>,
@@ -129,6 +133,10 @@ pub struct Performance {
     pub athlete_id: String,
     pub event: String,
     pub mark: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_values: Option<serde_json::Value>,
     pub sport: Sport,
     pub result_id: Option<String>,
     #[serde(default)]

@@ -15,6 +15,45 @@ use crate::{
 #[derive(Default)]
 pub struct Runner;
 
+struct Schedule {
+    athleticnet: u8,
+    milesplit: u8,
+    next_source: Source,
+}
+
+impl Schedule {
+    const fn new() -> Self {
+        Self {
+            athleticnet: 0,
+            milesplit: 0,
+            next_source: Source::AthleticNet,
+        }
+    }
+
+    const fn prefer_bulk(&self, source: Source) -> bool {
+        match source {
+            Source::AthleticNet => self.athleticnet == 3,
+            Source::MileSplit => self.milesplit == 3,
+        }
+    }
+
+    const fn reserved(&mut self, source: Source) {
+        let count = match source {
+            Source::AthleticNet => &mut self.athleticnet,
+            Source::MileSplit => &mut self.milesplit,
+        };
+        *count = if *count == 3 {
+            0
+        } else {
+            count.saturating_add(1)
+        };
+        self.next_source = match source {
+            Source::AthleticNet => Source::MileSplit,
+            Source::MileSplit => Source::AthleticNet,
+        };
+    }
+}
+
 impl Runner {
     #[must_use]
     pub const fn new() -> Self {
@@ -98,17 +137,28 @@ impl Runner {
         athleticnet: &mut Transport,
         milesplit: &mut Transport,
     ) -> Result<()> {
+        let mut schedule = Schedule::new();
         for _ in 0..config.limits.max_pages {
-            let job = next_enabled_job(database, config).await?;
+            let job = next_enabled_job(database, config, &schedule).await?;
             let Some(job) = job else { break };
+            ensure!(
+                database
+                    .start_attempt(job.id, config.limits.max_attempts)
+                    .await?,
+                "checkpoint {} has exhausted its attempts",
+                job.id
+            );
+            schedule.reserved(job.target.source);
             let transport = match job.target.source {
                 Source::AthleticNet => &mut *athleticnet,
                 Source::MileSplit => &mut *milesplit,
             };
-            acquire_job(database, config, &job, transport).await?;
+            acquire_job(database, &job, transport).await?;
         }
         ensure!(
-            next_enabled_job(database, config).await?.is_none(),
+            next_enabled_job(database, config, &schedule)
+                .await?
+                .is_none(),
             "page budget exhausted; unfinished checkpoints remain"
         );
         check_exhausted(database, config).await
@@ -179,19 +229,7 @@ impl Runner {
     }
 }
 
-async fn acquire_job(
-    database: &Database,
-    config: &Config,
-    job: &Job,
-    transport: &mut Transport,
-) -> Result<()> {
-    ensure!(
-        database
-            .start_attempt(job.id, config.limits.max_attempts)
-            .await?,
-        "checkpoint {} has exhausted its attempts",
-        job.id
-    );
+async fn acquire_job(database: &Database, job: &Job, transport: &mut Transport) -> Result<()> {
     info!("acquiring {}", job.target.url);
     match transport.fetch(&job.target).await {
         Ok(capture) => {
@@ -235,11 +273,21 @@ fn make_transport(config: &Config, source: Source) -> Result<Transport> {
     })
 }
 
-async fn next_enabled_job(database: &Database, config: &Config) -> Result<Option<Job>> {
+async fn next_enabled_job(
+    database: &Database,
+    config: &Config,
+    schedule: &Schedule,
+) -> Result<Option<Job>> {
     check_source_stops(database, config).await?;
-    for source in config.enabled_sources() {
+    let mut sources = config.enabled_sources();
+    sources.sort_by_key(|source| *source != schedule.next_source);
+    for source in sources {
         if let Some(job) = database
-            .next_job(Some(source), config.limits.max_attempts)
+            .next_job_with_priority(
+                Some(source),
+                config.limits.max_attempts,
+                schedule.prefer_bulk(source),
+            )
             .await?
         {
             return Ok(Some(job));
@@ -446,5 +494,30 @@ fn combine(result: Result<()>, cleanup: Result<()>) -> Result<()> {
         (Err(error), Err(cleanup)) => {
             Err(error.context(format!("cleanup also failed: {cleanup:#}")))
         }
+    }
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::{Schedule, Source};
+
+    #[test]
+    fn reservations_rotate_sources_and_bound_each_priority_cycle() {
+        let mut schedule = Schedule::new();
+        for _ in 0..3 {
+            assert!(!schedule.prefer_bulk(Source::AthleticNet));
+            assert_eq!(schedule.next_source, Source::AthleticNet);
+            schedule.reserved(Source::AthleticNet);
+            assert_eq!(schedule.next_source, Source::MileSplit);
+            assert!(!schedule.prefer_bulk(Source::MileSplit));
+            schedule.reserved(Source::MileSplit);
+        }
+        assert!(schedule.prefer_bulk(Source::AthleticNet));
+        assert!(schedule.prefer_bulk(Source::MileSplit));
+        schedule.reserved(Source::AthleticNet);
+        assert!(!schedule.prefer_bulk(Source::AthleticNet));
+        assert!(schedule.prefer_bulk(Source::MileSplit));
+        schedule.reserved(Source::MileSplit);
+        assert!(!schedule.prefer_bulk(Source::MileSplit));
     }
 }

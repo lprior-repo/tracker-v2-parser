@@ -24,7 +24,8 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     timing = CASE WHEN btrim(EXCLUDED.timing) <> '' THEN EXCLUDED.timing ELSE results.timing END,
     course = CASE WHEN btrim(EXCLUDED.course) <> '' THEN EXCLUDED.course ELSE results.course END,
     is_personal_record = EXCLUDED.is_personal_record, is_relay = EXCLUDED.is_relay,
-    raw = results.raw || COALESCE((
+    raw = (CASE WHEN btrim(EXCLUDED.event) <> '' AND btrim(EXCLUDED.raw_mark) <> ''
+        THEN results.raw - 'reported_status' ELSE results.raw END) || COALESCE((
         SELECT jsonb_object_agg(key, value)
         FROM jsonb_each(EXCLUDED.raw)
         WHERE value <> 'null'::jsonb

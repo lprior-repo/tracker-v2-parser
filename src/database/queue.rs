@@ -54,13 +54,17 @@ pub(super) async fn next(
     pool: &PgPool,
     source: Option<Source>,
     max_attempts: u32,
+    prefer_bulk: bool,
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT id,cursor FROM scrape_pages WHERE status IN ('pending','failed') AND attempts < $2 \
-         AND ($1::text IS NULL OR source=$1) ORDER BY (attempts = 0) DESC, id LIMIT 1",
+         AND ($1::text IS NULL OR source=$1) \
+         ORDER BY (attempts = 0) DESC, \
+         ((cursor->>'kind' IN ('roster','athlete')) <> $3) DESC, id LIMIT 1",
     )
     .bind(source.map(Source::as_str))
     .bind(attempt_limit(max_attempts)?)
+    .bind(prefer_bulk)
     .fetch_optional(pool)
     .await?;
     row.map(|(id, target)| {

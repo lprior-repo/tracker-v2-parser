@@ -33,7 +33,7 @@ WITH school_links AS (
 ), school_data AS (
     SELECT sl.athlete_id,
            jsonb_agg(jsonb_build_object(
-               'id', s.source_id, 'name', s.name, 'state', s.state, 'city', s.city,
+               'id', s.source_id, 'uuid', s.uuid, 'name', s.name, 'state', s.state, 'city', s.city,
                'address', s.address, 'postal_code', s.postal_code, 'website', s.website,
                'public_email', s.public_email
            ) ORDER BY s.source, s.source_id) AS schools

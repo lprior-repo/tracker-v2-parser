@@ -20,6 +20,149 @@ enum Stage {
     Scores,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AthleticStage {
+    Generator,
+    Title,
+    Updated,
+    Event,
+    Header,
+    Results,
+}
+
+pub(super) fn is_athleticrunmeet(table: ElementRef<'_>) -> Result<bool> {
+    let rows = html::selector("tr")?;
+    let cells = html::selector("td, th")?;
+    Ok(table
+        .select(&rows)
+        .next()
+        .map(|row| row.select(&cells).map(html::text).collect::<Vec<_>>())
+        .is_some_and(|values| matches!(values.as_slice(), [name] if name == "AthleticRUNMEET")))
+}
+
+pub(super) fn parse_athleticrunmeet(
+    target: &Target,
+    context: &PageContext,
+    table: ElementRef<'_>,
+    identity: &str,
+) -> Result<ParsedPage> {
+    let rows = html::selector("tr")?;
+    let cells = html::selector("td, th")?;
+    let mut stage = AthleticStage::Generator;
+    let mut event = String::new();
+    let mut section_rows = 0usize;
+    let mut page = ParsedPage::default();
+    for (ordinal, row) in table.select(&rows).enumerate() {
+        let values: Vec<String> = row.select(&cells).map(html::text).collect();
+        if values.iter().all(String::is_empty) {
+            continue;
+        }
+        match stage {
+            AthleticStage::Generator => {
+                ensure!(
+                    matches!(values.as_slice(), [name] if name == "AthleticRUNMEET"),
+                    "unrecognized table generator"
+                );
+                stage = AthleticStage::Title;
+            }
+            AthleticStage::Title => {
+                ensure!(
+                    matches!(values.as_slice(), [title] if !title.is_empty()),
+                    "unrecognized table title"
+                );
+                stage = AthleticStage::Updated;
+            }
+            AthleticStage::Updated => {
+                ensure!(
+                    matches!(values.as_slice(), [blank, updated] if blank.is_empty() && updated.starts_with("(updated ") && updated.ends_with(')')),
+                    "unrecognized table update"
+                );
+                stage = AthleticStage::Event;
+            }
+            AthleticStage::Event => {
+                event = athletic_event(&values)?;
+                stage = AthleticStage::Header;
+            }
+            AthleticStage::Header => {
+                ensure!(
+                    matches!(values.as_slice(), [place, name, grade, team, mark] if place.eq_ignore_ascii_case("Place") && name.eq_ignore_ascii_case("Name") && grade.eq_ignore_ascii_case("Grade") && team.eq_ignore_ascii_case("Team") && mark.eq_ignore_ascii_case("Mark")),
+                    "unrecognized result table header"
+                );
+                section_rows = 0;
+                stage = AthleticStage::Results;
+            }
+            AthleticStage::Results => {
+                if values.len() == 1 {
+                    ensure!(section_rows > 0, "result table section has no rows");
+                    event = athletic_event(&values)?;
+                    stage = AthleticStage::Header;
+                } else {
+                    page.unassigned_results.push(athletic_row(
+                        target, context, row, identity, &event, ordinal, &values,
+                    )?);
+                    section_rows = section_rows.saturating_add(1);
+                }
+            }
+        }
+    }
+    ensure!(
+        stage == AthleticStage::Results && section_rows > 0,
+        "unrecognized or incomplete result table"
+    );
+    page.notes.push(format!("{} published table result rows have no actual athlete profile ID; retained as unassigned results", page.unassigned_results.len()));
+    Ok(page)
+}
+
+fn athletic_event(values: &[String]) -> Result<String> {
+    match values {
+        [event] if !event.is_empty() => Ok(event.clone()),
+        _ => anyhow::bail!("unrecognized result table section"),
+    }
+}
+
+fn athletic_row(
+    target: &Target,
+    context: &PageContext,
+    row: ElementRef<'_>,
+    identity: &str,
+    event: &str,
+    ordinal: usize,
+    values: &[String],
+) -> Result<UnassignedResult> {
+    let [place, name, grade, team, mark] = values else {
+        anyhow::bail!("unrecognized result table row");
+    };
+    let sport = context
+        .sport
+        .ok_or_else(|| anyhow::anyhow!("table results have no sport"))?;
+    ensure!(
+        !name.is_empty() && !team.is_empty() && !mark.is_empty(),
+        "incomplete result table row"
+    );
+    let published_html = row.html();
+    let digest = format!("{:x}", Sha256::digest(published_html.as_bytes()));
+    let id = serde_json::to_string(&(
+        context.subject_id.as_deref(),
+        identity,
+        event,
+        ordinal.saturating_add(1),
+        digest,
+    ))?;
+    Ok(UnassignedResult {
+        result_id: Some(format!("table:{id}")),
+        source_row: None,
+        event: event.to_owned(),
+        mark: mark.clone(),
+        sport,
+        school_id: None,
+        meet_id: context.subject_id.clone(),
+        date: context.meet_date.clone(),
+        is_relay: html::relay(event),
+        members: Vec::new(),
+        raw: json!({"source_url": target.url, "line_ordinal": ordinal.saturating_add(1), "published_html": published_html, "place": place, "name": name, "grade": grade, "team": team, "event": event, "meet_name": context.meet_name}),
+    })
+}
+
 pub(super) fn is_spreadsheet(table: ElementRef<'_>) -> Result<bool> {
     let rows = html::selector("tr")?;
     let cells = html::selector("td, th")?;

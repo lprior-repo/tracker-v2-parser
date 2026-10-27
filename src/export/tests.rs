@@ -21,6 +21,7 @@ fn athlete() -> AthleteRecord {
             postal_code: Some("97301".to_owned()),
             public_email: Some("office@school.test".to_owned()),
             website: None,
+            uuid: None,
         }],
         coaches: vec![Coach {
             school_id: "school1".to_owned(),

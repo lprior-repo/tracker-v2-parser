@@ -1,3 +1,4 @@
+mod capacity;
 mod rows;
 mod selection;
 mod workbook;

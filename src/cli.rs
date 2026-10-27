@@ -5,8 +5,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::{
     config::Config,
+    database::Database,
     model::{PageContext, PageKind, Source, Sport, Target},
     runner::Runner,
+    school_directory::{self, Directory},
 };
 
 #[derive(Parser)]
@@ -78,8 +80,26 @@ struct ScrapeArgs {
     meet_name: Option<String>,
     #[arg(long, requires = "input")]
     meet_date: Option<String>,
+    #[arg(long = "result-set-id", requires = "input")]
+    result_set_ids: Vec<String>,
     #[arg(long, conflicts_with = "input")]
     refresh: bool,
+    #[arg(long, requires = "school_directory_manifest", conflicts_with_all = ["input", "refresh"], help = "Offline reference school_directory.csv to enrich existing schools")]
+    school_directory: Option<PathBuf>,
+    #[arg(
+        long,
+        requires = "school_directory",
+        help = "Manifest for the supplied reference directory"
+    )]
+    school_directory_manifest: Option<PathBuf>,
+    #[arg(long, requires = "school_addresses_sha256", conflicts_with_all = ["school_directory", "input", "refresh", "download_school_addresses"], help = "Import a local published NCES school-address CSV")]
+    school_addresses: Option<PathBuf>,
+    #[arg(long, requires = "school_addresses_sha256", conflicts_with_all = ["school_directory", "input", "refresh", "school_addresses"], help = "Download the published CSV to this new file, then import it")]
+    download_school_addresses: Option<PathBuf>,
+    #[arg(long, requires = "school_addresses_sha256", conflicts_with_all = ["school_directory", "input", "refresh", "school_addresses", "download_school_addresses"], help = "Import a local NCES 2023-24 Private School Survey CSV")]
+    private_school_addresses: Option<PathBuf>,
+    #[arg(long, help = "Expected SHA-256 of the published CSV")]
+    school_addresses_sha256: Option<String>,
 }
 
 #[derive(Args)]
@@ -102,6 +122,38 @@ impl Cli {
         };
         match self.command {
             Command::Scrape(args) => {
+                if let Some(path) = args.private_school_addresses {
+                    let expected = args.school_addresses_sha256.ok_or_else(|| {
+                        anyhow!("private school import requires --school-addresses-sha256")
+                    })?;
+                    return import_private_schools(path, expected, &database_url).await;
+                }
+                if args.school_addresses.is_some() || args.download_school_addresses.is_some() {
+                    let expected = args.school_addresses_sha256.ok_or_else(|| {
+                        anyhow!("school address import requires --school-addresses-sha256")
+                    })?;
+                    let (path, origin) =
+                        match (args.school_addresses, args.download_school_addresses) {
+                            (Some(path), None) => (path, None),
+                            (None, Some(path)) => {
+                                crate::school_address_download::download(&expected, &path).await?;
+                                (path, Some(crate::school_address_download::SOURCE))
+                            }
+                            _ => return Err(anyhow!("select one school address input")),
+                        };
+                    return import_published_schools(path, expected, origin, &database_url).await;
+                }
+                if args.school_addresses_sha256.is_some() {
+                    return Err(anyhow!(
+                        "--school-addresses-sha256 requires a school address input"
+                    ));
+                }
+                if let Some(path) = args.school_directory {
+                    let manifest = args
+                        .school_directory_manifest
+                        .ok_or_else(|| anyhow!("school directory requires a manifest"))?;
+                    return enrich_schools(path, manifest, &database_url).await;
+                }
                 let config = Config::load(&args.config)?;
                 if let Some(input) = args.input {
                     let source = match args.source {
@@ -134,6 +186,7 @@ impl Cli {
                         subject_id: args.subject_id,
                         meet_name: args.meet_name,
                         meet_date: args.meet_date,
+                        result_set_ids: args.result_set_ids,
                     };
                     let url = args.url.ok_or_else(|| anyhow!("replay requires --url"))?;
                     runner
@@ -157,6 +210,63 @@ impl Cli {
             }
         }
     }
+}
+
+async fn import_private_schools(path: PathBuf, expected: String, database_url: &str) -> Result<()> {
+    let directory = tokio::task::spawn_blocking(move || {
+        school_directory::pss::PrivateDirectory::load(&path, &expected)
+    })
+    .await??;
+    let database = Database::connect(database_url).await?;
+    let result = school_directory::pss::import(database.pool(), &directory).await;
+    database.close().await;
+    let report = result?;
+    println!(
+        "private schools: {} inserted; {} enriched, {} conflicts, {} uncorroborated",
+        report.inserted,
+        report.enrichment.updated,
+        report.enrichment.conflicts,
+        report.enrichment.uncorroborated
+    );
+    Ok(())
+}
+
+async fn import_published_schools(
+    path: PathBuf,
+    expected: String,
+    origin: Option<&'static str>,
+    database_url: &str,
+) -> Result<()> {
+    let directory = tokio::task::spawn_blocking(move || {
+        school_directory::published::PublishedDirectory::load_with_origin(&path, &expected, origin)
+    })
+    .await??;
+    let database = Database::connect(database_url).await?;
+    let result = school_directory::published::import(database.pool(), &directory).await;
+    database.close().await;
+    let report = result?;
+    println!(
+        "published schools: {} inserted; {} enriched, {} conflicts, {} uncorroborated",
+        report.inserted,
+        report.enrichment.updated,
+        report.enrichment.conflicts,
+        report.enrichment.uncorroborated
+    );
+    Ok(())
+}
+
+async fn enrich_schools(path: PathBuf, manifest: PathBuf, database_url: &str) -> Result<()> {
+    let directory =
+        tokio::task::spawn_blocking(move || Directory::load(&path, &manifest)).await??;
+    let database = Database::connect(database_url).await?;
+    let result = school_directory::enrich(database.pool(), &directory).await;
+    database.close().await;
+    let report = result?;
+    println!(
+        "school directory: {} updated, {} conflicts, {} uncorroborated",
+        report.updated, report.conflicts, report.uncorroborated
+    );
+    Ok(())
 }
 
 fn database_url() -> Result<String> {

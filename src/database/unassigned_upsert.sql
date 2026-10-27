@@ -5,11 +5,13 @@ INSERT INTO results (
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16)
 ON CONFLICT (source_result_key) DO UPDATE SET
+    athlete_source_id = CASE WHEN EXCLUDED.is_relay THEN NULL ELSE results.athlete_source_id END,
+    athlete_id = CASE WHEN EXCLUDED.is_relay THEN NULL ELSE results.athlete_id END,
     represented_school_id = COALESCE(EXCLUDED.represented_school_id, results.represented_school_id),
     event = EXCLUDED.event, raw_mark = EXCLUDED.raw_mark, sport = EXCLUDED.sport,
     meet_id = EXCLUDED.meet_id, meet_date = EXCLUDED.meet_date,
     status = EXCLUDED.status, is_relay = EXCLUDED.is_relay,
-    source_url = EXCLUDED.source_url, raw = EXCLUDED.raw, last_seen = clock_timestamp(),
+    source_url = EXCLUDED.source_url, raw = results.raw || EXCLUDED.raw, last_seen = clock_timestamp(),
     normalized_numeric = EXCLUDED.normalized_numeric, normalized_unit = EXCLUDED.normalized_unit,
     specification = EXCLUDED.specification
-WHERE results.athlete_source_id IS NULL
+WHERE results.athlete_source_id IS NULL OR (results.is_relay AND EXCLUDED.is_relay)

@@ -2,6 +2,7 @@ mod directory;
 mod html;
 mod manual;
 mod meets;
+mod owned;
 mod profile;
 mod raw;
 mod targets;
@@ -22,6 +23,9 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         body.len() <= 16 * 1024 * 1024,
         "MileSplit capture exceeds 16 MiB"
     );
+    if target.kind == PageKind::Results && !target.context.result_set_ids.is_empty() {
+        return owned::parse(target, body);
+    }
     targets::public_url(&target.url)?;
     let document = Html::parse_document(body);
     html::access(&document)?;

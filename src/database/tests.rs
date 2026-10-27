@@ -18,6 +18,8 @@ fn performance() -> Performance {
         athlete_id: "123".to_owned(),
         event: "100m".to_owned(),
         mark: "11.20".to_owned(),
+        reported_status: None,
+        source_values: None,
         sport: Sport::Outdoor,
         result_id: None,
         source_row: None,

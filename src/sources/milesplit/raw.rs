@@ -230,16 +230,29 @@ fn identified_row(
         event,
         ..
     } = *scope;
-    let Some(link) = fragment
-        .select(&html::selector("a[href*='/athletes/']")?)
-        .next()
-    else {
+    if html::relay(event) {
+        return Ok(false);
+    }
+    let selector = html::selector("a[href*='/athletes/']")?;
+    let mut links = fragment.select(&selector);
+    let Some(link) = links.next() else {
         return Ok(false);
     };
-    ensure!(
-        html::text(link) == row.name.split_whitespace().collect::<Vec<_>>().join(" "),
-        "raw athlete link is not owned by fixed-width name cell"
-    );
+    if links.next().is_some() {
+        return Ok(false);
+    }
+    let preceding_bytes: usize = fragment
+        .descendants()
+        .take_while(|node| node.id() != link.id())
+        .filter_map(|node| node.value().as_text())
+        .map(|text| text.len())
+        .sum();
+    if scope.line.find(row.name) != Some(preceding_bytes) {
+        return Ok(false);
+    }
+    if html::text(link) != row.name.split_whitespace().collect::<Vec<_>>().join(" ") {
+        return Ok(false);
+    }
     let href = link
         .value()
         .attr("href")
@@ -279,6 +292,8 @@ fn identified_row(
         athlete_id: id,
         event: event.to_owned(),
         mark: row.mark.to_owned(),
+        reported_status: None,
+        source_values: None,
         sport,
         result_id,
         source_row: None,

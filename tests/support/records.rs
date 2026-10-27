@@ -43,6 +43,8 @@ pub fn performance(mark: &str) -> Performance {
         athlete_id: "11".to_owned(),
         event: "100 Meters".to_owned(),
         mark: mark.to_owned(),
+        reported_status: None,
+        source_values: None,
         sport: Sport::Outdoor,
         result_id: Some("race-1".to_owned()),
         source_row: None,

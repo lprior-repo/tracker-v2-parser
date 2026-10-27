@@ -23,10 +23,12 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
     let (city, state) = location.as_deref().map_or((None, None), html::location);
     let school = profile_school(target, root, city, state.clone())?;
     let state = state.or_else(|| target.context.state.clone());
-    let graduation_year = html::value(root, ".athlete-info .grad-year")?
-        .and_then(|value| value.strip_prefix("Class of ").map(str::to_owned))
-        .map(|value| value.parse::<i32>())
-        .transpose()?;
+    let graduation_claim = html::value(root, ".athlete-info .grad-year")?;
+    let graduation_year = html::graduation_year(
+        graduation_claim
+            .as_deref()
+            .and_then(|value| value.strip_prefix("Class of ")),
+    )?;
     let gender = progression_gender(root)?.or_else(|| {
         person
             .as_ref()
@@ -212,6 +214,8 @@ fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Resul
         athlete_id: athlete.id.clone(),
         event,
         mark,
+        reported_status: None,
+        source_values: None,
         sport,
         result_id,
         source_row: None,

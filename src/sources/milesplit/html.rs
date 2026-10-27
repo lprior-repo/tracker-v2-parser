@@ -35,6 +35,19 @@ pub(super) fn required(root: ElementRef<'_>, css: &str) -> Result<String> {
     value(root, css)?.ok_or_else(|| anyhow::anyhow!("MileSplit page missing required {css}"))
 }
 
+pub(super) fn graduation_year(value: Option<&str>) -> Result<Option<i32>> {
+    let year = value
+        .map(str::trim)
+        .filter(|value| !matches!(*value, "" | "-" | "--" | "0"))
+        .map(str::parse::<i32>)
+        .transpose()?;
+    anyhow::ensure!(
+        year.is_none_or(|year| (1900..=2200).contains(&year)),
+        "MileSplit graduation year is outside the supported range"
+    );
+    Ok(year)
+}
+
 pub(super) fn schema(document: &Html, kind: &str) -> Result<Option<Value>> {
     document
         .select(&selector("script[type='application/ld+json']")?)
@@ -80,6 +93,39 @@ pub(super) fn location(value: &str) -> (Option<String>, Option<String>) {
         return (Some(city.trim().to_owned()), None);
     }
     (Some(city.trim().to_owned()), code)
+}
+
+pub(super) fn street(value: &str) -> bool {
+    if value.contains(',') {
+        return false;
+    }
+    let mut parts = value.split_whitespace();
+    let Some(number) = parts.next() else {
+        return false;
+    };
+    if number.eq_ignore_ascii_case("po") || number.eq_ignore_ascii_case("p.o.") {
+        return parts
+            .next()
+            .is_some_and(|part| part.eq_ignore_ascii_case("box"))
+            && parts.next().is_some_and(|part| {
+                part.chars().any(|character| character.is_ascii_digit())
+                    && part
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '-')
+            })
+            && parts.next().is_none();
+    }
+    number
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_digit())
+        && number
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        && parts.any(|part| {
+            part.chars()
+                .any(|character| character.is_ascii_alphabetic())
+        })
 }
 
 pub(super) fn postal(value: &str) -> Option<String> {

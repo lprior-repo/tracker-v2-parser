@@ -35,6 +35,7 @@ async fn save(
          name=EXCLUDED.name,state=COALESCE(EXCLUDED.state,schools.state), \
          city=COALESCE(EXCLUDED.city,schools.city),address=COALESCE(EXCLUDED.address,schools.address), \
          postal_code=COALESCE(EXCLUDED.postal_code,schools.postal_code),website=COALESCE(EXCLUDED.website,schools.website), \
+         address_provenance=NULLIF(CASE WHEN EXCLUDED.postal_code IS NOT NULL THEN (CASE WHEN EXCLUDED.address IS NOT NULL THEN COALESCE(schools.address_provenance, '{}'::jsonb) - 'address' ELSE COALESCE(schools.address_provenance, '{}'::jsonb) END) - 'postal_code' WHEN EXCLUDED.address IS NOT NULL THEN COALESCE(schools.address_provenance, '{}'::jsonb) - 'address' ELSE COALESCE(schools.address_provenance, '{}'::jsonb) END, '{}'::jsonb), \
          public_email=COALESCE(EXCLUDED.public_email,schools.public_email),source_url=EXCLUDED.source_url,last_checked=clock_timestamp() RETURNING id",
     ).bind(source.as_str()).bind(&school.id).bind(&school.name).bind(&school.state)
         .bind(&school.city).bind(&school.address).bind(&school.postal_code).bind(&school.website)

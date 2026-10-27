@@ -1,0 +1,11 @@
+{
+  "source_url": "https://al.milesplit.com/teams/6253-addison/roster",
+  "captured_at_utc": "2026-10-27T11:40:30Z",
+  "http_status": 200,
+  "file": "roster-al-addison.html",
+  "sha256": "bc45ae64069113176fe980684d7626b7e971388d6cf69cac417528c45ad22ef6",
+  "bytes": 201708,
+  "attribution": "MileSplit / FloSports, public school roster; retained for source-parser regression",
+  "access": "Ordinary unauthenticated HTTPS GET; no login, paywall or challenge bypass",
+  "observed_behavior": "Published column-grad-year value 0 accompanies unknown cohorts; known cohort years remain distinct"
+}

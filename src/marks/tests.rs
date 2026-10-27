@@ -9,6 +9,8 @@ pub(crate) fn evidence(event: &str, mark: &str) -> EvidencedPerformance {
             athlete_id: "123".to_owned(),
             event: event.to_owned(),
             mark: mark.to_owned(),
+            reported_status: None,
+            source_values: None,
             sport: Sport::Outdoor,
             result_id: None,
             source_row: None,

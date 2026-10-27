@@ -56,43 +56,101 @@ pub(super) fn parse(target: &Target, body: &str, document: &Html) -> Result<Pars
             page.notes
                 .push("Meet publishes an empty result-file inventory".to_owned());
         }
-        return files.into_iter().try_fold(page, |page, file| {
+        let ids = files
+            .iter()
+            .filter(|file| file.is_meet_pro == 0 && file.id > 0)
+            .map(|file| file.id.to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut page = files.into_iter().try_fold(page, |page, file| {
             result_file(target, &context, &file, page)
-        });
-    }
-    let root = document.root_element();
-    let select = root.select(&html::selector("#ddResultsPage")?).next();
-    if let Some(select) = select {
-        let selected = selected_inline_result(target, document, &page)?;
-        let page =
-            select
-                .select(&html::selector("option[value]")?)
-                .try_fold(page, |page, option| {
-                    let href = option
-                        .value()
-                        .attr("value")
-                        .ok_or_else(|| anyhow::anyhow!("result option missing URL"))?;
-                    if option.value().attr("selected").is_some()
-                        && selected.as_deref() == Some(href)
-                    {
-                        return Ok(page);
-                    }
-                    legacy_file(target, &context, href, page)
-                })?;
-        ensure!(
-            !page.next.is_empty()
-                || !page.notes.is_empty()
-                || !page.performances.is_empty()
-                || !page.unassigned_results.is_empty(),
-            "MileSplit legacy result inventory has no readable files"
-        );
+        })?;
+        if !ids.is_empty() {
+            page.next.push(super::owned::target(
+                target,
+                &context,
+                ids.into_iter().collect(),
+            )?);
+        }
         return Ok(page);
+    }
+    if let Some(select) = document
+        .root_element()
+        .select(&html::selector("#ddResultsPage")?)
+        .next()
+    {
+        return legacy_inventory(target, &context, document, select, page);
     }
     ensure!(
         !page.notes.is_empty()
             || !page.performances.is_empty()
             || !page.unassigned_results.is_empty(),
         "MileSplit meet has no recognized public result inventory or raw block"
+    );
+    Ok(page)
+}
+
+fn legacy_inventory(
+    target: &Target,
+    context: &PageContext,
+    document: &Html,
+    select: ElementRef<'_>,
+    page: ParsedPage,
+) -> Result<ParsedPage> {
+    let selected = selected_inline_result(target, document, &page)?;
+    let selected_file = if let Some(href) = selected.as_deref() {
+        let selected_url = targets::linked(&target.url, href)?;
+        let file = targets::path_id(&selected_url, "results")?;
+        Some((selected_url, file))
+    } else {
+        None
+    };
+    let mut page =
+        select
+            .select(&html::selector("option[value]")?)
+            .try_fold(page, |page, option| {
+                let href = option
+                    .value()
+                    .attr("value")
+                    .ok_or_else(|| anyhow::anyhow!("result option missing URL"))?;
+                if option.value().attr("selected").is_some() && selected.as_deref() == Some(href) {
+                    return Ok(page);
+                }
+                legacy_file(target, context, href, page)
+            })?;
+    let mut ids = page
+        .next
+        .iter()
+        .filter(|next| next.kind == PageKind::Results)
+        .filter_map(|next| targets::path_id(&next.url, "results").ok())
+        .collect::<std::collections::BTreeSet<_>>();
+    if let Some((_, file)) = &selected_file {
+        ids.insert(file.clone());
+    }
+    if !ids.is_empty() {
+        let api_parent = page
+            .next
+            .iter()
+            .find(|next| next.kind == PageKind::Results)
+            .cloned()
+            .or_else(|| {
+                selected_file.as_ref().map(|(url, _)| Target {
+                    url: url.clone(),
+                    ..target.clone()
+                })
+            })
+            .ok_or_else(|| anyhow::anyhow!("published result source missing"))?;
+        page.next.push(super::owned::target(
+            &api_parent,
+            context,
+            ids.into_iter().collect(),
+        )?);
+    }
+    ensure!(
+        !page.next.is_empty()
+            || !page.notes.is_empty()
+            || !page.performances.is_empty()
+            || !page.unassigned_results.is_empty(),
+        "MileSplit legacy result inventory has no readable files"
     );
     Ok(page)
 }
@@ -120,7 +178,9 @@ fn parse_table(
     table: ElementRef<'_>,
 ) -> Result<ParsedPage> {
     let identity = table_identity(target, document)?;
-    if manual::is_spreadsheet(table)? {
+    if manual::is_athleticrunmeet(table)? {
+        manual::parse_athleticrunmeet(target, context, table, &identity)
+    } else if manual::is_spreadsheet(table)? {
         manual::parse(target, context, table, &identity)
     } else {
         table_results(target, context, table, &identity)

@@ -1,0 +1,20 @@
+{
+  "captures": [
+    {
+      "fixture": "meet-ar-770517-results.html",
+      "url": "https://ar.milesplit.com/meets/770517-arkansas-greatest-athlete-2026/results",
+      "recorded_at": "2026-10-27T11:19:43Z",
+      "capture_source": "one direct HTTPS GET, HTTP 200; timestamp from response Date header",
+      "sha256": "38a53aadbbd597687b3875c4f2bb816f86fb00c8f4003a5e6d656d8dc637251d",
+      "projection": false
+    },
+    {
+      "fixture": "meet-de-770101-results.html",
+      "url": "https://de.milesplit.com/meets/770101-spartan-moonlight-showcase-2026/results",
+      "recorded_at": "2026-10-27T11:19:43Z",
+      "capture_source": "one direct HTTPS GET, HTTP 200; timestamp from response Date header",
+      "sha256": "c8e6e6f77697bca25131c0b52a4cf370620e8965c527202656e3167ee269ef32",
+      "projection": false
+    }
+  ]
+}

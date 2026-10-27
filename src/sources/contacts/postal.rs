@@ -78,6 +78,7 @@ fn json_school(node: &Value, target: &Target, name: &str) -> Option<School> {
             .and_then(|value| public_url(value).ok())
             .map(Into::into),
         public_email: None,
+        uuid: None,
     })
 }
 
@@ -161,6 +162,7 @@ fn html_schools(document: &Html, target: &Target, name: &str) -> Result<Vec<Scho
                     postal_code: found.name("zip").map(|value| value.as_str().to_owned()),
                     website: None,
                     public_email: None,
+                    uuid: None,
                 })
             })
         })
@@ -194,5 +196,6 @@ fn structured_address(
         postal_code: Some(postal),
         website: None,
         public_email: None,
+        uuid: None,
     })
 }

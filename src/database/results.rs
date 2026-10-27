@@ -66,8 +66,15 @@ async fn save(
 #[tracing::instrument(skip(connection, row))]
 async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64> {
     let performance = row.performance;
-    let (value, unit, specification) =
-        normalization(&performance.event, &performance.mark, performance.is_relay);
+    let reported_status = performance
+        .reported_status
+        .as_deref()
+        .and_then(marks::failure_status);
+    let (value, unit, specification) = normalization(
+        &performance.event,
+        &performance.mark,
+        performance.is_relay || reported_status.is_some(),
+    );
     sqlx::query_scalar(include_str!("result_upsert.sql"))
         .bind(keys::performance(
             row.source,
@@ -98,7 +105,10 @@ async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64
         .bind(value)
         .bind(unit)
         .bind(specification)
-        .bind(status(&performance.mark, value.is_some()))
+        .bind(reported_status.map_or_else(
+            || status(&performance.mark, value.is_some()),
+            |status| status,
+        ))
         .fetch_optional(connection)
         .await?
         .context(

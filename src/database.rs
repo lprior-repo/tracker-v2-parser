@@ -79,7 +79,18 @@ impl Database {
 
     #[tracing::instrument(skip(self))]
     pub async fn next_job(&self, source: Option<Source>, max_attempts: u32) -> Result<Option<Job>> {
-        queue::next(&self.pool, source, max_attempts).await
+        self.next_job_with_priority(source, max_attempts, false)
+            .await
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn next_job_with_priority(
+        &self,
+        source: Option<Source>,
+        max_attempts: u32,
+        prefer_bulk: bool,
+    ) -> Result<Option<Job>> {
+        queue::next(&self.pool, source, max_attempts, prefer_bulk).await
     }
 
     #[tracing::instrument(skip(self))]

@@ -2,7 +2,7 @@ use crate::marks::{ComparableMark, comparable};
 use crate::model::{AthleteRecord, EvidencedPerformance};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) const BASE_HEADERS: [&str; 14] = [
+pub(super) const BASE_HEADERS: [&str; 15] = [
     "athlete_id",
     "name",
     "gender",
@@ -10,6 +10,7 @@ pub(super) const BASE_HEADERS: [&str; 14] = [
     "graduation_year",
     "source_profiles",
     "school_names",
+    "school_uuids",
     "school_states",
     "school_postal_addresses",
     "school_public_emails",
@@ -88,6 +89,12 @@ pub(super) fn cells(
             .map_or_else(String::new, |year| year.to_string()),
         joined(record.profiles.iter().map(String::as_str)),
         joined(record.schools.iter().map(|school| school.name.as_str())),
+        joined(
+            record
+                .schools
+                .iter()
+                .filter_map(|school| school.uuid.as_deref()),
+        ),
         joined(
             record
                 .schools

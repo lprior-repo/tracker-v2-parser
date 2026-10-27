@@ -131,6 +131,8 @@ pub(super) fn performance(
         athlete_id,
         event,
         mark: mark.to_owned(),
+        reported_status: None,
+        source_values: None,
         sport,
         result_id: id(row, "IDResult"),
         source_row: None,

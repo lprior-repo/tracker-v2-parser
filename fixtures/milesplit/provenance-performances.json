@@ -1,0 +1,9 @@
+{
+  "url": "https://al.milesplit.com/api/v1/meets/725218/performances?isMeetPro=0&fields=id,meetId,teamId,teamName,athleteId,firstName,lastName,gender,divisionId,divisionName,meetResultsId,meetResultsDivisionId,resultsDivisionId,gradYear,eventName,eventCode,eventDistance,round,roundName,heat,units,mark,place,windReading,profileUrl,statusCode",
+  "capture_source": "One direct public HTTPS GET via static web reader; response JSON provider _meta.status_code 200; body retained unprojected",
+  "fixture": "performances-al-725218.json",
+  "sha256": "ccca986ce6b9640f0ea768664aff6d6135259f00c278135b380b3b17a30b2acc",
+  "bytes": 311763,
+  "published_rows": 602,
+  "completeness": "unknown: response publishes no total"
+}

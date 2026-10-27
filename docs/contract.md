@@ -7,8 +7,9 @@ fixtures, event rules, and source limits are useful, not its Fjall/Restate runti
 
 ## Domain and commands
 
-- **School:** source-backed school identity, postal fields, official website,
-  public school-office mailbox. A name is not an identifier.
+- **School:** source-backed school identity with a persistent database UUID,
+  postal fields, official website, and public school-office mailbox. A name is
+  not an identifier. An NCES row is not automatically an athletics-site school.
 - **Athlete:** local identity with source mappings, observed school, competition
   category, optional published graduation year, and `needs_review`.
 - **Result:** one published result, including failed/no-mark rows and relay team
@@ -34,7 +35,7 @@ event/state/year, distributed-lease, or model-service tables.
 
 | Table | Identity and retained facts |
 |---|---|
-| `schools` | Stable source school key; name/state/city/address/ZIP/website/public school email, source URL and last checked time |
+| `schools` | Unique persistent UUID and stable source school key; name/state/city/address/ZIP/website/public school email, source URL, field provenance and last checked time |
 | `athletes` | Local identity; name, published graduation year, school, category, review flag |
 | `athlete_sources` | Unique `(source, source athlete ID)` → local athlete ID and profile URL |
 | `results` | Stable source result key; athlete when known, event/sport/meet/date, raw mark, exact normalized integer/unit, timing/wind/specification/status, represented school, source URL, last seen and small raw JSON |
@@ -58,6 +59,22 @@ Ambiguous cross-site identities stay separate and appear in Issues.
 facts. Database writes enforce nonempty stable keys, valid references, and valid
 state/status domains. Unknown result identities/relay teams use a nullable athlete
 reference plus reported members/raw source values, not a canonical placeholder.
+
+The school-address import accepts published NCES CSV artifacts from
+`lprior-repo/rust-athletic-school-addresses`. It verifies the supplied SHA-256,
+validates source IDs and rejects duplicate IDs before applying one transaction.
+NCES IDs remain strings so leading zeros survive. Public-school datasets include
+multiple grade levels; importing them does not classify every row as a high
+school, establish athletics participation, or supply missing private-school data.
+Coordinates and reported validation values remain source claims in provenance.
+An unspecified address kind is never relabeled as verified physical or mailing.
+
+Imported NCES schools have their own source identities. Existing athletics-site
+schools are enriched only with unambiguous name/state/city candidates corroborated
+by an existing matching address or a website unique to both directories. Conflicts
+remain unchanged. UUID assignment preserves existing numeric foreign keys and
+does not merge source rows. Replaying an import cannot regenerate a UUID.
+
 
 ## Page transitions and failures
 

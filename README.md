@@ -39,6 +39,91 @@ handling. Export reads database records without scraping, writes new XLSX files,
 and does not overwrite an existing output. The Issues worksheet identifies
 unresolved or incomplete data. See [the scraper contract](docs/contract.md) for
 identity, comparison, and checkpoint requirements.
+Large worksheets continue as `Athletes_2`, `Issues_2`, or
+`Athlete_<id>_2` before exceeding Excel row or hyperlink limits. Source URLs
+remain clickable; every continuation sheet is reopened and checked before
+publication. The configured athlete-row file splitting still applies.
+
+
+Import the published CSV from
+[`rust-athletic-school-addresses`](https://github.com/lprior-repo/rust-athletic-school-addresses)
+using a SHA-256 obtained independently for the exact file:
+
+```sh
+cargo run -- scrape --school-addresses /path/to/high_school_addresses.csv \
+  --school-addresses-sha256 EXPECTED_SHA256
+cargo run -- scrape --download-school-addresses /path/to/new-addresses.csv \
+  --school-addresses-sha256 EXPECTED_SHA256
+```
+
+The first form is offline; the second explicitly downloads the repository's
+`output/all_us_high_schools.csv` over HTTPS and refuses to overwrite the
+destination. Both verify the supplied digest before database changes. The
+downloader is pinned to repository commit
+`b7058732f05ab59105aa042e66d8a8cad467bf3c`; its CSV SHA-256 is
+`e141d147329289f957dbc160ce6b765a844754ba32ecf970697398043fa2c0ee`.
+A digest provided by the caller is not an independent signature. The importer accepts
+the published `high_school_addresses.csv` and `all_us_high_schools.csv`
+schemas, requires unique twelve-digit NCES IDs and `NCES_CSV` rows, and adds
+schools under the NCES source without merging them with athletic-provider
+identities. It preserves the exact NCES ID, supplied artifact path and hash,
+source, coordinates and reported validation/geocode fields as provenance.
+Downloaded records retain the pinned GitHub URL as `source_url`; local imports
+use the supplied filesystem path there, and both record the local artifact path.
+Address type is unspecified by the CSV, not assumed physical or mailing.
+Despite the file names the dataset contains schools of multiple grade levels.
+Existing NCES rows are not overwritten on reimport. Existing athletic-provider
+schools can only be enriched using the conservative corroborated match described
+below; no athlete or school identity is joined by name. Import and enrichment
+commit together in one transaction. No Python runtime is required.
+
+The retained NCES PSS 2023–24 public-use CSV can also be imported offline:
+
+```sh
+cargo run -- scrape --private-school-addresses /path/to/pss2324_pu.csv \
+  --school-addresses-sha256 EXPECTED_SHA256
+```
+
+PSS identities use `pss:<uppercase PPIN>`, preserving eight-character IDs and
+leading zeros without colliding with public-school IDs. The published
+`PADDRS`/`PCITY`/`PSTABB`/`PZIP`/`PZIP4` tuple is explicitly **mailing** data.
+Physical-location columns never fill missing mailing components. Raw phone,
+grade range, enrollment, coordinates, source hash and school year remain in
+provenance. Existing rows and UUIDs remain unchanged on replay. All grade levels
+are retained; school-directory membership alone does not establish an athlete's
+school affiliation.
+
+Every existing and new school receives a unique, persistent PostgreSQL UUID.
+Existing numeric foreign keys stay intact. The spreadsheet includes canonical
+school UUIDs; an imported NCES row and an unlinked athletics-site row retain
+separate UUIDs until reliable identity evidence establishes that they are the
+same school. PostgreSQL 13 or newer is required for `gen_random_uuid()`.
+
+To enrich already-observed schools without contacting providers, supply both a
+local reference directory CSV and its manifest:
+
+```sh
+cargo run -- scrape --school-directory /path/to/school_directory.csv \
+  --school-directory-manifest /path/to/manifest.json
+```
+
+This mode does not start a crawl or require a scraper configuration. It checks
+the CSV's SHA-256 and byte length against the supplied manifest before opening
+the database. The manifest is not an independently authenticated signature;
+choose trusted inputs. It matches only unique normalized name, state and city
+tuples on both sides, corroborated by an exact existing street address or a
+matching website unique across both datasets. Missing, ambiguous or
+uncorroborated identities are not linked. Conflicting existing addresses or
+postal codes are preserved and counted in the command output. Nonempty facts
+are never overwritten. The update runs in one transaction, and provenance for
+each filled field records the directory row key, row sources, artifact and
+manifest hashes, generation and manifest input lane hashes in `schools`.
+The flattened directory does not identify whether an address is physical or
+mailing, so the stored provenance explicitly records its type as unspecified;
+it must not be interpreted as a verified physical address. A later source
+observation replacing an imported field removes that field's provenance.
+The input artifact may itself combine physical and mailing addresses; no
+components are borrowed from another directory row.
 
 Browser mode uses a fresh tab per target and reuses the browser profile for
 session cookies. When a target supplies a browser origin, it opens that page
@@ -74,6 +159,22 @@ sections are not interpreted as individual results.
 Published manual and spreadsheet-style result tables are retained as unassigned
 results when no source athlete identifier is available. When the published
 canonical file matches the selected result, its rows are not queued twice.
+AthleticRUNMEET tables retain individual and relay rows, including DNS/DQ and
+duplicate published rows, without inventing athlete IDs. Roster and profile
+work receives three scheduling reservations per bulk reservation, so athlete
+discovery no longer waits behind the entire national directory queue.
+
+MileSplit's public structured performance response supplies athlete identities
+only when the athlete ID agrees with a published HTTPS profile URL and the row
+belongs to the requested meet and a published result file. Rejected ownership
+and relay rows remain unassigned. The captured response has no verified published
+total; a successful acquisition does not establish complete meet coverage.
+Replay a captured structured response with `--kind results`, `--subject-id` for
+the meet, `--sport`, and one `--result-set-id` per published public result file.
+MileSplit's explicit unknown graduation markers, including `0`, remain unknown.
+Unsupported structured graduation claims remain unset and flag the athlete for
+review; the claim and original source JSON remain available. A separately
+published failure status does not replace the original mark and cannot win a PR.
 
 ## Checks
 

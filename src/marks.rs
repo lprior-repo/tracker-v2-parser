@@ -33,10 +33,24 @@ pub fn normalized_mark(label: &str, raw: &str) -> Option<(i64, Measure, Option<S
 
 #[must_use]
 pub fn normalized_performance(performance: &Performance) -> Option<(i64, Measure, Option<String>)> {
-    if performance.is_relay {
+    if performance.is_relay
+        || performance
+            .reported_status
+            .as_deref()
+            .and_then(failure_status)
+            .is_some()
+    {
         return None;
     }
     normalized_mark(&performance.event, &performance.mark)
+}
+
+pub(crate) fn failure_status(value: &str) -> Option<&'static str> {
+    [
+        "DQ", "DNF", "DNS", "NH", "NM", "NT", "SCR", "FS", "FOUL", "DNQ", "WD", "RET",
+    ]
+    .into_iter()
+    .find(|status| value.trim().eq_ignore_ascii_case(status))
 }
 
 #[must_use]
@@ -46,7 +60,14 @@ pub fn comparable_performance(
     performance: &Performance,
 ) -> Option<ComparableMark> {
     let event = event::resolve(&performance.event)?;
-    if performance.is_relay || event.relay {
+    if performance.is_relay
+        || event.relay
+        || performance
+            .reported_status
+            .as_deref()
+            .and_then(failure_status)
+            .is_some()
+    {
         return None;
     }
     if !event::has_comparable_specification(&performance.event, &event.label) {

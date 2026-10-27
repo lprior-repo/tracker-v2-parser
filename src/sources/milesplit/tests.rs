@@ -172,6 +172,89 @@ fn given_native_roster_when_parsed_then_athletes_and_public_school_details_survi
 }
 
 #[test]
+fn given_location_only_when_school_is_parsed_then_no_street_is_invented() -> Result<()> {
+    let target = team_target("10002", Some("OH"), Sport::Outdoor, 2026)?;
+    let fixture = include_str!("../../../fixtures/milesplit/team-oh-10002-mason.html")
+        .replace("<span>6100 S Mason-Montgomerry Rd</span>", "")
+        .replace("Mason, OH USA", "Atlanta, GA USA");
+    let page = parse(&target, &fixture)?;
+    let school = page
+        .schools
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing school"))?;
+    assert_eq!(school.address, None);
+    assert_eq!(school.city.as_deref(), Some("Atlanta"));
+    assert_eq!(school.state.as_deref(), Some("GA"));
+    assert_eq!(school.postal_code, None);
+    Ok(())
+}
+
+#[test]
+fn given_street_and_location_with_zip_when_school_is_parsed_then_each_field_survives() -> Result<()>
+{
+    let target = team_target("10002", Some("OH"), Sport::Outdoor, 2026)?;
+    let fixture = include_str!("../../../fixtures/milesplit/team-oh-10002-mason.html")
+        .replace("Mason, OH USA", "Mason, OH 45040 USA");
+    let page = parse(&target, &fixture)?;
+    let school = page
+        .schools
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing school"))?;
+    assert_eq!(
+        school.address.as_deref(),
+        Some("6100 S Mason-Montgomerry Rd")
+    );
+    assert_eq!(school.city.as_deref(), Some("Mason"));
+    assert_eq!(school.state.as_deref(), Some("OH"));
+    assert_eq!(school.postal_code.as_deref(), Some("45040"));
+    Ok(())
+}
+
+#[test]
+fn given_post_office_box_when_school_is_parsed_then_published_address_survives() -> Result<()> {
+    let target = team_target("10002", Some("OH"), Sport::Outdoor, 2026)?;
+    for address in ["Po Box 130", "P.O. Box 130"] {
+        let fixture = include_str!("../../../fixtures/milesplit/team-oh-10002-mason.html")
+            .replace("6100 S Mason-Montgomerry Rd", address);
+        let page = parse(&target, &fixture)?;
+        let school = page
+            .schools
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing school"))?;
+        assert_eq!(school.address.as_deref(), Some(address));
+        assert_eq!(school.city.as_deref(), Some("Mason"));
+    }
+    let fixture = include_str!("../../../fixtures/milesplit/team-oh-10002-mason.html")
+        .replace("6100 S Mason-Montgomerry Rd", "PO Box");
+    let page = parse(&target, &fixture)?;
+    let school = page
+        .schools
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing school"))?;
+    assert_eq!(school.address, None);
+    Ok(())
+}
+
+#[test]
+fn given_multiple_locations_when_school_is_parsed_then_neither_becomes_a_street() -> Result<()> {
+    let target = team_target("10002", None, Sport::Outdoor, 2026)?;
+    let fixture = include_str!("../../../fixtures/milesplit/team-oh-10002-mason.html").replace(
+        "<span>6100 S Mason-Montgomerry Rd</span>",
+        "<span>Atlanta, GA USA</span>",
+    );
+    let page = parse(&target, &fixture)?;
+    let school = page
+        .schools
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing school"))?;
+    assert_eq!(school.address, None);
+    assert_eq!(school.city, None);
+    assert_eq!(school.state, None);
+    assert_eq!(school.postal_code, None);
+    Ok(())
+}
+
+#[test]
 fn given_native_school_profile_when_parsed_then_its_actual_roster_link_is_followed() -> Result<()> {
     let target = team_target("10002", Some("OH"), Sport::Outdoor, 2026)?;
     let page = parse(
@@ -275,7 +358,8 @@ fn given_native_meet_index_when_parsed_then_pagination_and_actual_meets_are_queu
 }
 
 #[test]
-fn given_native_meet_inventory_when_parsed_then_only_public_raw_file_is_queued() -> Result<()> {
+fn given_native_meet_inventory_when_parsed_then_public_raw_and_bound_api_are_queued() -> Result<()>
+{
     let mut target = meet_target("770621", Sport::CrossCountry)?;
     target.url =
         "https://oh.milesplit.com/meets/770621-beaver-eastern-invite-2026/results".to_owned();
@@ -283,12 +367,15 @@ fn given_native_meet_inventory_when_parsed_then_only_public_raw_file_is_queued()
         &target,
         include_str!("../../../fixtures/milesplit/meet-oh-770621-results.html"),
     )?;
-    assert_eq!(page.next.len(), 1);
-    assert_eq!(
-        page.next.first().map(|target| target.url.as_str()),
-        Some("https://oh.milesplit.com/meets/770621/results/1321880/raw")
-    );
-    assert!(page.next.iter().all(|target| !target.url.contains("/api/")));
+    assert!(page.next.iter().any(|target| target.url == "https://oh.milesplit.com/meets/770621/results/1321880/raw"));
+    assert!(page.next.iter().any(|target| {
+        target.url.contains("/api/v1/meets/770621/performances")
+            && target
+                .context
+                .result_set_ids
+                .iter()
+                .any(|id| id == "1321880")
+    }));
     Ok(())
 }
 
@@ -326,11 +413,15 @@ fn given_published_hytek_meet_when_parsed_then_rows_and_result_inventory_survive
         .ok_or_else(|| anyhow::anyhow!("missing last result"))?;
     assert_eq!(last.raw["name"], "Tucker, Jenna");
     assert_eq!(last.mark, "39:29.84");
-    assert_eq!(page.next.len(), 1);
-    assert_eq!(
-        page.next[0].url,
-        "https://al.milesplit.com/meets/754110/results/1330427/raw"
-    );
+    assert!(page.next.iter().any(|target| target.url == "https://al.milesplit.com/meets/754110/results/1330427/raw"));
+    assert!(page.next.iter().any(|target| {
+        target.url.contains("/api/v1/meets/754110/performances")
+            && target
+                .context
+                .result_set_ids
+                .iter()
+                .any(|id| id == "1330427")
+    }));
     Ok(())
 }
 
@@ -348,15 +439,20 @@ fn given_inline_result_with_unconfirmed_canonical_when_parsed_then_inventory_is_
     );
     let page = parse(&target, &body)?;
     assert_eq!(page.unassigned_results.len(), 102);
-    assert_eq!(page.next.len(), 2);
-    assert_eq!(
-        page.next[0].url,
-        "https://al.milesplit.com/meets/754110/results/1330423/raw"
-    );
-    assert_eq!(
-        page.next[1].url,
-        "https://al.milesplit.com/meets/754110/results/1330427/raw"
-    );
+    assert!(page.next.iter().any(|target| target.url == "https://al.milesplit.com/meets/754110/results/1330423/raw"));
+    assert!(page.next.iter().any(|target| target.url == "https://al.milesplit.com/meets/754110/results/1330427/raw"));
+    assert!(page.next.iter().any(|target| {
+        target
+            .context
+            .result_set_ids
+            .iter()
+            .any(|id| id == "1330423")
+            && target
+                .context
+                .result_set_ids
+                .iter()
+                .any(|id| id == "1330427")
+    }));
     Ok(())
 }
 
@@ -414,7 +510,11 @@ fn given_spreadsheet_results_when_parsed_then_rows_and_inventory_are_preserved()
     assert_eq!(page.unassigned_results[5].mark, "21:29:53");
     assert_eq!(page.unassigned_results[18].mark, "25:55:17");
     assert_eq!(page.unassigned_results[36].raw["name"], "James, Carter");
-    assert_eq!(page.next.len(), 3);
+    assert!(
+        page.next
+            .iter()
+            .any(|next| next.url.contains("/api/v1/meets/776188/performances"))
+    );
     assert!(page.next.iter().all(|next| !next.url.contains("1325876")));
     assert!(page.next.iter().any(|next| next.url.contains("1325874")));
     assert!(page.next.iter().any(|next| next.url.contains("1325875")));
@@ -596,14 +696,27 @@ fn given_legacy_result_options_when_parsed_then_published_ids_drive_raw_links() 
     let target = meet_target("770621", Sport::CrossCountry)?;
     let body = r#"<select id="ddResultsPage"><option value="https://oh.milesplit.com/meets/770621-beaver-2026/results/1321880">Boys</option><option value="https://oh.milesplit.com/meets/770621-beaver-2026/results/1321881?x=1">Girls</option></select>"#;
     let page = parse(&target, body)?;
-    assert_eq!(page.next.len(), 2);
-    assert_eq!(
-        page.next.first().map(|target| target.url.as_str()),
-        Some("https://oh.milesplit.com/meets/770621/results/1321880/raw")
+    assert!(page.next.iter().any(|target| target.url == "https://oh.milesplit.com/meets/770621/results/1321880/raw"));
+    assert!(page.next.iter().any(|target| target.url == "https://oh.milesplit.com/meets/770621/results/1321881/raw"));
+    let owned = page
+        .next
+        .iter()
+        .filter(|target| target.url.contains("/api/v1/meets/770621/performances"))
+        .collect::<Vec<_>>();
+    assert_eq!(owned.len(), 1);
+    assert!(
+        owned[0]
+            .context
+            .result_set_ids
+            .iter()
+            .any(|id| id == "1321880")
     );
-    assert_eq!(
-        page.next.get(1).map(|target| target.url.as_str()),
-        Some("https://oh.milesplit.com/meets/770621/results/1321881/raw")
+    assert!(
+        owned[0]
+            .context
+            .result_set_ids
+            .iter()
+            .any(|id| id == "1321881")
     );
     Ok(())
 }
