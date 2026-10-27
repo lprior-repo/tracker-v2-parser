@@ -3,6 +3,30 @@
   "source_revision": "main280492f",
   "captures": [
     {
+      "fixture": "meet-al-776188-results.html",
+      "url": "https://al.milesplit.com/meets/776188-center-point-high-school-invite-2026/results",
+      "recorded_at": "2026-10-27T04:03:25Z",
+      "capture_source": "direct HTTPS GET, HTTP 200; timestamp from local capture file modification time",
+      "sha256": "5332cf43ccbbe79a0b39faf5e797f0d0e806ed87b444ab4676792ef426f7313a",
+      "projection": false
+    },
+    {
+      "fixture": "meet-al-771781-results.html",
+      "url": "https://al.milesplit.com/meets/771781-mayhaw-music-festival-5k-2026/results",
+      "recorded_at": "2026-10-27T03:58:12Z",
+      "capture_source": "direct HTTPS GET, HTTP 200; timestamp from response Date header",
+      "sha256": "89c588ddaccca503a3c1e5e2b91db565ae977a36b6a7b9364cb678a884f9fec1",
+      "projection": false
+    },
+    {
+      "fixture": "meet-al-754110-results.html",
+      "url": "https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results",
+      "recorded_at": "2026-10-27T03:55:51Z",
+      "capture_source": "direct HTTPS GET, HTTP 200; timestamp from response Date header",
+      "sha256": "58555bb65e2a18c40b36affae26e2b59e63c7b1b01a2b62e4278b9661c6ba92e",
+      "projection": false
+    },
+    {
       "fixture": "teams-co.html",
       "url": "https://co.milesplit.com/teams",
       "recorded_at": "2026-10-27T03:36:17Z",

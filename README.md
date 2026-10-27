@@ -51,6 +51,9 @@ stop acquisition for human handling rather than being bypassed.
 The crawl reports an error if `limits.max_pages` is exhausted while checkpoints
 remain pending. Increase the limit if needed and run the scrape again to resume
 from its persisted checkpoints.
+Nonblocked page failures remain recorded while untouched pages continue. The
+scrape reports exhausted failures when runnable work is drained; `--refresh`
+does not reset failed or interrupted attempt counts.
 
 Athletic.net results without a published result ID use its row code where
 available (including the meet API's `ShortCode`). Without a code, the key
@@ -65,6 +68,12 @@ parsed result content, with the same duplication risk after changes or reorder.
 MileSplit raw-result identifiers likewise include the full published line as
 well as its coordinates; correcting or moving a line can therefore create a
 duplicate rather than overwrite an unrelated result.
+MileSplit HY-TEK results with `Year` and `Finals` columns are retained, including
+the reported school text when no school identifier is published. Team-score
+sections are not interpreted as individual results.
+Published manual and spreadsheet-style result tables are retained as unassigned
+results when no source athlete identifier is available. When the published
+canonical file matches the selected result, its rows are not queued twice.
 
 ## Checks
 

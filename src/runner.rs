@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use tokio::io::AsyncReadExt;
 use tracing::info;
 
@@ -111,7 +111,7 @@ impl Runner {
             next_enabled_job(database, config).await?.is_none(),
             "page budget exhausted; unfinished checkpoints remain"
         );
-        Ok(())
+        check_exhausted(database, config).await
     }
 
     pub async fn replay(
@@ -185,35 +185,39 @@ async fn acquire_job(
     job: &Job,
     transport: &mut Transport,
 ) -> Result<()> {
-    for _ in 0..config.limits.max_attempts {
-        ensure!(
-            database
-                .start_attempt(job.id, config.limits.max_attempts)
-                .await?,
-            "checkpoint {} has exhausted its attempts",
-            job.id
-        );
-        info!("acquiring {}", job.target.url);
-        match transport.fetch(&job.target).await {
-            Ok(capture) => return persist_capture(database, job, &capture).await,
-            Err(failure) => {
-                let error = anyhow!(
-                    "acquisition failed for {}: {}",
-                    job.target.url,
-                    failure.detail
-                );
-                let detail = format!("{error:#}");
-                database
-                    .fail_job(job, failure.capture.as_ref(), &detail, failure.blocked)
-                    .await
-                    .with_context(|| format!("recording page failure after: {detail}"))?;
-                if failure.blocked {
-                    return Err(error);
-                }
+    ensure!(
+        database
+            .start_attempt(job.id, config.limits.max_attempts)
+            .await?,
+        "checkpoint {} has exhausted its attempts",
+        job.id
+    );
+    info!("acquiring {}", job.target.url);
+    match transport.fetch(&job.target).await {
+        Ok(capture) => {
+            if let Some(error) = persist_capture(database, job, &capture).await? {
+                tracing::warn!("page {} failed: {error:#}", job.target.url);
             }
+            Ok(())
+        }
+        Err(failure) => {
+            let error = anyhow!(
+                "acquisition failed for {}: {}",
+                job.target.url,
+                failure.detail
+            );
+            let detail = format!("{error:#}");
+            database
+                .fail_job(job, failure.capture.as_ref(), &detail, failure.blocked)
+                .await
+                .with_context(|| format!("recording page failure after: {detail}"))?;
+            if failure.blocked {
+                return Err(error);
+            }
+            tracing::warn!("{detail}");
+            Ok(())
         }
     }
-    bail!("checkpoint {} has exhausted its attempts", job.id)
 }
 
 fn make_transport(config: &Config, source: Source) -> Result<Transport> {
@@ -258,6 +262,12 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
             "{} has a blocked page requiring human review",
             source.as_str()
         );
+    }
+    Ok(())
+}
+
+async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
+    for source in config.enabled_sources() {
         let exhausted: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2)",
         )
@@ -275,7 +285,11 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
     Ok(())
 }
 
-async fn persist_capture(database: &Database, job: &Job, capture: &Capture) -> Result<()> {
+async fn persist_capture(
+    database: &Database,
+    job: &Job,
+    capture: &Capture,
+) -> Result<Option<anyhow::Error>> {
     let parsed = match std::str::from_utf8(&capture.body)
         .context("source response is not UTF-8")
         .and_then(|body| sources::parse(&job.target, body))
@@ -283,31 +297,32 @@ async fn persist_capture(database: &Database, job: &Job, capture: &Capture) -> R
         Ok(parsed) => parsed,
         Err(error) => {
             let blocked = error.is::<sources::AccessDenied>();
-            return record_failure(
-                database,
-                job,
-                Some(capture),
-                blocked,
-                error.context("parsing source page"),
-            )
-            .await;
+            let error = error.context("parsing source page");
+            let detail = format!("{error:#}");
+            database
+                .fail_job(job, Some(capture), &detail, blocked)
+                .await
+                .with_context(|| format!("recording page failure after: {detail}"))?;
+            if blocked {
+                return Err(error);
+            }
+            return Ok(Some(error));
         }
     };
     match database
         .persist(Some(job.id), &job.target, capture, &parsed)
         .await
     {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            record_failure(
-                database,
-                job,
-                Some(capture),
-                false,
-                error.context("persisting source page"),
-            )
-            .await
-        }
+        Ok(_) => Ok(None),
+        Err(error) => record_failure(
+            database,
+            job,
+            Some(capture),
+            false,
+            error.context("persisting source page"),
+        )
+        .await
+        .map(|()| None),
     }
 }
 
@@ -344,12 +359,20 @@ async fn replay_page(
         .await
         .context("finding replay checkpoint")?;
     let job = Job { id, target };
-    ensure!(
-        database
-            .start_attempt(id, config.limits.max_attempts)
-            .await?,
-        "replay checkpoint could not start an attempt"
-    );
+    if !database
+        .start_attempt(id, config.limits.max_attempts)
+        .await?
+    {
+        let exhausted: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE id=$1 AND status IN ('pending','failed') AND attempts >= $2)",
+        )
+        .bind(id)
+        .bind(i32::try_from(config.limits.max_attempts).context("converting maximum attempts")?)
+        .fetch_one(database.pool())
+        .await
+        .context("checking replay checkpoint")?;
+        ensure!(exhausted, "replay checkpoint could not start an attempt");
+    }
     let body = match read_replay(input).await {
         Ok(body) => body,
         Err(error) => return record_failure(database, &job, None, false, error).await,
@@ -363,7 +386,9 @@ async fn replay_page(
         Ok(capture) => capture,
         Err(error) => return record_failure(database, &job, None, false, error).await,
     };
-    persist_capture(database, &job, &capture).await
+    persist_capture(database, &job, &capture)
+        .await?
+        .map_or_else(|| Ok(()), Err)
 }
 
 async fn read_replay(input: &Path) -> Result<Vec<u8>> {

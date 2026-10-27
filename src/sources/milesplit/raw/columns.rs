@@ -11,6 +11,7 @@ pub(super) struct Columns {
 pub(super) struct Row<'a> {
     pub name: &'a str,
     pub grade: Option<&'a str>,
+    pub team: &'a str,
     pub mark: &'a str,
     pub wind: Option<f64>,
 }
@@ -25,14 +26,14 @@ pub(super) fn header(line: &str) -> Option<Columns> {
     }
     let name = label(line, &["Name", "Athlete"])?;
     let team = label(line, &["Team", "School"])?;
-    let mark = label(line, &["Time", "Mark"])?;
+    let mark = label(line, &["Time", "Mark", "Finals"])?;
     let mark_width = line
         .chars()
         .skip(mark)
         .take_while(|ch| !ch.is_whitespace())
         .count();
     let mark_end = mark.checked_add(mark_width)?;
-    let grade = label(line, &["Yr", "Grade"]);
+    let grade = label(line, &["Yr", "Year", "Grade"]);
     let mark_start = mark.saturating_sub(mark_width.saturating_add(1));
     (name < team && team < mark_start && grade.is_none_or(|grade| name < grade && grade < team))
         .then_some(Columns {
@@ -124,6 +125,7 @@ pub(super) fn row(line: &str, columns: Columns) -> Option<Row<'_>> {
         .grade
         .and_then(|start| cell(line, start, columns.team))
         .filter(|grade| !grade.is_empty() && *grade != "-");
+    let team = cell(line, columns.team, token_start).map_or("", str::trim);
     let wind = columns
         .wind
         .and_then(|start| line.get(byte(line, start.saturating_sub(2))..))
@@ -133,6 +135,7 @@ pub(super) fn row(line: &str, columns: Columns) -> Option<Row<'_>> {
     Some(Row {
         name,
         grade,
+        team,
         mark,
         wind,
     })

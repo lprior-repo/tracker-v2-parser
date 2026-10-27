@@ -45,6 +45,7 @@ pub(super) fn unassigned(
         "published_html": scope.raw,
         "published_text": scope.line,
         "name": row.map(|row| row.name),
+        "team": row.map(|row| row.team),
         "grade": row.and_then(|row| row.grade),
         "wind": row.and_then(|row| row.wind),
         "event": scope.event,

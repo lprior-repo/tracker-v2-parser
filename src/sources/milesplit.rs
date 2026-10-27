@@ -1,5 +1,6 @@
 mod directory;
 mod html;
+mod manual;
 mod meets;
 mod profile;
 mod raw;
@@ -32,7 +33,7 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         PageKind::Team | PageKind::Roster => team::parse(target, &document),
         PageKind::Athlete => profile::parse(target, &document),
         PageKind::Meet => meets::parse(target, body, &document),
-        PageKind::Results => raw::parse(target, &document),
+        PageKind::Results => meets::parse_result(target, &document),
         PageKind::Contacts => bail!("MileSplit contacts page is not a supported result surface"),
     }
 }

@@ -32,6 +32,18 @@ fn cell<'a>(rows: &'a [Vec<String>], header: &str) -> Result<&'a str> {
         .context("missing workbook data cell")
 }
 
+async fn complete_seed_pages(database: &Database) -> Result<()> {
+    let states = ["CA", "OH", "WI"].map(str::to_owned);
+    for source in [Source::AthleticNet, Source::MileSplit] {
+        let seeds = track_scrapper_v2::sources::seeds(source, &states, 2026)?;
+        database.enqueue(&seeds, false).await?;
+    }
+    sqlx::query("UPDATE scrape_pages SET status='succeeded'")
+        .execute(database.pool())
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn given_real_career_when_replayed_twice_then_identity_marks_and_checkpoint_are_unique()
 -> Result<()> {
@@ -75,6 +87,62 @@ async fn given_saved_marks_when_invalid_replay_fails_then_checkpoint_is_not_comp
         assert_eq!(after,before);
         let page: (String,Option<String>) = sqlx::query_as("SELECT status,last_success::text FROM scrape_pages WHERE url=$1").bind(url).fetch_one(&test.pool).await?;
         assert_eq!(page,("failed".to_owned(),None));
+        Ok(())
+    })).await
+}
+
+async fn exhaust_failed_bio_replay(test: &support::Scenario) -> Result<()> {
+    let invalid = test.directory().join("invalid-bio.json");
+    std::fs::write(&invalid, b"not source JSON")?;
+    let output = test.cli(&[
+        "scrape", "--source", "athleticnet", "--kind", "athlete", "--url",
+        "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
+        "--input", invalid.to_str().context("UTF-8 path")?, "--athlete-id", "28872883",
+        "--state", "WI", "--sport", "outdoor", "--season", "2026",
+    ]).await?;
+    assert!(!output.status.success());
+    sqlx::query("UPDATE scrape_pages SET attempts=3 WHERE status='failed'")
+        .execute(&test.pool)
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_exhausted_failure_when_valid_capture_is_replayed_then_data_is_saved_without_another_attempt()
+-> Result<()> {
+    with_schema(|test| Box::pin(async move {
+        exhaust_failed_bio_replay(test).await?;
+        assert_success(&import_bio(test).await?);
+        let state: (String, i32, bool, Option<String>) = sqlx::query_as(
+            "SELECT status,attempts,last_success IS NOT NULL,last_error FROM scrape_pages WHERE url LIKE '%athleteId=28872883%'",
+        ).fetch_one(&test.pool).await?;
+        assert_eq!(state, ("succeeded".into(), 3, true, None));
+        let mark: String = sqlx::query_scalar("SELECT raw_mark FROM results WHERE source_result_id='258445410'")
+            .fetch_one(&test.pool).await?;
+        assert_eq!(mark, "23.33a");
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_exhausted_failure_when_invalid_capture_is_replayed_then_failure_and_attempt_count_remain()
+-> Result<()> {
+    with_schema(|test| Box::pin(async move {
+        exhaust_failed_bio_replay(test).await?;
+        let invalid = test.directory().join("invalid-bio.json");
+        let output = test.cli(&[
+            "scrape", "--source", "athleticnet", "--kind", "athlete", "--url",
+            "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
+            "--input", invalid.to_str().context("UTF-8 path")?, "--athlete-id", "28872883",
+            "--state", "WI", "--sport", "outdoor", "--season", "2026",
+        ]).await?;
+        assert!(!output.status.success());
+        let state: (String, i32, bool, bool) = sqlx::query_as(
+            "SELECT status,attempts,last_success IS NOT NULL,last_error IS NOT NULL FROM scrape_pages WHERE url LIKE '%athleteId=28872883%'",
+        ).fetch_one(&test.pool).await?;
+        assert_eq!(state, ("failed".into(), 3, false, true));
+        let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results").fetch_one(&test.pool).await?;
+        assert_eq!(results, 0);
         Ok(())
     })).await
 }
@@ -158,7 +226,10 @@ async fn given_parser_challenge_when_replayed_and_refreshed_then_block_is_preser
                     .as_deref()
                     .is_some_and(|error| error.contains("access denied"))
             );
-            assert!(!test.cli(&args).await?.status.success());
+            let valid = fixture("milesplit/athlete-oh-15005189.html");
+            let mut replay = args;
+            replay[8] = valid.to_str().context("UTF-8 fixture path")?;
+            assert!(!test.cli(&replay).await?.status.success());
             let after: (String, i32, Option<String>) =
                 sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE url=$1")
                     .bind(url)
@@ -177,11 +248,12 @@ async fn given_exhausted_checkpoint_when_scraping_then_invocation_fails_without_
     with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
+            complete_seed_pages(&database).await?;
             database
                 .enqueue(&[target(Source::AthleticNet, "11")], false)
                 .await?;
             sqlx::query(
-                "UPDATE scrape_pages SET status='failed', attempts=3, last_error='network failure'",
+                "UPDATE scrape_pages SET status='failed', attempts=3, last_error='network failure' WHERE url LIKE '%/athlete/11'",
             )
             .execute(&test.pool)
             .await?;
@@ -210,6 +282,7 @@ async fn given_nonblocked_acquisition_failure_when_scraping_then_three_attempts_
     with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
+            complete_seed_pages(&database).await?;
             let mut page = target(Source::AthleticNet, "11");
             page.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
             database.enqueue(std::slice::from_ref(&page), false).await?;
@@ -228,6 +301,126 @@ async fn given_nonblocked_acquisition_failure_when_scraping_then_three_attempts_
                     .as_deref()
                     .is_some_and(|error| error.contains("unsupported port"))
             );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_failed_page_when_other_page_is_pending_then_it_is_attempted_before_retry()
+-> Result<()> {
+    with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            complete_seed_pages(&database).await?;
+            let mut first = target(Source::AthleticNet, "11");
+            let mut second = target(Source::AthleticNet, "12");
+            first.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
+            second.token_url = first.token_url.clone();
+            database.enqueue(&[first.clone(), second.clone()], false).await?;
+            let config = test.directory().join("two-pages.toml");
+            support::write_config(&config)?;
+            let content = std::fs::read_to_string(&config)?.replace("max_pages = 10", "max_pages = 2");
+            std::fs::write(&config, content)?;
+            let output = test.cli(&["scrape", "--config", config.to_str().context("UTF-8 config")?]).await?;
+            assert!(!output.status.success());
+            let states: Vec<(String, i32, Option<String>)> = sqlx::query_as(
+                "SELECT status,attempts,last_success::text FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
+            ).bind(&first.url).bind(&second.url).fetch_all(&test.pool).await?;
+            assert_eq!(states, vec![("failed".into(), 1, None), ("failed".into(), 1, None)]);
+            database.close().await;
+            Ok(())
+        })
+    }).await
+}
+
+#[tokio::test]
+async fn given_exhausted_page_when_other_page_is_pending_then_other_page_is_drained() -> Result<()>
+{
+    with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            complete_seed_pages(&database).await?;
+            let first = target(Source::AthleticNet, "11");
+            let mut second = target(Source::AthleticNet, "12");
+            second.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
+            database.enqueue(&[first.clone(), second.clone()], false).await?;
+            sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error='previous failure' WHERE url=$1")
+                .bind(&first.url).execute(&test.pool).await?;
+            let output = test.cli(&["scrape"]).await?;
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("exhausted unfinished checkpoints"));
+            let states: Vec<(String, i32, Option<String>)> = sqlx::query_as(
+                "SELECT status,attempts,last_success::text FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
+            ).bind(&first.url).bind(&second.url).fetch_all(&test.pool).await?;
+            assert_eq!(states, vec![("failed".into(), 3, None), ("failed".into(), 3, None)]);
+            database.close().await;
+            Ok(())
+        })
+    }).await
+}
+
+#[tokio::test]
+async fn given_interrupted_attempt_when_resumed_then_count_is_preserved_and_untouched_page_first()
+-> Result<()> {
+    with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let first = target(Source::AthleticNet, "11");
+            let second = target(Source::AthleticNet, "12");
+            database
+                .enqueue(&[first.clone(), second.clone()], false)
+                .await?;
+            let job = database.next_job(None, 3).await?.context("first page")?;
+            assert_eq!(job.target.url, first.url);
+            assert!(database.start_attempt(job.id, 3).await?);
+            database.enqueue(std::slice::from_ref(&first), true).await?;
+            let next = database
+                .next_job(None, 3)
+                .await?
+                .context("untouched page")?;
+            assert_eq!(next.target.url, second.url);
+            let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE id=$1")
+                .bind(job.id)
+                .fetch_one(&test.pool)
+                .await?;
+            assert_eq!(attempts, 1);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_blocked_page_when_scraping_then_pending_page_is_not_attempted() -> Result<()> {
+    with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            complete_seed_pages(&database).await?;
+            let first = target(Source::AthleticNet, "11");
+            let second = target(Source::AthleticNet, "12");
+            database
+                .enqueue(&[first.clone(), second.clone()], false)
+                .await?;
+            let job = database
+                .next_job(Some(Source::AthleticNet), 3)
+                .await?
+                .context("first page")?;
+            assert!(database.start_attempt(job.id, 3).await?);
+            database
+                .fail_job(&job, None, "access challenge", true)
+                .await?;
+            let output = test.cli(&["scrape"]).await?;
+            assert!(!output.status.success());
+            let state: (String, i32) =
+                sqlx::query_as("SELECT status,attempts FROM scrape_pages WHERE url=$1")
+                    .bind(&second.url)
+                    .fetch_one(&test.pool)
+                    .await?;
+            assert_eq!(state, ("pending".into(), 0));
             database.close().await;
             Ok(())
         })

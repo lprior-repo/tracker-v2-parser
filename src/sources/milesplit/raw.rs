@@ -78,6 +78,10 @@ fn read_line(
     {
         return Ok(reader);
     }
+    if line.trim().eq_ignore_ascii_case("Team Scores") {
+        reader.columns = None;
+        return Ok(reader);
+    }
     if let Some(columns) = columns::header(&line) {
         reader.columns = Some(columns);
         reader.qualified = true;

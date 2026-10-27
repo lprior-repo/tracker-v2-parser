@@ -36,7 +36,7 @@ async fn enqueue_one(connection: &mut PgConnection, target: &Target, refresh: bo
     Ok(sqlx::query(
         "INSERT INTO scrape_pages(page_key,source,url,cursor) VALUES($1,$2,$3,$4) \
          ON CONFLICT(source,page_key) DO UPDATE SET status='pending',attempts=0,last_error=NULL,cursor=EXCLUDED.cursor \
-         WHERE $5 AND scrape_pages.status <> 'blocked'",
+         WHERE $5 AND scrape_pages.status = 'succeeded'",
     ).bind(keys::target(target)?).bind(target.source.as_str()).bind(&target.url)
         .bind(serde_json::to_value(target)?).bind(refresh)
         .execute(connection).await?.rows_affected())
@@ -57,7 +57,7 @@ pub(super) async fn next(
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT id,cursor FROM scrape_pages WHERE status IN ('pending','failed') AND attempts < $2 \
-         AND ($1::text IS NULL OR source=$1) ORDER BY id LIMIT 1",
+         AND ($1::text IS NULL OR source=$1) ORDER BY (attempts = 0) DESC, id LIMIT 1",
     )
     .bind(source.map(Source::as_str))
     .bind(attempt_limit(max_attempts)?)

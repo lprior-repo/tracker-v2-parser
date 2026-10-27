@@ -2,12 +2,14 @@ use std::sync::LazyLock;
 
 use anyhow::{Result, ensure};
 use regex::Regex;
-use scraper::Html;
+use scraper::{ElementRef, Html};
 use serde::Deserialize;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
-use crate::model::{PageContext, PageKind, ParsedPage, Source, Target};
+use crate::model::{PageContext, PageKind, ParsedPage, Source, Target, UnassignedResult};
 
-use super::{html, raw, targets};
+use super::{html, manual, raw, targets};
 
 static RESULT_FILES: LazyLock<std::result::Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"(?s)meetResultFiles\s*=\s*(\[[^]]*\])"));
@@ -40,6 +42,11 @@ pub(super) fn parse(target: &Target, body: &str, document: &Html) -> Result<Pars
             },
             document,
         )?
+    } else if let Some(table) = document
+        .select(&html::selector("#meetResultsBody table")?)
+        .next()
+    {
+        parse_table(target, &context, document, table)?
     } else {
         ParsedPage::default()
     };
@@ -56,6 +63,7 @@ pub(super) fn parse(target: &Target, body: &str, document: &Html) -> Result<Pars
     let root = document.root_element();
     let select = root.select(&html::selector("#ddResultsPage")?).next();
     if let Some(select) = select {
+        let selected = selected_inline_result(target, document, &page)?;
         let page =
             select
                 .select(&html::selector("option[value]")?)
@@ -64,18 +72,260 @@ pub(super) fn parse(target: &Target, body: &str, document: &Html) -> Result<Pars
                         .value()
                         .attr("value")
                         .ok_or_else(|| anyhow::anyhow!("result option missing URL"))?;
+                    if option.value().attr("selected").is_some()
+                        && selected.as_deref() == Some(href)
+                    {
+                        return Ok(page);
+                    }
                     legacy_file(target, &context, href, page)
                 })?;
         ensure!(
-            !page.next.is_empty() || !page.notes.is_empty() || !page.performances.is_empty(),
+            !page.next.is_empty()
+                || !page.notes.is_empty()
+                || !page.performances.is_empty()
+                || !page.unassigned_results.is_empty(),
             "MileSplit legacy result inventory has no readable files"
         );
         return Ok(page);
     }
     ensure!(
-        !page.notes.is_empty() || !page.performances.is_empty(),
+        !page.notes.is_empty()
+            || !page.performances.is_empty()
+            || !page.unassigned_results.is_empty(),
         "MileSplit meet has no recognized public result inventory or raw block"
     );
+    Ok(page)
+}
+
+pub(super) fn parse_result(target: &Target, document: &Html) -> Result<ParsedPage> {
+    if document
+        .select(&html::selector("#meetResultsBody pre, pre")?)
+        .next()
+        .is_some()
+    {
+        return raw::parse(target, document);
+    }
+    let table = document
+        .select(&html::selector("#meetResultsBody table")?)
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("MileSplit result page missing public result block"))?;
+    let context = metadata(target, document)?;
+    parse_table(target, &context, document, table)
+}
+
+fn parse_table(
+    target: &Target,
+    context: &PageContext,
+    document: &Html,
+    table: ElementRef<'_>,
+) -> Result<ParsedPage> {
+    let identity = table_identity(target, document)?;
+    if manual::is_spreadsheet(table)? {
+        manual::parse(target, context, table, &identity)
+    } else {
+        table_results(target, context, table, &identity)
+    }
+}
+
+fn table_identity(target: &Target, document: &Html) -> Result<String> {
+    let Some(canonical) = html::attribute(document.root_element(), "link[rel=canonical]", "href")?
+    else {
+        return Ok(target.url.clone());
+    };
+    let canonical = targets::public_url(&targets::linked(&target.url, &canonical)?)?;
+    let meet = targets::path_id(&target.url, "meets")?;
+    let file = targets::path_id(canonical.as_str(), "results");
+    if !canonical.path().ends_with("/raw")
+        || targets::path_id(canonical.as_str(), "meets")
+            .ok()
+            .as_deref()
+            != Some(meet.as_str())
+        || file.is_err()
+    {
+        return Ok(target.url.clone());
+    }
+    let file = file?;
+    let requested = targets::path_id(&target.url, "results");
+    let matches_request = matches!(requested.as_deref(), Ok(value) if value == file);
+    let selected = html::attribute(
+        document.root_element(),
+        "#ddResultsPage option[selected][value]",
+        "value",
+    )?;
+    let matches_selected = if requested.is_err() {
+        if let Some(selected) = selected {
+            let selected = targets::public_url(&targets::linked(&target.url, &selected)?)?;
+            selected.host_str() == canonical.host_str()
+                && targets::path_id(selected.as_str(), "meets").ok().as_deref()
+                    == Some(meet.as_str())
+                && targets::path_id(selected.as_str(), "results")
+                    .ok()
+                    .as_deref()
+                    == Some(file.as_str())
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if matches_request || matches_selected {
+        Ok(format!("milesplit-file:{meet}:{file}"))
+    } else {
+        Ok(target.url.clone())
+    }
+}
+
+fn selected_inline_result(
+    target: &Target,
+    document: &Html,
+    page: &ParsedPage,
+) -> Result<Option<String>> {
+    if page.unassigned_results.is_empty() && page.performances.is_empty() {
+        return Ok(None);
+    }
+    let Some(canonical) = html::attribute(document.root_element(), "link[rel=canonical]", "href")?
+    else {
+        return Ok(None);
+    };
+    let Some(option) = document
+        .select(&html::selector("#ddResultsPage option[selected][value]")?)
+        .next()
+    else {
+        return Ok(None);
+    };
+    let Some(href) = option.value().attr("value") else {
+        return Ok(None);
+    };
+    let canonical = targets::public_url(&targets::linked(&target.url, &canonical)?)?;
+    let selected = targets::public_url(&targets::linked(&target.url, href)?)?;
+    let canonical_file = targets::path_id(canonical.as_str(), "results");
+    let selected_file = targets::path_id(selected.as_str(), "results");
+    let canonical_meet = targets::path_id(canonical.as_str(), "meets")?;
+    let target_meet = targets::path_id(&target.url, "meets")?;
+    let selected_meet = targets::path_id(selected.as_str(), "meets")?;
+    if !canonical.path().ends_with("/raw")
+        || canonical.host_str() != selected.host_str()
+        || canonical_meet != target_meet
+        || canonical_meet != selected_meet
+        || canonical_file.is_err()
+        || canonical_file.ok() != selected_file.ok()
+    {
+        return Ok(None);
+    }
+    Ok(Some(href.to_owned()))
+}
+
+const fn table_header(place: &str, grade: &str, team: &str, mark: &str) -> bool {
+    place.eq_ignore_ascii_case("place name")
+        && grade.eq_ignore_ascii_case("grade")
+        && team.eq_ignore_ascii_case("team")
+        && mark.eq_ignore_ascii_case("time")
+}
+
+fn table_results(
+    target: &Target,
+    context: &PageContext,
+    table: ElementRef<'_>,
+    identity: &str,
+) -> Result<ParsedPage> {
+    let sport = context
+        .sport
+        .ok_or_else(|| anyhow::anyhow!("table results have no sport"))?;
+    let rows = html::selector("tr")?;
+    let cells = html::selector("td, th")?;
+    let mut page = ParsedPage::default();
+    let mut event = None::<String>;
+    let mut header = false;
+    let mut scoring = false;
+    for (ordinal, row) in table.select(&rows).enumerate() {
+        let values: Vec<String> = row.select(&cells).map(html::text).collect();
+        if values.iter().all(|value| value.trim().is_empty()) {
+            continue;
+        }
+        if values.len() == 1 {
+            let value = values
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("missing table cell"))?
+                .trim();
+            if scoring {
+                continue;
+            }
+            ensure!(
+                event.is_none() || header,
+                "unrecognized result table section"
+            );
+            if value.eq_ignore_ascii_case("Team Scoring:") {
+                scoring = true;
+            } else {
+                event = Some(value.to_owned());
+                header = false;
+            }
+            continue;
+        }
+        ensure!(
+            !scoring && values.len() == 4,
+            "unrecognized result table row"
+        );
+        let [place_name, grade, team, mark] = values.as_slice() else {
+            anyhow::bail!("unrecognized result table columns");
+        };
+        if table_header(place_name, grade, team, mark) {
+            ensure!(
+                event.is_some() && !header,
+                "result table header without event"
+            );
+            header = true;
+            continue;
+        }
+        ensure!(header, "unrecognized result table header");
+        let event = event
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("result row missing event"))?;
+        let (place, name) = place_name
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| anyhow::anyhow!("result row missing place or name"))?;
+        ensure!(
+            !place.is_empty() && !name.trim().is_empty() && !mark.trim().is_empty(),
+            "incomplete result table row"
+        );
+        let published_html = row.html();
+        let digest = format!("{:x}", Sha256::digest(published_html.as_bytes()));
+        let id = serde_json::to_string(&(
+            context.subject_id.as_deref(),
+            identity,
+            event,
+            ordinal.saturating_add(1),
+            digest,
+        ))?;
+        page.unassigned_results.push(UnassignedResult {
+            result_id: Some(format!("table:{id}")),
+            source_row: None,
+            event: event.to_owned(),
+            mark: mark.trim().to_owned(),
+            sport,
+            school_id: None,
+            meet_id: context.subject_id.clone(),
+            date: context.meet_date.clone(),
+            is_relay: html::relay(event),
+            members: Vec::new(),
+            raw: json!({
+                "source_url": target.url,
+                "line_ordinal": ordinal.saturating_add(1),
+                "published_html": published_html,
+                "place": place,
+                "name": name.trim(),
+                "grade": grade,
+                "team": team,
+                "event": event,
+                "meet_name": context.meet_name,
+            }),
+        });
+    }
+    ensure!(
+        header && !page.unassigned_results.is_empty(),
+        "unrecognized or empty result table"
+    );
+    page.notes.push(format!("{} published table result rows have no actual athlete profile ID; retained as unassigned results", page.unassigned_results.len()));
     Ok(page)
 }
 

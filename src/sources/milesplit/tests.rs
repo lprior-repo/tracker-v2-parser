@@ -7,6 +7,7 @@ use super::{athlete_target, meet_target, parse, seeds, team_target};
 const PROFILE: &str = include_str!("../../../fixtures/milesplit/athlete-oh-15005189.html");
 const ROSTER: &str = include_str!("../../../fixtures/milesplit/roster-oh-mason.html");
 const RAW: &str = include_str!("../../../fixtures/milesplit/oh_meet_770621_rs1321880_raw.html");
+const AL_MEET: &str = include_str!("../../../fixtures/milesplit/meet-al-754110-results.html");
 
 #[test]
 fn given_states_when_seeded_then_schools_and_all_sports_are_discovered() -> Result<()> {
@@ -288,6 +289,203 @@ fn given_native_meet_inventory_when_parsed_then_only_public_raw_file_is_queued()
         Some("https://oh.milesplit.com/meets/770621/results/1321880/raw")
     );
     assert!(page.next.iter().all(|target| !target.url.contains("/api/")));
+    Ok(())
+}
+
+#[test]
+fn given_published_hytek_meet_when_parsed_then_rows_and_result_inventory_survive() -> Result<()> {
+    let mut target = meet_target("754110", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results"
+            .to_owned();
+    target.context.state = Some("AL".to_owned());
+    let page = parse(&target, AL_MEET)?;
+
+    assert_eq!(page.unassigned_results.len(), 102);
+    assert!(page.athletes.is_empty());
+    assert!(page.performances.is_empty());
+    let first = page
+        .unassigned_results
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing first result"))?;
+    assert_eq!(first.event, "Event 1  Girls 5k Run CC");
+    assert_eq!(first.mark, "20:48.19");
+    assert_eq!(first.raw["name"], "Bruce, Jaxson");
+    assert_eq!(first.raw["team"], "Plainview Hi");
+    assert!(first.raw["grade"].is_null());
+    assert!(first.school_id.is_none());
+    let fourth = page
+        .unassigned_results
+        .get(3)
+        .ok_or_else(|| anyhow::anyhow!("missing fourth result"))?;
+    assert_eq!(fourth.raw["team"], "Pisgah High School");
+    assert_eq!(fourth.mark, "21:46.36");
+    let last = page
+        .unassigned_results
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("missing last result"))?;
+    assert_eq!(last.raw["name"], "Tucker, Jenna");
+    assert_eq!(last.mark, "39:29.84");
+    assert_eq!(page.next.len(), 1);
+    assert_eq!(
+        page.next[0].url,
+        "https://al.milesplit.com/meets/754110/results/1330427/raw"
+    );
+    Ok(())
+}
+
+#[test]
+fn given_inline_result_with_unconfirmed_canonical_when_parsed_then_inventory_is_preserved()
+-> Result<()> {
+    let mut target = meet_target("754110", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results"
+            .to_owned();
+    let body = AL_MEET.replacen(
+        r#"<link rel="canonical" href="https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results/1330423/raw" />"#,
+        r#"<link rel="canonical" href="https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results/1330427/raw" />"#,
+        1,
+    );
+    let page = parse(&target, &body)?;
+    assert_eq!(page.unassigned_results.len(), 102);
+    assert_eq!(page.next.len(), 2);
+    assert_eq!(
+        page.next[0].url,
+        "https://al.milesplit.com/meets/754110/results/1330423/raw"
+    );
+    assert_eq!(
+        page.next[1].url,
+        "https://al.milesplit.com/meets/754110/results/1330427/raw"
+    );
+    Ok(())
+}
+
+#[test]
+fn given_published_manual_result_table_when_parsed_then_all_results_are_retained() -> Result<()> {
+    let mut target = meet_target("771781", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/771781-mayhaw-music-festival-5k-2026/results".to_owned();
+    let body = include_str!("../../../fixtures/milesplit/meet-al-771781-results.html");
+    let page = parse(&target, body)?;
+    assert_eq!(page.unassigned_results.len(), 73);
+    assert!(page.athletes.is_empty());
+    assert!(page.performances.is_empty());
+    assert!(page.next.is_empty());
+    let first = &page.unassigned_results[0];
+    assert_eq!(first.event, "Girls Varsity 5K");
+    assert_eq!(first.mark, "20:51.3");
+    assert_eq!(first.raw["name"], "Cara Wallace");
+    assert_eq!(first.raw["grade"], "11");
+    assert_eq!(first.raw["team"], "Wicksburg");
+    assert_eq!(page.unassigned_results[24].mark, "DNF");
+    assert_eq!(page.unassigned_results[57].raw["place"], "33n");
+    assert_eq!(page.unassigned_results[57].raw["name"], "Grymm McKinight");
+    assert_eq!(page.unassigned_results[72].raw["name"], "Jackson Smith");
+    assert!(parse(&target, &body.replacen("<td>time\n", "<td>unknown\n", 1)).is_err());
+    assert!(
+        parse(
+            &target,
+            "<div id=\"meetResultsBody\"><table><tr><td>Unknown</td></tr></table></div>"
+        )
+        .is_err()
+    );
+    Ok(())
+}
+
+#[test]
+fn given_spreadsheet_results_when_parsed_then_rows_and_inventory_are_preserved() -> Result<()> {
+    let mut target = meet_target("776188", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/776188-center-point-high-school-invite-2026/results"
+            .to_owned();
+    let body = include_str!("../../../fixtures/milesplit/meet-al-776188-results.html");
+    let page = parse(&target, body)?;
+    assert_eq!(page.unassigned_results.len(), 37);
+    assert!(page.athletes.is_empty());
+    assert!(page.performances.is_empty());
+    let first = &page.unassigned_results[0];
+    assert_eq!(first.meet_id.as_deref(), Some("776188"));
+    assert_eq!(first.event, "Boys 5000 Meter Run");
+    assert_eq!(first.mark, "19:13.75");
+    assert_eq!(first.raw["place"], "1");
+    assert_eq!(first.raw["name"], "Muguia, Kevin");
+    assert_eq!(first.raw["team"], "Fultondale");
+    assert_eq!(first.raw["points"], "1");
+    assert_eq!(page.unassigned_results[5].mark, "21:29:53");
+    assert_eq!(page.unassigned_results[18].mark, "25:55:17");
+    assert_eq!(page.unassigned_results[36].raw["name"], "James, Carter");
+    assert_eq!(page.next.len(), 3);
+    assert!(page.next.iter().all(|next| !next.url.contains("1325876")));
+    assert!(page.next.iter().any(|next| next.url.contains("1325874")));
+    assert!(page.next.iter().any(|next| next.url.contains("1325875")));
+    assert!(page.next.iter().any(|next| next.url.contains("1328237")));
+    Ok(())
+}
+
+#[test]
+fn given_spreadsheet_file_aliases_when_parsed_then_published_row_ids_match() -> Result<()> {
+    let body = include_str!("../../../fixtures/milesplit/meet-al-776188-results.html");
+    let mut root = meet_target("776188", Sport::CrossCountry)?;
+    root.url = "https://al.milesplit.com/meets/776188-center-point-high-school-invite-2026/results"
+        .to_owned();
+    let root_page = parse(&root, body)?;
+    let mut file = root.clone();
+    file.kind = PageKind::Results;
+    file.url = "https://www.milesplit.com/meets/776188/results/1325876/raw".to_owned();
+    let file_page = parse(&file, body)?;
+    assert_eq!(file_page.unassigned_results.len(), 37);
+    assert!(file_page.next.is_empty());
+    for (left, right) in root_page
+        .unassigned_results
+        .iter()
+        .zip(&file_page.unassigned_results)
+    {
+        assert_eq!(left.result_id, right.result_id);
+        assert_eq!(left.mark, right.mark);
+    }
+    file.url = "https://www.milesplit.com/meets/776188/results/1325875/raw".to_owned();
+    let other_page = parse(&file, body)?;
+    assert_ne!(
+        root_page.unassigned_results[0].result_id,
+        other_page.unassigned_results[0].result_id
+    );
+    Ok(())
+}
+
+#[test]
+fn given_malformed_spreadsheet_when_parsed_then_it_is_not_accepted_as_empty() -> Result<()> {
+    let mut target = meet_target("776188", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/776188-center-point-high-school-invite-2026/results"
+            .to_owned();
+    let body = include_str!("../../../fixtures/milesplit/meet-al-776188-results.html");
+    let bad_header = body.replacen("<td>Time</td>", "<td>Unknown</td>", 1);
+    assert_ne!(body, bad_header);
+    assert!(parse(&target, &bad_header).is_err());
+    let bad_row = body.replacen("<td>19:13.75</td>", "<td></td>", 1);
+    assert_ne!(body, bad_row);
+    assert!(parse(&target, &bad_row).is_err());
+    let bad_scores = body.replacen("<td>(Win / Loss) Record</td>", "<td>Unknown</td>", 1);
+    assert_ne!(body, bad_scores);
+    assert!(parse(&target, &bad_scores).is_err());
+    target.kind = PageKind::Results;
+    target.url = "https://al.milesplit.com/meets/776188/results/1325876/raw".to_owned();
+    assert!(parse(&target, &bad_header).is_err());
+    Ok(())
+}
+
+#[test]
+fn given_unrecognized_inline_result_when_parsed_then_it_is_not_silently_accepted() -> Result<()> {
+    let mut target = meet_target("754110", Sport::CrossCountry)?;
+    target.url =
+        "https://al.milesplit.com/meets/754110-northeast-alabama-championship-2026/results"
+            .to_owned();
+    let malformed = AL_MEET.replacen(
+        "Name                    Year School                  Finals",
+        "Name                    Year School                  Unknown",
+        1,
+    );
+    assert!(parse(&target, &malformed).is_err());
     Ok(())
 }
 
