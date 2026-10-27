@@ -141,7 +141,7 @@ impl Transport {
         if !self.uses_browser(target) {
             return self.fetch_http(target, headers).await;
         }
-        crate::browser::ensure_safe_transport()?;
+        crate::browser::ensure_safe_transport::<()>()?;
         policy::public_addresses(&url).await?;
         if self.browser.is_none() {
             self.browser = Some(

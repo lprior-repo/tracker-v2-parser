@@ -14,6 +14,8 @@ orchestration.
   PostgreSQL database where the test user may create and drop schemas.
 - Browser transport is currently disabled: the WebDriver adapter cannot yet
   enforce public-address restrictions and per-request pacing for Chromium.
+- Application and test code use Rust, with no first-party JavaScript or Python.
+  Captured source fixtures retain their original third-party HTML and scripts.
 
 ## Configuration and commands
 
