@@ -52,9 +52,11 @@ async fn save_office(
     details: &serde_json::Value,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO contacts(school_id,kind,role,email,source_url,raw) \
-         SELECT $1,'school_office','',$2,$3,$4 WHERE $2::text IS NOT NULL AND btrim($2) <> '' \
-         ON CONFLICT(school_id,kind,email_key,role) DO UPDATE SET source_url=EXCLUDED.source_url, \
+        "INSERT INTO contacts(school_id,kind,role,email,source_url,raw,source_key) \
+         SELECT $1,'school_office','',$2,$3,$4, \
+         encode(sha256(convert_to(jsonb_build_array($3::text,NULL::text,''::text,NULL::text,lower(btrim($2::text)))::text,'UTF8')),'hex') \
+         WHERE $2::text IS NOT NULL AND btrim($2) <> '' \
+         ON CONFLICT(school_id,kind,source_key) DO UPDATE SET email=EXCLUDED.email, \
          raw=EXCLUDED.raw,last_checked=clock_timestamp()",
     )
     .bind(school)

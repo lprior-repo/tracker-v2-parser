@@ -2,7 +2,7 @@ use crate::marks::{ComparableMark, comparison};
 use crate::model::{AthleteRecord, EvidencedPerformance};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) const BASE_HEADERS: [&str; 16] = [
+pub(super) const BASE_HEADERS: [&str; 17] = [
     "athlete_id",
     "name",
     "gender",
@@ -14,6 +14,7 @@ pub(super) const BASE_HEADERS: [&str; 16] = [
     "school_states",
     "school_postal_addresses",
     "school_public_emails",
+    "coach_names",
     "coach_emails",
     "identity_coverage_caveat",
     "unmapped_count",
@@ -32,7 +33,7 @@ pub(super) fn prepare(record: &AthleteRecord) -> Prepared<'_> {
         Prepared {
             bests: BTreeMap::new(),
             unmapped: 0,
-            notes: BTreeSet::new(),
+            notes: super::selection::contact_issues(record).collect(),
         },
         |mut row, evidence| {
             let mark = match comparison(evidence) {
@@ -119,7 +120,18 @@ pub(super) fn cells(
                 .iter()
                 .filter_map(|school| school.public_email.as_deref()),
         ),
-        joined(record.coaches.iter().map(|coach| coach.email.as_str())),
+        joined(
+            record
+                .coaches
+                .iter()
+                .filter_map(|coach| coach.name.as_deref()),
+        ),
+        joined(
+            record
+                .coaches
+                .iter()
+                .filter_map(|coach| coach.email.as_deref()),
+        ),
         caveat(record),
         row.unmapped.to_string(),
         joined(

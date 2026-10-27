@@ -35,7 +35,7 @@ fn given_public_sidearm_capture_when_parsed_then_row_local_coaching_mailboxes_su
     let brian = page
         .coaches
         .iter()
-        .find(|coach| coach.email == "bhenderson@auhsdschools.org")
+        .find(|coach| coach.email.as_deref() == Some("bhenderson@auhsdschools.org"))
         .context("missing Brian")?;
     assert_eq!(brian.name.as_deref(), Some("Brian Henderson"));
     assert_eq!(brian.sport, Some(Sport::CrossCountry));
@@ -43,17 +43,14 @@ fn given_public_sidearm_capture_when_parsed_then_row_local_coaching_mailboxes_su
     let robert = page
         .coaches
         .iter()
-        .find(|coach| coach.email == "caljumper259@gmail.com")
+        .find(|coach| coach.email.as_deref() == Some("caljumper259@gmail.com"))
         .context("missing Robert")?;
     assert_eq!(robert.name.as_deref(), Some("Robert Kennedy"));
     assert_eq!(robert.sport, None);
     assert_eq!(robert.role, "Head Coach — Track & Field");
-    assert!(
-        page.coaches
-            .iter()
-            .any(|coach| coach.email == "dharris@auhsdschools.org"
-                && coach.role == "Head Coach — Unified Sports - Track")
-    );
+    assert!(page.coaches.iter().any(|coach| coach.email.as_deref()
+        == Some("dharris@auhsdschools.org")
+        && coach.role == "Head Coach — Unified Sports - Track"));
     assert!(
         page.coaches
             .iter()
@@ -74,24 +71,24 @@ fn given_staff_cards_when_parsed_then_only_published_track_and_xc_coaches_are_re
     let actual = page
         .coaches
         .iter()
-        .map(|coach| (coach.name.as_deref(), coach.email.as_str(), coach.sport))
+        .map(|coach| (coach.name.as_deref(), coach.email.as_deref(), coach.sport))
         .collect::<Vec<_>>();
     assert_eq!(
         actual,
         vec![
             (
                 Some("Ada Runner"),
-                "ada.runner@school.example.edu",
+                Some("ada.runner@school.example.edu"),
                 Some(Sport::Indoor)
             ),
             (
                 Some("Ben Walker"),
-                "ben.walker@school.example.edu",
+                Some("ben.walker@school.example.edu"),
                 Some(Sport::CrossCountry)
             ),
             (
                 Some("Chris Thrower"),
-                "chris.thrower@school.example.edu",
+                Some("chris.thrower@school.example.edu"),
                 Some(Sport::Outdoor)
             ),
         ]
@@ -207,7 +204,7 @@ fn given_unclear_staff_association_when_parsed_then_names_and_mailboxes_are_not_
     let page = parse(&target("School", "https://school.edu/"), body)?;
     assert_eq!(page.coaches.len(), 1);
     let coach = page.coaches.first().context("missing coach")?;
-    assert_eq!(coach.email, "xc@school.edu");
+    assert_eq!(coach.email.as_deref(), Some("xc@school.edu"));
     assert_eq!(coach.name, None);
     assert_eq!(coach.sport, Some(Sport::CrossCountry));
     Ok(())
@@ -220,7 +217,9 @@ fn given_local_sport_headings_when_parsed_then_section_context_never_becomes_glo
     let page = parse(&target("School", "https://school.edu/"), body)?;
     assert_eq!(page.coaches.len(), 1);
     assert_eq!(
-        page.coaches.first().map(|coach| coach.email.as_str()),
+        page.coaches
+            .first()
+            .and_then(|coach| coach.email.as_deref()),
         Some("xc@school.edu")
     );
     Ok(())
@@ -398,7 +397,7 @@ fn given_combined_published_appointment_when_parsed_then_all_explicit_sports_are
     assert!(
         page.coaches
             .iter()
-            .all(|coach| coach.email == "coach@school.edu" && coach.name.is_none())
+            .all(|coach| coach.email.as_deref() == Some("coach@school.edu") && coach.name.is_none())
     );
     Ok(())
 }
@@ -462,12 +461,12 @@ fn given_public_staff_with_only_widget_headings_when_parsed_then_real_contacts_a
     assert_eq!(
         page.coaches
             .iter()
-            .map(|coach| coach.email.as_str())
+            .map(|coach| coach.email.as_deref())
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from([
-            "ada.runner@school.example.edu",
-            "ben.walker@school.example.edu",
-            "chris.thrower@school.example.edu",
+            Some("ada.runner@school.example.edu"),
+            Some("ben.walker@school.example.edu"),
+            Some("chris.thrower@school.example.edu"),
         ])
     );
     assert_eq!(

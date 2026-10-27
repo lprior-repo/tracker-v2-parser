@@ -43,7 +43,7 @@ async fn interrupted_attempt_is_resumed_after_database_reconnection_without_losi
                 .enqueue(std::slice::from_ref(&target), false)
                 .await?;
             let job = database
-                .next_job(Some(Source::AthleticNet), 3)
+                .next_job(Some(Source::AthleticNet), 3, &[])
                 .await?
                 .context("initial job")?;
             assert!(database.start_attempt(job.id, 3).await?);
@@ -51,7 +51,7 @@ async fn interrupted_attempt_is_resumed_after_database_reconnection_without_losi
 
             let database = Database::connect(&test.url).await?;
             let resumed = database
-                .next_job(Some(Source::AthleticNet), 3)
+                .next_job(Some(Source::AthleticNet), 3, &[])
                 .await?
                 .context("interrupted job")?;
             assert_eq!(resumed.id, job.id);
@@ -173,7 +173,7 @@ async fn blocked_source_stops_cli_before_attempting_other_pending_pages() -> Res
                 .enqueue(&[blocked.clone(), pending.clone()], false)
                 .await?;
             let job = database
-                .next_job(Some(Source::AthleticNet), 3)
+                .next_job(Some(Source::AthleticNet), 3, &[])
                 .await?
                 .context("blocked job")?;
             assert_eq!(job.target.url, blocked.url);

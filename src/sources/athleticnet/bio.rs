@@ -39,7 +39,7 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
     schools(target, body, school_id.as_deref(), &mut page)?;
     rows::retain(body, "resultsTF", &athlete, sport, &mut page);
     rows::retain(body, "resultsXC", &athlete, sport, &mut page);
-    let discovered = discover_meets(body, &page)?;
+    let discovered = discover_meets(body, &page, target.context.state.as_deref())?;
     page.next.extend(discovered);
     if sport != Sport::CrossCountry {
         page.next.push(athlete_target(
@@ -147,7 +147,7 @@ fn season_number(row: &Value, key: &str) -> Option<i32> {
     row.get(key)?.as_i64().and_then(|n| i32::try_from(n).ok())
 }
 
-fn discover_meets(body: &Value, page: &ParsedPage) -> Result<Vec<Target>> {
+fn discover_meets(body: &Value, page: &ParsedPage, state: Option<&str>) -> Result<Vec<Target>> {
     let rows = page
         .performances
         .iter()
@@ -164,6 +164,11 @@ fn discover_meets(body: &Value, page: &ParsedPage) -> Result<Vec<Target>> {
     unique
         .into_iter()
         .filter(|(id, _)| body.get("meets").and_then(|m| m.get(*id)).is_some())
-        .map(|(id, sport)| meet_target(id, sport))
+        .map(|(id, sport)| {
+            meet_target(id, sport).map(|mut target| {
+                target.context.state = state.map(str::to_owned);
+                target
+            })
+        })
         .collect()
 }

@@ -33,6 +33,15 @@ cargo run -- export --config config.toml --output athletes.xlsx
 cargo run -- scrape --help
 cargo run -- export --help
 ```
+The checked-in configuration starts with Wisconsin (`WI`), graduation year 2027,
+season 2026, and MileSplit enabled. Add states to the `states` array after
+checking the Wisconsin acquisition/export loop. Athletic.net is disabled in this
+starting configuration; enable it only when ordinary public access is available.
+Changing states restricts resumed checkpoint acquisition and unfinished-work
+reporting without deleting or resetting saved data from other states. Unknown
+checkpoint scope is not permission to start an unrelated national crawl.
+Provider-wide access stops still require human review.
+
 
 Scraping uses bounded attempts and checkpoints; access challenges require human
 handling. Export reads database records without scraping, writes new XLSX files,
@@ -53,6 +62,21 @@ details also in `Issues`. Unknown values remain blank. These rows are review
 candidates, not accepted members of the requested cohort/state; known
 out-of-scope records remain excluded. Non-comparable marks retain their reported
 status and rejection reason instead of silently disappearing from the export.
+
+Published coach names appear in `coach_names`, independently of `coach_emails`.
+A named track/XC coach remains visible when no mailbox is published; an
+unambiguously associated mailbox may remain without a published name. Missing
+coach names or mailboxes are explicit review issues even when another coach has
+that fact. Missing emails stay blank, never guessed or inferred from names.
+District-wide or otherwise unconfirmed school associations and unknown current
+tenure remain explicit contact review notes, not accepted affiliations. Replaying
+a contacts page retains earlier claims but flags those not confirmed by the new
+parse; unchanged current claims keep their identity and clear that earlier-claim
+flag. Names and old mailboxes remain visible with their warnings rather than
+being silently discarded or presented as verified current contacts. Replaying a
+completed contact capture does not consume another automatic attempt, and an
+existing access stop for that contact authority still prevents replay.
+
 
 MileSplit profiles retain all public sport/competition-level PRs, visible career
 results, biography/identity sections, JSON-LD, published progression values,
@@ -205,6 +229,20 @@ changing checkpoint identity or broadening the school-site crawl authority.
 Contact HTML is parsed in memory rather than retained as a raw capture;
 recognized credential-bearing derived URLs are omitted before storage or
 queueing, without discarding other published contact or postal records.
+Published role text and sport scope stay attached to each contact claim; names
+are never inferred from mailbox spelling. Contacts are source claims, not
+canonical people or assertions of current tenure. Their source URLs remain
+stored as evidence, and capture/check time does not establish employment dates.
+
+Migration `202610270005_contact_source_claims.sql` preserves existing contact
+rows, permits null coach email, and backfills a 64-hex SHA-256 `source_key` from
+PostgreSQL's UTF-8 JSONB array text of source URL, name, role, sport and normalized
+email (`lower(btrim(email))`, including null). Uniqueness is now
+`(school_id, kind, source_key)`: unchanged replay is idempotent, while different
+names, sports or source URLs remain separate claims, including shared-mailbox
+and no-email coaches. Office contacts remain distinct. Every row requires a
+nonblank published name or valid email; malformed nonnull email is rejected.
+Older migration files and their SQLx checksums are unchanged.
 
 Unnamed linked roster observations remain in `Issues` with profile follow-ups;
 named peers are saved without inventing names for the incomplete observations.

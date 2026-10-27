@@ -88,16 +88,21 @@ fn attempt_limit(value: u32) -> Result<i32> {
     i32::try_from(value).context("converting maximum attempts")
 }
 
-#[tracing::instrument(skip(pool))]
+#[tracing::instrument(skip(pool, states))]
 pub(super) async fn next(
     pool: &PgPool,
     source: Option<Source>,
     max_attempts: u32,
     preferred: JobClass,
+    states: &[String],
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND p.attempts < $2 \
          AND ($1::text IS NULL OR p.source=$1) \
+         AND (cardinality($4::text[]) = 0 OR p.cursor->'context'->>'state'=ANY($4) \
+           OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
+             AND p.cursor->'context'->>'state' IS NULL \
+             AND p.cursor->'context'->>'subject_id'=array_to_string($4,','))) \
          AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
            SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
            AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
@@ -118,6 +123,7 @@ pub(super) async fn next(
     .bind(source.map(Source::as_str))
     .bind(attempt_limit(max_attempts)?)
     .bind(preferred.as_str())
+    .bind(states)
     .fetch_optional(pool)
     .await?;
     row.map(|(id, target)| {

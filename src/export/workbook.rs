@@ -67,7 +67,11 @@ fn write_issues(
 ) -> Result<()> {
     let headers = ["athlete_id", "name", "source_profiles", "issues"].map(str::to_owned);
     let record_rows = records.iter().filter_map(|record| {
-        let issues = selection::issues(record);
+        let issues = selection::issues(record)
+            .into_iter()
+            .map(str::to_owned)
+            .chain(selection::contact_issues(record))
+            .collect::<Vec<_>>();
         (!issues.is_empty()).then(|| {
             vec![
                 record.id.to_string(),

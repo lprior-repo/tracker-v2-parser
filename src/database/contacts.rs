@@ -2,48 +2,75 @@ use anyhow::{Context, Result};
 use futures::{TryStreamExt, stream};
 use sqlx::PgConnection;
 
-use crate::model::{Coach, Source};
+use crate::model::{Coach, PageKind, Target};
 
 use super::schools;
 
-#[tracing::instrument(skip(connection, coaches))]
+#[tracing::instrument(skip(connection, target, coaches))]
 pub(super) async fn save_all(
     connection: &mut PgConnection,
-    source: Source,
+    target: &Target,
     coaches: &[Coach],
     url: &str,
 ) -> Result<()> {
+    if target.kind == PageKind::Contacts {
+        mark_previous_claims(connection, target, url).await?;
+    }
     stream::iter(coaches.iter().map(Ok::<_, anyhow::Error>))
         .try_fold(connection, |connection, coach| async move {
-            save(connection, source, coach, url).await?;
+            save(connection, target, coach, url).await?;
             Ok(connection)
         })
         .await
         .map(|_| ())
 }
 
-#[tracing::instrument(skip(connection, coach))]
+#[tracing::instrument(skip(connection, target, coach))]
 async fn save(
     connection: &mut PgConnection,
-    source: Source,
+    target: &Target,
     coach: &Coach,
     url: &str,
 ) -> Result<()> {
-    let school = schools::find(connection, source, Some(&coach.school_id))
+    let school = schools::find(connection, target.source, Some(&coach.school_id))
         .await?
         .context("coach must reference an observed school")?;
     let raw = serde_json::to_value(coach)?;
     sqlx::query(
-        "INSERT INTO contacts(school_id,kind,name,role,email,sport,source_url,effective_from,effective_until,raw) \
-         VALUES($1,'coach',$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(school_id,kind,email_key,role) DO UPDATE SET \
-         name=COALESCE(EXCLUDED.name,contacts.name),sport=COALESCE(EXCLUDED.sport,contacts.sport), \
+        "INSERT INTO contacts(school_id,kind,name,role,email,sport,source_url,effective_from,effective_until,raw,source_key) \
+         VALUES($1,'coach',$2,$3,$4,$5,$6,$7,$8,$9 || jsonb_build_object('checkpoint_url',$10::text), \
+         encode(sha256(convert_to(jsonb_build_array($6::text,$2::text,$3::text,$5::text,lower(btrim($4::text)))::text,'UTF8')),'hex')) \
+         ON CONFLICT(school_id,kind,source_key) DO UPDATE SET \
          effective_from=COALESCE(EXCLUDED.effective_from,contacts.effective_from), \
          effective_until=COALESCE(EXCLUDED.effective_until,contacts.effective_until), \
-         source_url=EXCLUDED.source_url,raw=EXCLUDED.raw,last_checked=clock_timestamp()",
+         email=EXCLUDED.email,raw=EXCLUDED.raw,last_checked=clock_timestamp()",
     ).bind(school).bind(&coach.name).bind(&coach.role).bind(&coach.email)
         .bind(coach.sport.map(crate::model::Sport::as_str)).bind(url)
         .bind(raw.get("effective_from").and_then(serde_json::Value::as_str))
         .bind(raw.get("effective_until").and_then(serde_json::Value::as_str)).bind(&raw)
-        .execute(connection).await?;
+        .bind(&target.url).execute(connection).await?;
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, target))]
+async fn mark_previous_claims(
+    connection: &mut PgConnection,
+    target: &Target,
+    url: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE contacts c SET raw=jsonb_set(c.raw,'{review_notes}', \
+         COALESCE(c.raw->'review_notes','[]'::jsonb) || jsonb_build_array($5::text)) \
+         FROM schools s WHERE c.school_id=s.id AND s.source=$1 AND s.source_id=$2 \
+         AND c.kind='coach' AND (c.source_url IN ($3,$4) OR c.raw->>'checkpoint_url'=$3) \
+         AND NOT COALESCE(c.raw->'review_notes','[]'::jsonb) @> jsonb_build_array($5::text)",
+    )
+    .bind(target.source.as_str())
+    .bind(target.context.school_id.as_deref())
+    .bind(&target.url)
+    .bind(url)
+    .bind("Earlier contact source claim; not confirmed by latest parse")
+    .execute(connection)
+    .await?;
     Ok(())
 }

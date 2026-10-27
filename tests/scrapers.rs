@@ -156,7 +156,7 @@ async fn given_failed_page_when_resumed_repeatedly_then_attempts_stop_at_three()
             database.enqueue(&[target], false).await?;
             for expected in 1..=3 {
                 let job = database
-                    .next_job(None, 3)
+                    .next_job(None, 3, &[])
                     .await?
                     .context("failed page should be resumable below three attempts")?;
                 assert!(database.start_attempt(job.id, 3).await?);
@@ -171,7 +171,7 @@ async fn given_failed_page_when_resumed_repeatedly_then_attempts_stop_at_three()
                 .await?;
                 assert_eq!(state, ("failed".to_owned(), expected, None));
             }
-            assert!(database.next_job(None, 3).await?.is_none());
+            assert!(database.next_job(None, 3, &[]).await?.is_none());
             let id: i64 = sqlx::query_scalar("SELECT id FROM scrape_pages")
                 .fetch_one(&test.pool)
                 .await?;
@@ -249,9 +249,9 @@ async fn given_exhausted_checkpoint_when_scraping_then_invocation_fails_without_
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
-            database
-                .enqueue(&[target(Source::AthleticNet, "11")], false)
-                .await?;
+            let mut page = target(Source::AthleticNet, "11");
+            page.context.state = Some("WI".to_owned());
+            database.enqueue(&[page], false).await?;
             sqlx::query(
                 "UPDATE scrape_pages SET status='failed', attempts=3, last_error='network failure' WHERE url LIKE '%/athlete/11'",
             )
@@ -284,6 +284,7 @@ async fn given_nonblocked_acquisition_failure_when_scraping_then_three_attempts_
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
             let mut page = target(Source::AthleticNet, "11");
+            page.context.state = Some("WI".to_owned());
             page.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
             database.enqueue(std::slice::from_ref(&page), false).await?;
             let output = test.cli(&["scrape"]).await?;
@@ -317,6 +318,8 @@ async fn given_failed_page_when_other_page_is_pending_then_it_is_attempted_befor
             complete_seed_pages(&database).await?;
             let mut first = target(Source::AthleticNet, "11");
             let mut second = target(Source::AthleticNet, "12");
+            first.context.state = Some("WI".to_owned());
+            second.context.state = Some("WI".to_owned());
             first.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
             second.token_url = first.token_url.clone();
             database.enqueue(&[first.clone(), second.clone()], false).await?;
@@ -343,8 +346,10 @@ async fn given_exhausted_page_when_other_page_is_pending_then_other_page_is_drai
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
-            let first = target(Source::AthleticNet, "11");
+            let mut first = target(Source::AthleticNet, "11");
+            first.context.state = Some("WI".to_owned());
             let mut second = target(Source::AthleticNet, "12");
+            second.context.state = Some("WI".to_owned());
             second.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
             database.enqueue(&[first.clone(), second.clone()], false).await?;
             sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error='previous failure' WHERE url=$1")
@@ -373,12 +378,15 @@ async fn given_interrupted_attempt_when_resumed_then_count_is_preserved_and_unto
             database
                 .enqueue(&[first.clone(), second.clone()], false)
                 .await?;
-            let job = database.next_job(None, 3).await?.context("first page")?;
+            let job = database
+                .next_job(None, 3, &[])
+                .await?
+                .context("first page")?;
             assert_eq!(job.target.url, first.url);
             assert!(database.start_attempt(job.id, 3).await?);
             database.enqueue(std::slice::from_ref(&first), true).await?;
             let next = database
-                .next_job(None, 3)
+                .next_job(None, 3, &[])
                 .await?
                 .context("untouched page")?;
             assert_eq!(next.target.url, second.url);
@@ -406,7 +414,7 @@ async fn given_blocked_page_when_scraping_then_pending_page_is_not_attempted() -
                 .enqueue(&[first.clone(), second.clone()], false)
                 .await?;
             let job = database
-                .next_job(Some(Source::AthleticNet), 3)
+                .next_job(Some(Source::AthleticNet), 3, &[])
                 .await?
                 .context("first page")?;
             assert!(database.start_attempt(job.id, 3).await?);

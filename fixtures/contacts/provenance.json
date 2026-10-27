@@ -18,6 +18,73 @@
       "url": "https://school.example.edu/athletics/staff",
       "captured_at": null,
       "purpose": "School-matched JSON-LD postal association versus district footer; track/XC coaching cards versus unrelated teacher and parent mailboxes; labeled public athletics office mailbox kept separate from coaching identities; published link constraints"
+    },
+    {
+      "path": "wiaa-abbotsford-coaches.html",
+      "original_path": "crates/census-crawl/tests/fixtures/wiaa/school_org1_abbotsford.html",
+      "original_lines": "341-349,363-384,396-406,429-439",
+      "url": "https://schools.wiaawi.org/Directory/School/GetDirectorySchool?orgID=1",
+      "captured_at": null,
+      "capture_window": "2026-09-19 through 2026-09-21",
+      "capture_precision": "No retained per-request timestamp found. Adjacent research/sources/state-assoc-greatlakes/samples/CAPTURES.md dates the pre-existing Midwest corpus to this window; crates/census-crawl/src/wiaa/tests.rs records observed_on 2026-09-20, not a network timestamp.",
+      "transformation": "Four published table rows and headers excerpted; indentation and line breaks compacted; main/h1 wrapper added from the published Abbotsford label; no person, sport, title, or email attribute values changed. Basketball and football rows are negative scope controls.",
+      "expected_claims": [
+        {"name": "JACOB KNAPMILLER", "role": "Head Coach — Boys Track and Field", "sport": null, "email": "jknapmiller@abbotsford.k12.wi.us"},
+        {"name": "Dillon Novak", "role": "Head Coach — Girls Cross Country", "sport": "cross_country", "email": "dnovak@abbotsford.k12.wi.us"}
+      ]
+    },
+    {
+      "path": "wayzata-administration.html",
+      "original_path": "crates/census-crawl/tests/fixtures/mshsl/school_detail_wayzata-high-school.html",
+      "original_lines": "6-10,29-61",
+      "original_capture_path": "tools/a29-coach/mn-school-page2.html",
+      "url": "https://www.mshsl.org/schools/wayzata-high-school",
+      "captured_at": "2026-09-19",
+      "capture_precision": "date only, HTTP 200 and source path recorded in the retained fixture header",
+      "transformation": "Heading and Activities Director claim excerpted; phone SVG/telephone and whitespace removed; main wrapper added; name, role and obfuscated href unchanged.",
+      "expected_decoded_email": "meghan.potter@wayzataschools.org",
+      "expected_coaching_claims": []
+    },
+    {
+      "path": "finalsite-community-coaches.html",
+      "original_path": "research/sources/coach-coverage-bundle-20261004/probes/016-tx-community-isd/raw/coaches-directory.html",
+      "original_lines": "470-508,602-640",
+      "url": "https://www.communityisd.org/athletics/coaches-directory",
+      "captured_at": "2026-10-05T10:41:41.469940+00:00",
+      "capture_manifest": "research/sources/coach-coverage-bundle-20261004/probes/016-tx-community-isd/manifest.json",
+      "original_sha256": "125f2797a160c126ae1575b71ca777fbbdd8fbef180412c1a1e1c477a533ac54",
+      "transformation": "Two fsConstituentItem cards excerpted with whitespace compacted and main wrapper added; published name/title/script values retained. Scripts are never executed or decoded. District-page capture proves vendor selectors only; no individual school affiliation or current tenure is inferred.",
+      "expected_claims": [
+        {"name": "Daniel Childress", "role": "Head Coach - Track & Field", "sport": null, "email": null}
+      ]
+    },
+    {
+      "path": "nullable-coaches.html",
+      "kind": "synthetic deterministic parser scenario, not a public capture",
+      "url": "https://school.example.edu/staff",
+      "captured_at": null,
+      "purpose": "Distinct named unknown-email claims, shared mailbox names, ambiguous mailboxes, missing both identity fields, structured current title with former-athlete biography, former/retired coaching exclusions, unrelated sport boundaries, and hidden/footer exclusion"
+    },
+    {
+      "path": "named-no-email.html",
+      "kind": "synthetic deterministic parser scenario, not a public capture",
+      "url": "https://school.example.edu/staff",
+      "captured_at": null,
+      "purpose": "Single Ada Unpublished / Head Outdoor Track Coach / outdoor claim with email null for parser, persistence replay, and blank-email export scenarios"
+    },
+    {
+      "path": "staff-review.html",
+      "kind": "synthetic deterministic parser scenario, not a public capture",
+      "url": "https://school.example.edu/staff",
+      "captured_at": null,
+      "purpose": "Contradictory explicit basketball role versus track program, explicit dual-sport track responsibility, nested footer/nav/header plaintext mailbox and fallback-role exclusion, and explicit other-school affiliation overriding a school-local heading"
+    },
+    {
+      "path": "staff-review-regressions.html",
+      "kind": "synthetic deterministic parser scenario, not a public capture",
+      "url": "https://school.example.edu/staff",
+      "captured_at": null,
+      "purpose": "Duplicate person/role/mailbox/sport claims with conflicting card affiliations retain the union of review annotations independent of card order; compatible structured Indoor/Outdoor Track refines generic Track roles while explicit running disciplines and seasons remain authoritative; unsupported program labels are retained as review annotations rather than additional duties; explicit dual-discipline and dual-season roles retain their published duties; neutral and conflicting page heading variants remain deterministic"
     }
   ],
   "ported_rules": [
@@ -26,7 +93,8 @@
     "crates/census-crawl/src/school_sites/parse/patterns.rs",
     "crates/census-crawl/src/coach_directories/generic/coach_blocks.rs",
     "crates/census-crawl/src/coach_directories/generic/offices.rs",
-    "crates/census-crawl/src/sidearm_staff/parse.rs"
+    "crates/census-crawl/src/sidearm_staff/parse.rs",
+    "crates/census-crawl/src/mshsl/text.rs:13-50 (bounded Cloudflare XOR decoding and public attribute/fragment sources; adapted to existing mailbox normalization and a 510-hex-character maximum for a 254-byte mailbox)"
   ],
   "new_rules": "School/EducationalOrganization JSON-LD and explicitly school-identified HTML postal extraction are new enrichment rules; no generic JSON-LD School address parser exists in the primary repository."
 }

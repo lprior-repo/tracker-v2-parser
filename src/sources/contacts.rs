@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod claim_tests;
 mod email;
 mod links;
 mod office;
@@ -97,13 +99,19 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
             .is_some(),
         "contacts response has no recognizable page content"
     );
-    let coaches = staff::parse(&document, school_id)?;
+    let coaches = staff::parse(&document, school_id, school_name)?;
     let schools = postal::parse(&document, target, school_name)?;
     let schools = office::enrich(&document, target, school_name, schools)?;
     let next = links::parse(&document, target)?;
     let mut notes = Vec::new();
     if coaches.is_empty() {
         notes.push("No unambiguous public track/XC coaching mailbox extracted; contact coverage remains unknown or incomplete.".to_owned());
+    }
+    if coaches.iter().any(|coach| coach.email.is_none()) {
+        notes.push("Named public track/XC coaching claim retained without an unambiguous public mailbox; email remains unpublished or ambiguous.".to_owned());
+    }
+    if coaches.iter().any(|coach| coach.name.is_none()) {
+        notes.push("Public track/XC coaching mailbox retained without a published name; identity requires review.".to_owned());
     }
     if !schools.iter().any(|school| school.address.is_some()) {
         notes.push("No school-matched postal address extracted; address coverage remains unknown or incomplete.".to_owned());
@@ -236,12 +244,22 @@ fn public_url(value: &str) -> Result<Url> {
 }
 
 fn text(element: ElementRef<'_>) -> String {
+    text_content(element, false)
+}
+
+fn staff_text(element: ElementRef<'_>) -> String {
+    text_content(element, true)
+}
+
+fn text_content(element: ElementRef<'_>, exclude_chrome: bool) -> String {
     element
         .descendants()
         .filter_map(|node| {
             let value = node.value().as_text()?;
             let hidden = node.ancestors().filter_map(ElementRef::wrap).any(|parent| {
                 matches!(parent.value().name(), "script" | "style" | "noscript")
+                    || (exclude_chrome
+                        && matches!(parent.value().name(), "footer" | "header" | "nav"))
                     || parent.value().attr("hidden").is_some()
                     || parent.value().attr("aria-hidden") == Some("true")
             });

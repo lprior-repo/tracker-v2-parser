@@ -29,6 +29,12 @@ pub(super) fn requires_review(record: &AthleteRecord) -> bool {
             .schools
             .iter()
             .any(|school| published(school.state.as_deref()))
+        || missing_coach_name(record)
+        || missing_coach_email(record)
+        || record
+            .coaches
+            .iter()
+            .any(|coach| !coach.review_notes.is_empty())
 }
 
 pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
@@ -79,11 +85,10 @@ pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
     {
         issues.push("missing published school email");
     }
-    if !record
-        .coaches
-        .iter()
-        .any(|coach| !coach.email.trim().is_empty())
-    {
+    if missing_coach_name(record) {
+        issues.push("missing published coach name");
+    }
+    if missing_coach_email(record) {
         issues.push("missing public coach email");
     }
     if record.performances.is_empty() {
@@ -97,6 +102,39 @@ pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
         issues.push("non-comparable observed results; see raw records and review_notes");
     }
     issues
+}
+
+pub(super) fn contact_issues(record: &AthleteRecord) -> impl Iterator<Item = String> + '_ {
+    record.coaches.iter().flat_map(|coach| {
+        coach.review_notes.iter().map(move |note| {
+            format!(
+                "contact {} <{}> | school_id={} | {}: {note}",
+                coach.name.as_deref().map_or("unnamed", |name| name),
+                coach
+                    .email
+                    .as_deref()
+                    .map_or("unpublished email", |email| email),
+                coach.school_id,
+                coach.role
+            )
+        })
+    })
+}
+
+fn missing_coach_name(record: &AthleteRecord) -> bool {
+    record.coaches.is_empty()
+        || record
+            .coaches
+            .iter()
+            .any(|coach| !published(coach.name.as_deref()))
+}
+
+fn missing_coach_email(record: &AthleteRecord) -> bool {
+    record.coaches.is_empty()
+        || record
+            .coaches
+            .iter()
+            .any(|coach| !published(coach.email.as_deref()))
 }
 
 fn published(value: Option<&str>) -> bool {

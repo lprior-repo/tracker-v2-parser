@@ -45,5 +45,5 @@ async fn save_results(
 ) -> Result<()> {
     results::save_all(connection, target.source, &page.performances, url).await?;
     unassigned::save_all(connection, target.source, &page.unassigned_results, url).await?;
-    contacts::save_all(connection, target.source, &page.coaches, url).await
+    contacts::save_all(connection, target, &page.coaches, url).await
 }

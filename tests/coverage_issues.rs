@@ -14,8 +14,10 @@ async fn given_incomplete_pages_and_unassigned_results_when_exported_then_issues
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
-            let completed = records::target(Source::AthleticNet, "coverage-completed");
-            let pending = records::target(Source::AthleticNet, "coverage-pending");
+            let mut completed = records::target(Source::AthleticNet, "coverage-completed");
+            completed.context.state = Some("WI".to_owned());
+            let mut pending = records::target(Source::AthleticNet, "coverage-pending");
+            pending.context.state = Some("WI".to_owned());
             let page = ParsedPage {
                 notes: vec!["masked ranking rows remain unavailable".to_owned()],
                 unassigned_results: vec![UnassignedResult {

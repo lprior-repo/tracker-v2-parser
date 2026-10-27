@@ -28,8 +28,9 @@ fn athlete() -> AthleteRecord {
             school_id: "school1".to_owned(),
             name: None,
             role: "Head".to_owned(),
-            email: "@evil.test".to_owned(),
+            email: Some("@evil.test".to_owned()),
             sport: None,
+            review_notes: Vec::new(),
         }],
         profiles: vec![
             "https://www.athletic.net/athlete/123".to_owned(),
@@ -276,5 +277,54 @@ fn given_numeric_disqualified_result_when_exported_then_published_status_and_mar
     assert_eq!(fields["reported_status"], "DQ");
     assert!(fields["comparison_context"].contains("disqualification"));
     std::fs::remove_file(destination)?;
+    Ok(())
+}
+
+#[test]
+fn given_complete_contact_when_review_annotations_exported_then_identity_is_preserved_and_review_is_required()
+-> anyhow::Result<()> {
+    let destination = path("contact-annotations");
+    let mut record = athlete();
+    record.performances.clear();
+    record.coaches[0].name = Some("Ada Runner".into());
+    record.coaches[0].email = Some("ada@school.test".into());
+    assert!(!super::selection::requires_review(&record));
+    record.coaches[0].review_notes = vec![
+        "Affiliation is uncertain".into(),
+        "Current tenure is not confirmed".into(),
+    ];
+    assert!(super::selection::requires_review(&record));
+    write_spreadsheets(&destination, &[record], &options())?;
+    let values = row(&range(&destination, "Athletes")?)?;
+    assert_eq!(values["coach_names"], "Ada Runner");
+    assert_eq!(values["coach_emails"], "ada@school.test");
+    assert_eq!(values["needs_review"], "true");
+    assert!(values["review_notes"].contains("Affiliation is uncertain"));
+    assert!(values["review_notes"].contains("Current tenure is not confirmed"));
+    assert!(
+        values["review_notes"].contains("Ada Runner <ada@school.test> | school_id=school1 | Head")
+    );
+    let issues = range(&destination, "Issues")?;
+    assert!(issues.rows().skip(1).any(|row| {
+        row.iter()
+            .any(|cell| cell.to_string().contains("Affiliation is uncertain"))
+    }));
+    std::fs::remove_file(destination)?;
+    Ok(())
+}
+
+#[test]
+fn given_legacy_coach_json_when_deserialized_then_review_annotations_default_empty_and_are_not_source_facts()
+-> anyhow::Result<()> {
+    let published = serde_json::json!({
+        "school_id": "school1",
+        "name": "Ada Runner",
+        "role": "Head",
+        "email": "ada@school.test",
+        "sport": null
+    });
+    let coach: Coach = serde_json::from_value(published.clone())?;
+    assert_eq!(coach.review_notes, Vec::<String>::new());
+    assert_eq!(serde_json::to_value(coach)?, published);
     Ok(())
 }

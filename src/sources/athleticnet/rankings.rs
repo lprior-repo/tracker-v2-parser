@@ -119,7 +119,9 @@ fn retain_row(
         retain_athlete(row, school, state, sport, athletes, page)?;
     }
     if let Some(id) = v::id(row, "MeetID").filter(|id| meets.insert(id.clone())) {
-        page.next.push(meet_target(&id, sport)?);
+        let mut meet = meet_target(&id, sport)?;
+        meet.context.state.clone_from(&request.context.state);
+        page.next.push(meet);
     }
     Ok(())
 }

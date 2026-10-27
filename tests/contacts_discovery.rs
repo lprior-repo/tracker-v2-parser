@@ -111,14 +111,14 @@ async fn given_new_school_when_checkpoint_commit_fails_then_school_and_contacts_
         let body = athletics_body("https://school.example.edu/");
         let page = sources::parse(&target, &body)?;
         database.enqueue(std::slice::from_ref(&target), false).await?;
-        let job = database.next_job(None, 3).await?.context("school job")?;
+        let job = database.next_job(None, 3, &[]).await?.context("school job")?;
         assert!(database.start_attempt(job.id, 3).await?);
         assert!(save(&database, Some(job.id + 1), &target, &body, &page).await.is_err());
         let counts: (i64, i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM schools),(SELECT count(*) FROM scrape_pages WHERE cursor->>'kind'='contacts'),(SELECT count(*) FROM scrape_pages WHERE status='succeeded')")
             .fetch_one(&test.pool).await?;
         assert_eq!(counts, (0, 0, 0));
         save(&database, Some(job.id), &target, &body, &page).await?;
-        let contact = database.next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts).await?.context("newly discovered contact")?;
+        let contact = database.next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts, &[]).await?.context("newly discovered contact")?;
         assert_eq!(contact.target.kind, PageKind::Contacts);
         assert_eq!(contact.target.url, "https://school.example.edu/");
         assert_eq!(contact.target.context.school_id.as_deref(), Some("1234"));
@@ -182,7 +182,7 @@ async fn given_public_miramonte_capture_when_contact_checkpoint_is_saved_then_on
         insert_school(&database, school("1234", "Miramonte High School", "https://gomats.org/staff-directory")).await?;
         insert_school(&database, school("9876", "Other School", "https://other.example.edu/")).await?;
         database.backfill_contacts(&["CA".into()], &[Source::MileSplit], 2026).await?;
-        let job = database.next_job_with_priority(None, 3, JobClass::Contacts).await?.context("Miramonte contact job")?;
+        let job = database.next_job_with_priority(None, 3, JobClass::Contacts, &[]).await?.context("Miramonte contact job")?;
         assert_eq!(job.target.context.school_id.as_deref(), Some("1234"));
         assert!(database.start_attempt(job.id, 3).await?);
         let body = include_str!("../fixtures/contacts/miramonte-staff.html");
@@ -248,7 +248,7 @@ async fn given_blocked_contact_authority_when_pending_and_new_jobs_are_selected_
         let blocked = contact(Source::MileSplit,"https://School.Example.edu:443/staff","1234");
         let pending = contact(Source::AthleticNet,"https://school.example.edu/contact","9876");
         database.enqueue(&[blocked, pending], false).await?;
-        let job = database.next_job(Some(Source::MileSplit), 3).await?.context("first contact")?;
+        let job = database.next_job(Some(Source::MileSplit), 3, &[]).await?.context("first contact")?;
         let input = test.directory().join("contact-challenge.html");
         std::fs::write(&input, "<html><head><title>Just a moment...</title></head><body><h1>Verify you are human</h1></body></html>")?;
         let error = Runner::new().replay(&Config::default(), &test.url, &input, job.target.clone())
@@ -260,12 +260,12 @@ async fn given_blocked_contact_authority_when_pending_and_new_jobs_are_selected_
         database.enqueue(&[fresh, unrelated.clone(), athletics_target()?], false).await?;
         let pending_id: i64 = sqlx::query_scalar("SELECT id FROM scrape_pages WHERE source='athleticnet'").fetch_one(&test.pool).await?;
         assert!(!database.start_attempt(pending_id, 3).await?);
-        assert!(database.next_job(Some(Source::AthleticNet), 3).await?.is_none());
-        let other = database.next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts).await?.context("other school progresses")?;
+        assert!(database.next_job(Some(Source::AthleticNet), 3, &[]).await?.is_none());
+        let other = database.next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts, &[]).await?.context("other school progresses")?;
         assert_eq!(other.target.url, unrelated.url);
         assert!(database.start_attempt(other.id, 3).await?);
         save(&database, Some(other.id), &other.target, "", &ParsedPage::default()).await?;
-        assert_eq!(database.next_job(Some(Source::MileSplit), 3).await?.context("provider continues")?.target.kind, PageKind::Team);
+        assert_eq!(database.next_job(Some(Source::MileSplit), 3, &[]).await?.context("provider continues")?.target.kind, PageKind::Team);
         let state: (String,i32,String) = sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1").bind(job.id).fetch_one(&test.pool).await?;
         assert_eq!(state, ("blocked".into(),1,"HTTP 200: parsing source page: Official school website access challenge; no alternate transport attempted".into()));
         let untouched: Vec<i32> = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE cursor->'context'->>'school_id' IN ('9876','later')").fetch_all(&test.pool).await?;

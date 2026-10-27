@@ -53,7 +53,8 @@ WITH school_links AS (
     SELECT sl.athlete_id,
            jsonb_agg(jsonb_build_object(
                'school_id', s.source_id, 'name', c.name, 'role', c.role, 'email', c.email,
-               'sport', CASE WHEN c.sport = 'xc' THEN 'cross_country' ELSE c.sport END
+               'sport', CASE WHEN c.sport = 'xc' THEN 'cross_country' ELSE c.sport END,
+               'review_notes', COALESCE(c.raw->'review_notes', '[]'::jsonb)
            ) ORDER BY s.source, s.source_id, c.id) AS coaches
     FROM school_links sl JOIN schools s ON s.id = sl.school_id
     JOIN contacts c ON c.school_id = s.id AND c.kind = 'coach'

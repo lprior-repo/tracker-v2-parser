@@ -162,8 +162,10 @@ pub struct Coach {
     pub school_id: String,
     pub name: Option<String>,
     pub role: String,
-    pub email: String,
+    pub email: Option<String>,
     pub sport: Option<Sport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review_notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

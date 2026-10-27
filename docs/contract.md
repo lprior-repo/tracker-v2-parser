@@ -14,8 +14,10 @@ fixtures, event rules, and source limits are useful, not its Fjall/Restate runti
   category, optional published graduation year, and `needs_review`.
 - **Result:** one published result, including failed/no-mark rows and relay team
   results. An unknown athlete reference remains unassigned, never a fake person.
-- **Contact:** a public professional mailbox tied to its published school,
-  person/office role, sport, source URL, and time/season when published.
+- **Contact:** a published professional contact claim tied to its source school,
+  person/office role, sport, source URL, and time/season when published. A named
+  track/XC coach may have no published mailbox; a uniquely associated mailbox
+  may have no published person name. Neither fact is guessed.
 - **Page:** a bounded acquisition/checkpoint entry, not a generic workflow job.
 - `scrape`: configuration → acquire/replay → parse → transactionally save rows
   and the next page/cursor. HTTP and ordinary Chromium are source settings.
@@ -26,6 +28,10 @@ Configuration selects lower-48 states, graduation cohorts, source transports,
 season, finite page limit, RPS, automatic-attempt limit, and output splitting.
 The sample cohort is a user-editable setting, not an inferred graduation year.
 Alaska, Hawaii, D.C., and territories are outside the requested national scope.
+The initial checked-in acquisition/export scope is Wisconsin, with MileSplit
+enabled and Athletic.net disabled until ordinary public access is available.
+Expanding the configured state list is explicit, not an automatic national crawl.
+
 
 ## Storage contract
 
@@ -39,7 +45,7 @@ event/state/year, distributed-lease, or model-service tables.
 | `athletes` | Local identity; name, published graduation year, school, category, review flag |
 | `athlete_sources` | Unique `(source, source athlete ID)` → local athlete ID and profile URL |
 | `results` | Stable source result key; athlete when known, event/sport/meet/date, raw mark, exact normalized integer/unit, timing/wind/specification/status, represented school, source URL, last seen and small raw JSON |
-| `contacts` | School, person/office, role/sport, public email, source URL and observed/effective time; school-office and coach roles remain distinct |
+| `contacts` | Source contact claim: school, person/office, exact published role/sport, nullable public email, source URL, observed/effective time, raw typed claim and SHA-256 source key; office and coach kinds remain distinct |
 | `scrape_pages` | Unique source/page key, URL/cursor/context, status, attempts, last success/error, and notes from the latest successful parse |
 
 **C1 — atomic checkpoint:** a parsed page's entity upserts and next-page/cursor
@@ -49,11 +55,40 @@ advance commit together. Constraint/parse failures cannot advance success.
 Publisher result IDs update corrections. Missing IDs use tested source-specific
 keys containing the publisher's page/event/round/row identity, never just a mark.
 Old results are not replaced by a single athlete PR field.
+Contacts use `UNIQUE(school_id, kind, source_key)`, not canonical-person identity.
+The 64-hex `source_key` is SHA-256 of PostgreSQL
+`jsonb_build_array(source_url,name,role,sport,lower(btrim(email)))::text` encoded
+as UTF-8, with SQL null preserved. Backfill and coach/office inserts use the same
+expression. Unchanged claims replay without duplicates; changed source URL,
+name, role, sport or normalized mailbox can remain separate claims. Different
+named coaches sharing a mailbox, different sports and separate no-email coaches
+must not collapse. The new migration preserves existing rows and prior migration
+checksums. Nonnull email still must be valid; every contact must have a nonblank
+published name or mailbox. Capture/check time is not evidence of current tenure.
+Contacts-page persistence first flags earlier claims for the exact source school
+and original/effective page URL, then upserts the current parsed claims in the
+same transaction. Changed or removed claims remain retained with an explicit
+earlier-unconfirmed review annotation; unchanged claims clear that annotation
+without changing their IDs. An incomplete empty parse cannot prove absence.
+Failed transactions roll back annotations, entities, and checkpoint together.
+Completed contact captures may be reprocessed without another automatic attempt,
+but a blocked contact authority still prevents that replay.
+
 
 **C3 — identity:** reliable explicit cross-profile evidence may link sites.
 Conflicting school/identity evidence is retained and flagged. Name-only matching,
 guessed graduation years, invented school IDs, and guessed mailboxes are forbidden.
 Ambiguous cross-site identities stay separate and appear in Issues.
+Contact names are never inferred from email spelling. Program headings cannot
+lend track/XC scope to unrelated basketball/football cards; published role text
+and sport scope remain source claims rather than rewritten identities.
+District-wide or unmatched school attribution and unpublished current tenure
+remain explicit per-contact review notes. They set the athlete's `needs_review`
+and appear contextually in `review_notes` and `Issues`, not as accepted school or
+current-contact facts. Explicit non-track coaching roles cannot inherit track
+responsibilities from a contradictory program label. Hidden and page-chrome
+text cannot supply a coaching role or mailbox.
+
 
 **C4 — source boundaries:** parsed source DTOs may contain unknown optional
 facts. Database writes enforce nonempty stable keys, valid references, and valid
@@ -88,6 +123,20 @@ from automatic retry.
 Official-school contact access stops are scoped to the affected authority across
 providers; they do not stop unrelated contact sites or athlete acquisition.
 Embedded public contact-form widgets/sign-in links are not full-page challenges.
+Resumed acquisition selects only the configured states, including saved work
+from earlier runs. State-less Athletic.net directory bootstraps require an exact
+selected-state filter; unknown scope does not authorize unrelated national work.
+Meet continuations preserve their discovery scope without declaring a venue's
+state. Out-of-scope checkpoints and consumed attempts stay unchanged, and their
+exhausted failures do not fail the selected-state run. Provider-wide access
+stops still apply regardless of selected state.
+
+The Issues export selects relevant acquisition pages and unassigned results
+using state, source school identity, and source-page provenance. A Wisconsin
+file must not include unrelated national page backlogs. An empty internal
+report scope explicitly requests all states; uncertain athlete visibility is
+unchanged.
+
 
 
 One running scraper owns the acquisition session. Concurrency is bounded at one
@@ -125,8 +174,12 @@ course context. No unsupported distance conversions, timing adjustment, or
 estimated relay splits. Unknown contexts are not silently treated as equivalent.
 Bests mean best comparable **observed** results, not certified complete careers.
 
-**C7 — spreadsheet:** one local athlete ID per row, school/postal and distinct
-coach/school email fields, observed PR columns, and source links. Known
+**C7 — spreadsheet:** one local athlete ID per row, school/postal fields,
+`coach_names`, distinct coach/school email fields, observed PR columns, and source
+links. Coach email aggregation omits null; a named coach without email remains
+visible in `coach_names` with a blank email when no mailbox is published.
+Missing coach names and mailboxes are explicit review issues and set
+`needs_review`, including partial missing facts when another coach has them. Known
 out-of-scope cohorts/states remain excluded. Unknown cohorts/states remain blank
 and visible as review candidates, not guessed into accepted membership.
 Review-flagged athletes remain on their single row with explicit `needs_review`

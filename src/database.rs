@@ -107,20 +107,26 @@ impl Database {
         contact_discovery::backfill(&self.pool, states, sources, season).await
     }
 
-    #[tracing::instrument(skip(self))]
-    pub async fn next_job(&self, source: Option<Source>, max_attempts: u32) -> Result<Option<Job>> {
-        self.next_job_with_priority(source, max_attempts, JobClass::Profile)
+    #[tracing::instrument(skip(self, states))]
+    pub async fn next_job(
+        &self,
+        source: Option<Source>,
+        max_attempts: u32,
+        states: &[String],
+    ) -> Result<Option<Job>> {
+        self.next_job_with_priority(source, max_attempts, JobClass::Profile, states)
             .await
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, states))]
     pub async fn next_job_with_priority(
         &self,
         source: Option<Source>,
         max_attempts: u32,
         preferred: JobClass,
+        states: &[String],
     ) -> Result<Option<Job>> {
-        queue::next(&self.pool, source, max_attempts, preferred).await
+        queue::next(&self.pool, source, max_attempts, preferred, states).await
     }
 
     #[tracing::instrument(skip(self))]
@@ -195,20 +201,12 @@ impl Database {
                 serde_json::from_value(record).context("decoding canonical athlete report")
             })
             .collect::<Result<Vec<_>>>()?;
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT source, url, detail FROM ( \
-             SELECT source, url, concat_ws(': ', 'page ' || status, last_error) AS detail \
-             FROM scrape_pages WHERE status <> 'succeeded' \
-             UNION ALL \
-             SELECT source, url, 'page note: ' || note FROM scrape_pages CROSS JOIN LATERAL unnest(notes) AS note \
-             UNION ALL \
-             SELECT source, source_url, concat_ws(' | ', 'unassigned result', event, raw_mark, status) \
-             FROM results WHERE athlete_id IS NULL \
-             ) issues ORDER BY source, url, detail",
-        )
-        .fetch_all(&mut *transaction)
-        .await
-        .context("loading page coverage and unassigned result issues")?;
+        let rows: Vec<(String, String, String)> =
+            sqlx::query_as(include_str!("database/export_issues.sql"))
+                .bind(states)
+                .fetch_all(&mut *transaction)
+                .await
+                .context("loading page coverage and unassigned result issues")?;
         transaction.commit().await?;
         let issues = rows
             .into_iter()

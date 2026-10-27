@@ -127,7 +127,8 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
             .await?;
             seed_athlete(&database, "31", "Ohio Runner", "OH", 2027).await?;
             seed_athlete(&database, "41", "Later Graduate", "WI", 2028).await?;
-            let pending = records::target(Source::MileSplit, "pending");
+            let mut pending = records::target(Source::MileSplit, "pending");
+            pending.context.state = Some("WI".to_owned());
             database.enqueue(&[pending.clone()], false).await?;
 
             let options = ExportOptions {

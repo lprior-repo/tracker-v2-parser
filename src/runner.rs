@@ -299,6 +299,7 @@ async fn next_enabled_job(
                 Some(source),
                 config.limits.max_attempts,
                 schedule.preferred(source),
+                &config.states,
             )
             .await?
         {
@@ -329,10 +330,15 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
 async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
     for source in config.enabled_sources() {
         let exhausted: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2)",
+            "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2 \
+             AND (cardinality($3::text[]) = 0 OR p.cursor->'context'->>'state'=ANY($3) \
+               OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
+                 AND p.cursor->'context'->>'state' IS NULL \
+                 AND p.cursor->'context'->>'subject_id'=array_to_string($3,','))))",
         )
         .bind(source.as_str())
         .bind(i32::try_from(config.limits.max_attempts).context("converting maximum attempts")?)
+        .bind(&config.states)
         .fetch_one(database.pool())
         .await
         .context("checking exhausted checkpoints")?;
@@ -477,15 +483,22 @@ async fn replay_page(
         .start_attempt(id, config.limits.max_attempts)
         .await?
     {
-        let exhausted: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE id=$1 AND status IN ('pending','failed') AND attempts >= $2)",
+        let replayable: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE p.id=$1 \
+             AND (p.status='succeeded' OR (p.status IN ('pending','failed') AND p.attempts >= $2)) \
+             AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
+               SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+               AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
+                 CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+               regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
+                 CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))))",
         )
         .bind(id)
         .bind(i32::try_from(config.limits.max_attempts).context("converting maximum attempts")?)
         .fetch_one(database.pool())
         .await
         .context("checking replay checkpoint")?;
-        ensure!(exhausted, "replay checkpoint could not start an attempt");
+        ensure!(replayable, "replay checkpoint could not start an attempt");
     }
     let body = match read_replay(input).await {
         Ok(body) => body,
