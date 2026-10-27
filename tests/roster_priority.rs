@@ -68,16 +68,17 @@ async fn given_late_roster_amid_bulk_when_selected_then_fixture_athletes_are_sav
 }
 
 #[tokio::test]
-async fn given_all_classes_when_each_source_completes_two_cycles_then_profiles_rosters_and_bulk_progress()
+async fn given_all_classes_when_each_source_completes_two_cycles_then_profiles_rosters_contacts_and_bulk_progress()
 -> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             for source in [Source::AthleticNet, Source::MileSplit] {
-                let targets: Vec<_> = (0..12)
+                let targets: Vec<_> = (0..10)
                     .map(|id| target(source, PageKind::Athlete, id))
                     .chain((100..102).map(|id| target(source, PageKind::Roster, id)))
                     .chain((200..202).map(|id| target(source, PageKind::Directory, id)))
+                    .chain((300..302).map(|id| target(source, PageKind::Contacts, id)))
                     .collect();
                 database.enqueue(&targets, false).await?;
             }
@@ -89,7 +90,7 @@ async fn given_all_classes_when_each_source_completes_two_cycles_then_profiles_r
                     (JobClass::Roster, PageKind::Roster),
                     (JobClass::Profile, PageKind::Athlete),
                     (JobClass::Profile, PageKind::Athlete),
-                    (JobClass::Profile, PageKind::Athlete),
+                    (JobClass::Contacts, PageKind::Contacts),
                     (JobClass::Bulk, PageKind::Directory),
                 ] {
                     for source in [Source::AthleticNet, Source::MileSplit] {
@@ -187,7 +188,12 @@ async fn given_failed_priority_when_untouched_work_exists_then_retry_is_bounded_
             let mut id = 0;
             for source in [Source::AthleticNet, Source::MileSplit] {
                 for limit in 1..=3 {
-                    for priority in [JobClass::Profile, JobClass::Roster, JobClass::Bulk] {
+                    for priority in [
+                        JobClass::Profile,
+                        JobClass::Roster,
+                        JobClass::Contacts,
+                        JobClass::Bulk,
+                    ] {
                         exercise_retry_limit(&database, source, limit, priority, id).await?;
                         id += 2;
                     }
@@ -314,6 +320,56 @@ async fn given_missing_preferred_classes_when_selecting_then_remaining_classes_f
                     assert!(database.next_job(Some(source), 3).await?.is_none());
                 }
             }
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_contacts_behind_old_bulk_when_contact_turn_arrives_then_deeper_pages_progress_first()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let bulk: Vec<_> = (0..100)
+                .map(|id| target(Source::MileSplit, PageKind::Directory, id))
+                .collect();
+            database.enqueue(&bulk, false).await?;
+            let homepage = target(Source::MileSplit, PageKind::Contacts, 100);
+            let mut deeper = target(Source::MileSplit, PageKind::Contacts, 101);
+            deeper.context.subject_id = Some("contacts-depth:2".into());
+            database.enqueue(&[homepage, deeper], false).await?;
+            let job = database
+                .next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts)
+                .await?
+                .context("contact turn must not select old bulk")?;
+            assert_eq!(job.target.kind, PageKind::Contacts);
+            assert_eq!(
+                job.target.context.subject_id.as_deref(),
+                Some("contacts-depth:2")
+            );
+            assert!(database.start_attempt(job.id, 3).await?);
+            save(
+                &database,
+                Some(job.id),
+                &job.target,
+                "{}",
+                &ParsedPage::default(),
+            )
+            .await?;
+            let homepage = database
+                .next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Contacts)
+                .await?
+                .context("remaining contact homepage")?;
+            assert_eq!(homepage.target.kind, PageKind::Contacts);
+            assert!(homepage.target.context.subject_id.is_none());
+            let bulk = database
+                .next_job_with_priority(Some(Source::MileSplit), 3, JobClass::Bulk)
+                .await?
+                .context("bulk still has its turn")?;
+            assert_eq!(bulk.target.kind, PageKind::Directory);
             database.close().await;
             Ok(())
         })

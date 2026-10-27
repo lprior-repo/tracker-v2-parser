@@ -118,10 +118,12 @@ fn roster_rows(
     context: &PageContext,
     page: ParsedPage,
 ) -> Result<ParsedPage> {
+    let rows = html::selector("li.athlete-row")?;
+    let empty = root.select(&rows).next().is_none();
     let mut page = root
-        .select(&html::selector("li.athlete-row")?)
+        .select(&rows)
         .try_fold(page, |page, row| roster_row(target, context, row, page))?;
-    if page.athletes.is_empty() {
+    if empty {
         page.notes.push(
             "Published school roster is empty; no athlete absence inferred beyond this capture"
                 .to_owned(),
@@ -136,41 +138,12 @@ fn roster_row(
     row: ElementRef<'_>,
     mut page: ParsedPage,
 ) -> Result<ParsedPage> {
-    let link = row
-        .select(&html::selector("a[href*='/athletes/']")?)
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("MileSplit roster row missing athlete profile identity"))?;
-    let url = targets::linked(
-        &target.url,
-        link.value()
-            .attr("href")
-            .ok_or_else(|| anyhow::anyhow!("athlete URL missing"))?,
-    )?;
-    let id = targets::path_id(&url, "athletes")?;
-    let published = html::text(link);
-    ensure!(
-        !published.is_empty(),
-        "MileSplit roster athlete {id} missing name"
-    );
-    let name = published.split_once(',').map_or_else(
-        || published.clone(),
-        |(last, first)| format!("{} {}", first.trim(), last.trim()),
-    );
+    let (id, url, published) = roster_identity(target, row)?;
     let claim = html::value(row, ".column-grad-year")?;
     let grad = html::graduation_year(claim.as_deref())?;
     let gender = html::value(row, ".column-gender")?
         .as_deref()
         .and_then(html::gender);
-    let athlete = Athlete {
-        id: id.clone(),
-        name,
-        school_id: context.school_id.clone(),
-        state: context.state.clone(),
-        gender,
-        graduation_year: grad,
-        profile_url: Some(url.clone()),
-        ..Athlete::default()
-    };
     let sports = active_sports(row)?;
     let sport = sports
         .first()
@@ -178,18 +151,75 @@ fn roster_row(
         .or(context.sport)
         .map_or(Sport::Outdoor, |value| value);
     let next_context = PageContext {
-        athlete_id: Some(id),
+        athlete_id: Some(id.clone()),
         sport: Some(sport),
         ..context.clone()
     };
     page.next.push(Target::get(
         Source::MileSplit,
         PageKind::Athlete,
-        url,
+        url.clone(),
         next_context,
     ));
-    page.athletes.push(athlete);
+    if published.is_empty() {
+        page.notes.push(format!(
+            "Incomplete MileSplit roster observation: published athlete name missing; {}",
+            serde_json::json!({
+                "athlete_id": id,
+                "profile_url": url,
+                "school_id": context.school_id,
+                "graduation_claim": claim,
+                "graduation_year": grad,
+                "gender": gender,
+                "sports": sports,
+                "row": row.html(),
+            })
+        ));
+        return Ok(page);
+    }
+    let name = published.split_once(',').map_or_else(
+        || published.clone(),
+        |(last, first)| format!("{} {}", first.trim(), last.trim()),
+    );
+    page.athletes.push(Athlete {
+        id,
+        name,
+        school_id: context.school_id.clone(),
+        state: context.state.clone(),
+        gender,
+        graduation_year: grad,
+        profile_url: Some(url),
+        ..Athlete::default()
+    });
     Ok(page)
+}
+
+fn roster_identity(target: &Target, row: ElementRef<'_>) -> Result<(String, String, String)> {
+    row.select(&html::selector("a[href*='/athletes/']")?)
+        .try_fold(None::<(String, String, String)>, |identity, link| {
+            let href = link
+                .value()
+                .attr("href")
+                .ok_or_else(|| anyhow::anyhow!("athlete URL missing"))?;
+            let url = targets::linked(&target.url, href)?;
+            let id = targets::path_id(&url, "athletes")?;
+            let published = html::text(link);
+            match identity {
+                None => Ok(Some((id, url, published))),
+                Some((previous, previous_url, name)) => {
+                    ensure!(
+                        previous == id,
+                        "MileSplit roster row has conflicting athlete identities"
+                    );
+                    if name.is_empty() && !published.is_empty() {
+                        Ok(Some((id, url, published)))
+                    } else {
+                        Ok(Some((previous, previous_url, name)))
+                    }
+                }
+            }
+        })?
+        .ok_or_else(|| anyhow::anyhow!("MileSplit roster row missing athlete profile identity"))
 }
 
 fn active_sports(row: ElementRef<'_>) -> Result<Vec<Sport>> {

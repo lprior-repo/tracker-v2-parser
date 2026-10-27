@@ -21,20 +21,14 @@ pub(super) fn in_scope(record: &AthleteRecord, options: &ExportOptions) -> bool 
     state && year
 }
 
-pub(super) fn eligible(record: &AthleteRecord, options: &ExportOptions) -> bool {
-    record
-        .graduation_year
-        .is_some_and(|year| options.graduation_years.contains(&year))
-        && record
+pub(super) fn requires_review(record: &AthleteRecord) -> bool {
+    record.needs_review
+        || record.name.trim().is_empty()
+        || record.graduation_year.is_none()
+        || !record
             .schools
             .iter()
-            .filter_map(|school| school.state.as_deref())
-            .any(|state| {
-                options
-                    .states
-                    .iter()
-                    .any(|selected| selected.eq_ignore_ascii_case(state.trim()))
-            })
+            .any(|school| published(school.state.as_deref()))
 }
 
 pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
@@ -43,14 +37,14 @@ pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
         issues.push("unresolved identity: needs_review");
     }
     if record.graduation_year.is_none() {
-        issues.push("unknown graduation year; excluded from Athletes");
+        issues.push("unknown graduation year; source row retained for review");
     }
     if !record
         .schools
         .iter()
         .any(|school| published(school.state.as_deref()))
     {
-        issues.push("missing published state; excluded from Athletes");
+        issues.push("missing published state; source row retained for review");
     }
     if record.name.trim().is_empty() {
         issues.push("missing athlete name");

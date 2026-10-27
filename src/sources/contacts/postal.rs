@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::model::{School, Target};
 
-use super::{normalized, public_url, selector, text};
+use super::{normalized, selector, text};
 
 pub(super) fn parse(document: &Html, target: &Target, name: &str) -> Result<Vec<School>> {
     let scripts = selector("script[type='application/ld+json']")?;
@@ -75,7 +75,7 @@ fn json_school(node: &Value, target: &Target, name: &str) -> Option<School> {
         website: node
             .get("url")
             .and_then(Value::as_str)
-            .and_then(|value| public_url(value).ok())
+            .and_then(|value| crate::transport::policy::source_url(target, value).ok())
             .map(Into::into),
         public_email: None,
         uuid: None,

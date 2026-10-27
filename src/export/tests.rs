@@ -120,7 +120,7 @@ fn given_many_events_when_exporting_then_one_literal_string_row_contains_bests_a
 }
 
 #[test]
-fn given_review_flag_when_exporting_then_known_cohort_row_remains_visible_and_flagged()
+fn given_uncertain_year_state_or_identity_when_exporting_then_source_rows_remain_visible_and_flagged()
 -> anyhow::Result<()> {
     let destination = path("issues");
     let mut unknown = athlete();
@@ -131,15 +131,49 @@ fn given_review_flag_when_exporting_then_known_cohort_row_remains_visible_and_fl
     let mut outside = athlete();
     outside.id = 44;
     outside.graduation_year = Some(2027);
-    write_spreadsheets(&destination, &[unknown, unresolved, outside], &options())?;
+    let mut missing_state = athlete();
+    missing_state.id = 45;
+    missing_state.schools[0].state = None;
+    write_spreadsheets(
+        &destination,
+        &[unknown, unresolved, outside, missing_state],
+        &options(),
+    )?;
     let athletes = range(&destination, "Athletes")?;
-    assert_eq!(athletes.height(), 2);
-    let values = row(&athletes)?;
-    assert_eq!(values["athlete_id"], "43");
-    assert_eq!(values["needs_review"], "true");
-    assert!(values.values().any(|value| value == "10.4a"));
+    let headers = athletes
+        .rows()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing headers"))?;
+    let mut by_id = BTreeMap::new();
+    for values in athletes.rows().skip(1) {
+        let fields = headers
+            .iter()
+            .zip(values)
+            .map(|(header, value)| (header.to_string(), value.to_string()))
+            .collect::<BTreeMap<_, _>>();
+        assert!(by_id.insert(fields["athlete_id"].clone(), fields).is_none());
+    }
+    assert_eq!(
+        by_id.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["42", "43", "45"]
+    );
+    assert_eq!(by_id["42"]["graduation_year"], "");
+    assert!(by_id["42"]["review_notes"].contains("unknown graduation year"));
+    assert_eq!(by_id["45"]["school_states"], "");
+    assert!(by_id["45"]["review_notes"].contains("missing published state"));
+    assert!(by_id["43"]["review_notes"].contains("unresolved identity"));
+    assert!(
+        by_id
+            .values()
+            .all(|fields| fields["needs_review"] == "true")
+    );
+    assert!(
+        by_id
+            .values()
+            .all(|fields| fields.values().any(|value| value == "10.4a"))
+    );
     let issues = range(&destination, "Issues")?;
-    assert_eq!(issues.height(), 3);
+    assert_eq!(issues.height(), 4);
     assert!(
         issues
             .rows()
@@ -201,6 +235,46 @@ fn given_empty_snapshot_when_exporting_then_both_required_sheets_still_exist() -
     );
     assert_eq!(range(&destination, "Athletes")?.height(), 1);
     assert_eq!(range(&destination, "Issues")?.height(), 1);
+    std::fs::remove_file(destination)?;
+    Ok(())
+}
+
+#[test]
+fn given_numeric_disqualified_result_when_exported_then_published_status_and_mark_remain_visible()
+-> anyhow::Result<()> {
+    let destination = path("reported-status");
+    let mut record = athlete();
+    let mut disqualified = evidence("100m", "9.99a");
+    disqualified.performance.reported_status = Some("DQ".to_owned());
+    record.performances.push(disqualified);
+    let mut options = options();
+    options.per_athlete_sheets = true;
+    write_spreadsheets(&destination, &[record], &options)?;
+    let main = row(&range(&destination, "Athletes")?)?;
+    assert_eq!(
+        main["best_observed::athleticnet::outdoor::100m::fat::unknown::mark"],
+        "10.4a"
+    );
+    assert!(main["review_notes"].contains("9.99a"));
+    assert!(main["review_notes"].contains("DQ"));
+    assert_eq!(main["needs_review"], "true");
+    let detail = range(&destination, "Athlete_42")?;
+    let mut rows = detail.rows();
+    let headers = rows
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing detail headers"))?;
+    let fields = rows
+        .map(|values| {
+            headers
+                .iter()
+                .zip(values)
+                .map(|(header, value)| (header.to_string(), value.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .find(|values| values.get("raw_mark").is_some_and(|mark| mark == "9.99a"))
+        .ok_or_else(|| anyhow::anyhow!("missing disqualified observation"))?;
+    assert_eq!(fields["reported_status"], "DQ");
+    assert!(fields["comparison_context"].contains("disqualification"));
     std::fs::remove_file(destination)?;
     Ok(())
 }

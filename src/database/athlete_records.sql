@@ -5,15 +5,19 @@ WITH school_links AS (
     SELECT p.athlete_id, r.represented_school_id FROM results r
     JOIN athlete_sources p ON p.id = r.athlete_source_id
     WHERE r.represented_school_id IS NOT NULL
-), school_states AS (
+), school_state_values AS (
     SELECT sl.athlete_id,
-           bool_or(NULLIF(btrim(s.state), '') IS NOT NULL) AS has_state,
+           lower(btrim(s.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) AS state
+    FROM school_links sl JOIN schools s ON s.id = sl.school_id
+), school_states AS (
+    SELECT athlete_id,
+           bool_or(NULLIF(state, '') IS NOT NULL) AS has_state,
            bool_or(EXISTS (
                SELECT 1 FROM unnest($1::text[]) AS selected(state)
-               WHERE lower(selected.state) = lower(btrim(s.state))
+               WHERE lower(selected.state) = school_state_values.state
            )) AS matches_state
-    FROM school_links sl JOIN schools s ON s.id = sl.school_id
-    GROUP BY sl.athlete_id
+    FROM school_state_values
+    GROUP BY athlete_id
 ), selected AS (
     SELECT a.*,
            a.needs_review OR (a.state IS NULL AND NOT COALESCE(ss.has_state, false))

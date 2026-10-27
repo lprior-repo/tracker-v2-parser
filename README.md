@@ -44,18 +44,24 @@ Large worksheets continue as `Athletes_2`, `Issues_2`, or
 remain clickable; every continuation sheet is reopened and checked before
 publication. The configured athlete-row file splitting still applies.
 
-The `Athletes` sheet has exactly one row per canonical athlete ID in the selected
-known cohort/state. Each comparable event/category gets PR columns on that row;
-indoor, outdoor and XC marks are not collapsed together. A review flag does not
-hide an otherwise selected athlete: `needs_review` is explicit on the row and
-the conflict is also listed in `Issues`. Unknown graduation years remain unknown
-and are reported in `Issues`, not assigned to the requested cohort.
+The `Athletes` sheet has exactly one row per canonical athlete ID returned for
+the requested cohort/state scope. Each comparable event/category gets PR columns
+on that row; indoor, outdoor and XC marks are not collapsed together. Uncertain
+identity, graduation year or school state does not hide the source row:
+`needs_review` and `review_notes` identify the uncertainty on `Athletes`, with
+details also in `Issues`. Unknown values remain blank. These rows are review
+candidates, not accepted members of the requested cohort/state; known
+out-of-scope records remain excluded. Non-comparable marks retain their reported
+status and rejection reason instead of silently disappearing from the export.
 
 MileSplit profiles retain all public sport/competition-level PRs, visible career
 results, biography/identity sections, JSON-LD, published progression values,
 links and media metadata. `Profile_details` contains the exact retained JSON in
 ordered UTF-8-safe chunks, without multiplying rows in `Athletes`. Masked results
 and subscription examples are not invented career performances.
+Only explicit provenance-link columns become hyperlinks. Opaque JSON chunks
+remain literal text even when a chunk begins with a URL.
+
 
 Before parsing a MileSplit athlete response, the CLI retains its
 transport-sanitized bytes under their SHA-256 content address. The default
@@ -182,9 +188,26 @@ results when no source athlete identifier is available. When the published
 canonical file matches the selected result, its rows are not queued twice.
 AthleticRUNMEET tables retain individual and relay rows, including DNS/DQ and
 duplicate published rows, without inventing athlete IDs. Within each source's
-eight scheduling turns, six reservations go to profiles, one to rosters and one
-to bulk pages; empty classes fall back to available work. This prevents the
-national roster backlog from starving already-discovered athlete profiles.
+eight scheduling turns, five reservations go to profiles, one to rosters, one to
+official-school contacts and one to bulk pages; empty classes fall back to
+available work. This prevents roster/bulk backlogs from starving profiles or
+contact discovery.
+
+Scraping backfills contact checkpoints from existing in-scope athletic-provider
+school websites and discovers them when new school pages are parsed. Plain
+published DNS hostnames/paths are requested with HTTPS while the original
+website string remains stored; ambiguous malformed addresses are not repaired.
+A full-page access challenge blocks contact acquisition for that site's
+authority, not unrelated school sites or athlete pages. Public sign-in links and
+embedded contact-form CAPTCHA widgets do not by themselves block a page.
+Staff links use the effective response URL and published HTML base without
+changing checkpoint identity or broadening the school-site crawl authority.
+Contact HTML is parsed in memory rather than retained as a raw capture;
+recognized credential-bearing derived URLs are omitted before storage or
+queueing, without discarding other published contact or postal records.
+
+Unnamed linked roster observations remain in `Issues` with profile follow-ups;
+named peers are saved without inventing names for the incomplete observations.
 
 MileSplit's public structured performance response supplies athlete identities
 only when the athlete ID agrees with a published HTTPS profile URL and the row

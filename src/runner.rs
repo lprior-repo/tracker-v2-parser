@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use tokio::io::AsyncReadExt;
@@ -37,6 +40,7 @@ impl Schedule {
         };
         match slot {
             3 => JobClass::Roster,
+            6 => JobClass::Contacts,
             7 => JobClass::Bulk,
             _ => JobClass::Profile,
         }
@@ -119,6 +123,9 @@ impl Runner {
         let targets = Self::discover_targets(config)?;
         targets.iter().try_for_each(validate_target)?;
         database.enqueue(&targets, refresh).await?;
+        database
+            .backfill_contacts(&config.states, &config.enabled_sources(), config.season)
+            .await?;
         let mut athleticnet = make_transport(config, Source::AthleticNet)?;
         let mut milesplit = make_transport(config, Source::MileSplit)?;
         let result = self
@@ -254,7 +261,7 @@ async fn acquire_job(database: &Database, job: &Job, transport: &mut Transport) 
                 .fail_job(job, failure.capture.as_ref(), &detail, failure.blocked)
                 .await
                 .with_context(|| format!("recording page failure after: {detail}"))?;
-            if failure.blocked {
+            if failure.blocked && job.target.kind != crate::model::PageKind::Contacts {
                 return Err(error);
             }
             tracing::warn!("{detail}");
@@ -304,7 +311,7 @@ async fn next_enabled_job(
 async fn check_source_stops(database: &Database, config: &Config) -> Result<()> {
     for source in config.enabled_sources() {
         let blocked: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND status='blocked')",
+            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND status='blocked' AND cursor->>'kind' <> 'contacts')",
         )
         .bind(source.as_str())
         .fetch_one(database.pool())
@@ -357,9 +364,17 @@ async fn persist_capture(
             .map(|()| None);
         }
     };
+    let parse_target =
+        if job.target.kind == crate::model::PageKind::Contacts && job.target.url != capture.url {
+            let mut target = job.target.clone();
+            target.url.clone_from(&capture.url);
+            Cow::Owned(target)
+        } else {
+            Cow::Borrowed(&job.target)
+        };
     let parsed = match std::str::from_utf8(&capture.body)
         .context("source response is not UTF-8")
-        .and_then(|body| sources::parse(&job.target, body))
+        .and_then(|body| sources::parse(&parse_target, body))
     {
         Ok(mut parsed) => {
             if let Some(evidence) = retained {
@@ -368,7 +383,8 @@ async fn persist_capture(
             parsed
         }
         Err(error) => {
-            let blocked = error.is::<sources::AccessDenied>();
+            let blocked = error.is::<sources::AccessDenied>()
+                || error.is::<sources::contacts::AccessDenied>();
             let error = error.context("parsing source page");
             let error = match retained {
                 Some(evidence) => error.context(evidence.describe()),
@@ -379,7 +395,7 @@ async fn persist_capture(
                 .fail_job(job, Some(&capture), &detail, blocked)
                 .await
                 .with_context(|| format!("recording page failure after: {detail}"))?;
-            if blocked {
+            if blocked && job.target.kind != crate::model::PageKind::Contacts {
                 return Err(error);
             }
             return Ok(Some(error));
@@ -441,13 +457,22 @@ async fn replay_page(
         .enqueue(std::slice::from_ref(&target), true)
         .await?;
     let cursor = serde_json::to_value(&target)?;
-    let id: i64 = sqlx::query_scalar("SELECT id FROM scrape_pages WHERE source=$1 AND cursor=$2")
-        .bind(target.source.as_str())
-        .bind(cursor)
-        .fetch_one(database.pool())
-        .await
-        .context("finding replay checkpoint")?;
-    let job = Job { id, target };
+    let (id, cursor): (i64, serde_json::Value) = sqlx::query_as(
+        "SELECT id,cursor FROM scrape_pages WHERE source=$1 AND (cursor=$2 OR ( \
+         cursor->>'kind'='contacts' AND $2::jsonb->>'kind'='contacts' \
+         AND url=$2::jsonb->>'url' \
+         AND cursor->'context'->>'school_id'=$2::jsonb->'context'->>'school_id')) \
+         ORDER BY (cursor=$2) DESC,id LIMIT 1",
+    )
+    .bind(target.source.as_str())
+    .bind(cursor)
+    .fetch_one(database.pool())
+    .await
+    .context("finding replay checkpoint")?;
+    let job = Job {
+        id,
+        target: serde_json::from_value(cursor).context("decoding replay checkpoint target")?,
+    };
     if !database
         .start_attempt(id, config.limits.max_attempts)
         .await?
@@ -466,14 +491,26 @@ async fn replay_page(
         Ok(body) => body,
         Err(error) => return record_failure(database, &job, None, false, error).await,
     };
-    let capture = match crate::transport::redact_capture(Capture {
-        url: job.target.url.clone(),
-        status: 200,
-        content_type: String::from("application/octet-stream"),
-        body,
-    }) {
+    let capture = match crate::transport::prepare_response(
+        job.target.kind,
+        Capture {
+            url: job.target.url.clone(),
+            status: 200,
+            content_type: String::from("application/octet-stream"),
+            body,
+        },
+    ) {
         Ok(capture) => capture,
-        Err(error) => return record_failure(database, &job, None, false, error).await,
+        Err(failure) => {
+            return record_failure(
+                database,
+                &job,
+                failure.capture.as_ref(),
+                failure.blocked,
+                anyhow!(failure.detail),
+            )
+            .await;
+        }
     };
     persist_capture(database, &job, capture)
         .await?
@@ -549,7 +586,7 @@ mod schedule_tests {
         JobClass::Roster,
         JobClass::Profile,
         JobClass::Profile,
-        JobClass::Profile,
+        JobClass::Contacts,
         JobClass::Bulk,
     ];
 

@@ -8,6 +8,7 @@ use sqlx::{
 
 use crate::model::{AthleteRecord, Capture, Counts, ParsedPage, Source, Target};
 
+mod contact_discovery;
 mod contacts;
 mod identity;
 mod keys;
@@ -36,6 +37,7 @@ pub struct Job {
 pub enum JobClass {
     Profile,
     Roster,
+    Contacts,
     Bulk,
 }
 
@@ -44,6 +46,7 @@ impl JobClass {
         match self {
             Self::Profile => "profile",
             Self::Roster => "roster",
+            Self::Contacts => "contacts",
             Self::Bulk => "bulk",
         }
     }
@@ -92,6 +95,16 @@ impl Database {
         let mut transaction = self.pool.begin().await?;
         let result = queue::enqueue(&mut transaction, targets, refresh).await;
         finish(transaction, result).await
+    }
+
+    #[tracing::instrument(skip(self, states, sources))]
+    pub async fn backfill_contacts(
+        &self,
+        states: &[String],
+        sources: &[Source],
+        season: i32,
+    ) -> Result<u64> {
+        contact_discovery::backfill(&self.pool, states, sources, season).await
     }
 
     #[tracing::instrument(skip(self))]

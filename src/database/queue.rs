@@ -15,8 +15,24 @@ pub(super) async fn enqueue(
     targets: &[Target],
     refresh: bool,
 ) -> Result<u64> {
+    let count = enqueue_rows(connection, targets, refresh).await?;
+    if targets
+        .iter()
+        .any(|target| target.kind == crate::model::PageKind::Contacts)
+    {
+        note_contact_stops(connection).await?;
+    }
+    Ok(count)
+}
+
+#[tracing::instrument(skip(connection, targets))]
+pub(super) async fn enqueue_rows(
+    connection: &mut PgConnection,
+    targets: &[Target],
+    refresh: bool,
+) -> Result<u64> {
     targets.iter().try_for_each(validate_target)?;
-    stream::iter(targets.iter().map(Ok::<_, anyhow::Error>))
+    let (_, count) = stream::iter(targets.iter().map(Ok::<_, anyhow::Error>))
         .try_fold(
             (connection, 0_u64),
             |(connection, count), target| async move {
@@ -27,18 +43,41 @@ pub(super) async fn enqueue(
                 Ok((connection, total))
             },
         )
-        .await
-        .map(|(_, count)| count)
+        .await?;
+    Ok(count)
+}
+
+#[tracing::instrument(skip(connection))]
+pub(super) async fn note_contact_stops(connection: &mut PgConnection) -> Result<()> {
+    sqlx::query(
+        "UPDATE scrape_pages p SET notes=array_append(p.notes, \
+           'Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' | ' || COALESCE(blocked.last_error,'access stop')) \
+         FROM scrape_pages blocked \
+         WHERE p.status IN ('pending','failed') AND p.cursor->>'kind'='contacts' \
+         AND blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+         AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
+           CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+         regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
+           CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') \
+         AND NOT ('Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' | ' || COALESCE(blocked.last_error,'access stop')) = ANY(p.notes)",
+    )
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 #[tracing::instrument(skip(connection, target))]
 async fn enqueue_one(connection: &mut PgConnection, target: &Target, refresh: bool) -> Result<u64> {
     Ok(sqlx::query(
-        "INSERT INTO scrape_pages(page_key,source,url,cursor) VALUES($1,$2,$3,$4) \
+        "INSERT INTO scrape_pages(page_key,source,url,cursor) \
+         SELECT $1,$2,$3,$4 WHERE NOT ($6 AND EXISTS( \
+           SELECT 1 FROM scrape_pages existing WHERE existing.source=$2 AND existing.url=$3 \
+           AND existing.cursor->>'kind'='contacts' AND existing.cursor->'context'->>'school_id'=$7)) \
          ON CONFLICT(source,page_key) DO UPDATE SET status='pending',attempts=0,last_error=NULL,cursor=EXCLUDED.cursor \
-         WHERE $5 AND scrape_pages.status = 'succeeded'",
+         WHERE $5 AND scrape_pages.status = 'succeeded' AND scrape_pages.cursor->>'kind' <> 'contacts'",
     ).bind(keys::target(target)?).bind(target.source.as_str()).bind(&target.url)
         .bind(serde_json::to_value(target)?).bind(refresh)
+        .bind(target.kind == crate::model::PageKind::Contacts).bind(&target.context.school_id)
         .execute(connection).await?.rows_affected())
 }
 
@@ -57,15 +96,24 @@ pub(super) async fn next(
     preferred: JobClass,
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
-        "SELECT id,cursor FROM scrape_pages WHERE status IN ('pending','failed') AND attempts < $2 \
-         AND ($1::text IS NULL OR source=$1) \
-         ORDER BY (attempts = 0) DESC, \
-         CASE cursor->>'kind' \
+        "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND p.attempts < $2 \
+         AND ($1::text IS NULL OR p.source=$1) \
+         AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
+           SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+           AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+           regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))) \
+         ORDER BY (p.attempts = 0) DESC, \
+         CASE p.cursor->>'kind' \
            WHEN 'athlete' THEN ($3 <> 'profile')::int \
            WHEN 'roster' THEN ($3 <> 'roster')::int \
+           WHEN 'contacts' THEN ($3 <> 'contacts')::int \
            ELSE ($3 <> 'bulk')::int END, \
-         CASE cursor->>'kind' WHEN 'athlete' THEN 0 WHEN 'roster' THEN 1 ELSE 2 END, \
-         id LIMIT 1",
+         CASE p.cursor->>'kind' WHEN 'athlete' THEN 0 WHEN 'roster' THEN 1 WHEN 'contacts' THEN 2 ELSE 3 END, \
+         CASE WHEN p.cursor->>'kind'='contacts' THEN \
+           CASE p.cursor->'context'->>'subject_id' WHEN 'contacts-depth:2' THEN 0 WHEN 'contacts-depth:1' THEN 1 ELSE 2 END \
+           ELSE 0 END, p.id LIMIT 1",
     )
     .bind(source.map(Source::as_str))
     .bind(attempt_limit(max_attempts)?)
@@ -84,8 +132,14 @@ pub(super) async fn next(
 #[tracing::instrument(skip(pool))]
 pub(super) async fn start_attempt(pool: &PgPool, page_id: i64, max_attempts: u32) -> Result<bool> {
     Ok(sqlx::query(
-        "UPDATE scrape_pages SET attempts=attempts+1,status='pending' \
-         WHERE id=$1 AND status IN ('pending','failed') AND attempts < $2",
+        "UPDATE scrape_pages p SET attempts=attempts+1,status='pending' \
+         WHERE p.id=$1 AND p.status IN ('pending','failed') AND p.attempts < $2 \
+         AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
+           SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+           AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+           regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'')))",
     )
     .bind(page_id)
     .bind(attempt_limit(max_attempts)?)
@@ -136,13 +190,16 @@ pub(super) async fn fail(
     .bind(keys::target(&job.target)?)
     .bind(status)
     .bind(error)
-    .fetch_optional(connection)
+    .fetch_optional(&mut *connection)
     .await?;
     if id.is_none() {
         bail!(
             "page {} does not exist or does not match the supplied request",
             job.id
         );
+    }
+    if blocked && job.target.kind == crate::model::PageKind::Contacts {
+        note_contact_stops(connection).await?;
     }
     Ok(())
 }

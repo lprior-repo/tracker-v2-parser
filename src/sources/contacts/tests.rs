@@ -242,17 +242,13 @@ fn given_explicit_school_address_when_parsed_then_district_footer_is_ignored() -
 fn given_missing_or_blocked_content_when_parsed_then_unknown_is_not_reported_as_absence()
 -> Result<()> {
     let target = target("School", "https://school.edu/");
-    let page = parse(
+    let error = parse(
         &target,
         "<title>Access Denied</title><h1>Please sign in</h1>",
-    )?;
-    assert!(page.coaches.is_empty() && page.schools.is_empty());
-    assert_eq!(page.notes.len(), 3);
-    assert!(
-        page.notes
-            .iter()
-            .all(|note| note.contains("unknown or incomplete"))
-    );
+    )
+    .err()
+    .context("access challenge must not become an empty successful parse")?;
+    assert!(error.is::<super::AccessDenied>());
     assert!(parse(&target, "not html").is_err());
     assert!(
         parse(
@@ -282,6 +278,79 @@ fn given_provider_website_when_scheduling_then_no_paths_or_identity_are_invented
     school.website = Some("mailto:office@school.edu".to_owned());
     assert!(targets(Source::MileSplit, &school, 2026).is_err());
     Ok(())
+}
+
+#[test]
+fn given_unambiguous_scheme_less_websites_when_targeted_then_only_https_is_assumed_and_source_values_survive()
+-> Result<()> {
+    for (published, request) in [
+        ("lanettcityschools.org", "https://lanettcityschools.org/"),
+        (
+            "www.providencechristianschool.com",
+            "https://www.providencechristianschool.com/",
+        ),
+        (
+            "School.Example.edu/athletics/staff?view=all",
+            "https://school.example.edu/athletics/staff?view=all",
+        ),
+    ] {
+        let school = School {
+            id: "school-123".into(),
+            name: "School".into(),
+            state: Some("CA".into()),
+            website: Some(published.into()),
+            ..School::default()
+        };
+        let jobs = targets(Source::MileSplit, &school, 2025)?;
+        let [job] = jobs.as_slice() else {
+            anyhow::bail!("one published website must produce one contact request");
+        };
+        assert_eq!(job.url, request);
+        assert_eq!(job.source, Source::MileSplit);
+        assert_eq!(job.kind, PageKind::Contacts);
+        assert_eq!(job.context.school_id.as_deref(), Some("school-123"));
+        assert_eq!(job.context.school_name.as_deref(), Some("School"));
+        assert_eq!(job.context.state.as_deref(), Some("CA"));
+        assert_eq!(job.context.season, Some(2025));
+        assert_eq!(school.website.as_deref(), Some(published));
+    }
+    Ok(())
+}
+
+#[test]
+fn given_ambiguous_or_malformed_websites_when_targeted_then_no_url_is_repaired() {
+    for published in [
+        "not-a-url",
+        "not a URL",
+        "https:/school.edu",
+        "https:///school.edu",
+        "http//school.edu",
+        "//school.edu/staff",
+        "ftp://school.edu",
+        "mailto:office@school.edu",
+        "user:password@school.edu",
+        "https://user:password@school.edu/",
+        "school.edu:443/staff",
+        "555.123.4567",
+        "tel:5551234567",
+        "www..school.edu",
+        "-school.edu",
+        "school-.edu",
+        "school.edu\\staff",
+        "school.edu staff",
+    ] {
+        let school = School {
+            id: "school-123".into(),
+            name: "School".into(),
+            website: Some(published.into()),
+            ..School::default()
+        };
+        assert!(
+            targets(Source::MileSplit, &school, 2026).is_err(),
+            "{published}"
+        );
+        assert_eq!(school.website.as_deref(), Some(published));
+    }
 }
 
 #[test]
@@ -374,5 +443,115 @@ fn given_ambiguous_or_unassociated_offices_when_parsed_then_mailboxes_remain_unk
             .iter()
             .any(|note| note.contains("office mailbox"))
     );
+    Ok(())
+}
+
+#[test]
+fn given_public_staff_with_only_widget_headings_when_parsed_then_real_contacts_are_retained()
+-> Result<()> {
+    let public = SCOPED.replace("<h1>", "<h2>").replace("</h1>", "</h2>");
+    let body = format!(
+        "{public}<footer><h1>Subscribe to our newsletter</h1></footer>\
+         <aside><h1>Sign in to the parent portal</h1></aside>\
+         <form><h1>Verify you are human</h1><div class='g-recaptcha'></div></form>"
+    );
+    let page = parse(
+        &target("Example High School", "https://school.example.edu/"),
+        &body,
+    )?;
+    assert_eq!(
+        page.coaches
+            .iter()
+            .map(|coach| coach.email.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from([
+            "ada.runner@school.example.edu",
+            "ben.walker@school.example.edu",
+            "chris.thrower@school.example.edu",
+        ])
+    );
+    assert_eq!(
+        page.schools
+            .iter()
+            .find_map(|school| school.public_email.as_deref()),
+        Some("office@school.example.edu")
+    );
+    let error = parse(
+        &target("School", "https://school.edu/"),
+        "<h1>Verify you are human</h1>",
+    )
+    .err()
+    .context("standalone challenge must remain blocked")?;
+    assert!(error.is::<super::AccessDenied>());
+    Ok(())
+}
+
+#[test]
+fn given_a_published_html_base_when_discovering_staff_then_relative_links_resolve_without_rescoping_school()
+-> Result<()> {
+    let mut target = target(
+        "Example High School",
+        "https://school.example.edu/athletics/cross-country",
+    );
+    target.context.subject_id = Some("contacts-depth:0".to_owned());
+    for (body, expected) in [
+        (
+            "<title>School</title><base href='/'><h1>School</h1><a href='staff'>Staff directory</a>",
+            "https://school.example.edu/staff",
+        ),
+        (
+            "<title>School</title><base href='https://unrelated.example.org/'><h1>School</h1><a href='staff'>Staff directory</a><a href='https://school.example.edu/coaches'>Track coaches</a>",
+            "https://school.example.edu/coaches",
+        ),
+    ] {
+        let page = parse(&target, body)?;
+        assert_eq!(
+            page.next
+                .iter()
+                .map(|next| next.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![expected]
+        );
+        assert!(
+            page.next
+                .iter()
+                .all(|next| next.context.school_id == target.context.school_id)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_jwt_bearing_derived_urls_when_parsing_public_contacts_then_safe_records_survive_without_credentials()
+-> Result<()> {
+    let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0cmFja2VyLXRlc3QifQ.signature";
+    for website in [
+        format!("https://school.example.edu/?public_route={jwt}"),
+        format!("https://school.example.edu/#public_route={jwt}"),
+        format!(
+            "https://school.example.edu/?public_route={}",
+            jwt.replace('.', "%2E")
+        ),
+    ] {
+        let body = SCOPED.replace(
+            "\"url\":\"https://school.example.edu/\"",
+            &format!("\"url\":\"{website}\""),
+        );
+        let body = format!("<a href='{website}'>Track staff</a>{body}");
+        let page = parse(
+            &target("Example High School", "https://school.example.edu/"),
+            &body,
+        )?;
+        assert!(page.schools.iter().all(|school| school.website.is_none()));
+        assert!(
+            page.next
+                .iter()
+                .all(|next| !next.url.contains("public_route"))
+        );
+        assert_eq!(page.coaches.len(), 3);
+        assert!(page.schools.iter().any(|school| school.address.as_deref()
+            == Some("123 School Road")
+            && school.public_email.as_deref() == Some("office@school.example.edu")));
+    }
     Ok(())
 }

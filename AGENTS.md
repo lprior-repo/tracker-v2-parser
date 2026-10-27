@@ -6,7 +6,7 @@ This is a single-crate Rust scraper and XLSX exporter using SQLx and PostgreSQL.
 The CLI provides `scrape` and `export`. Configuration selects states, graduation
 years, sources and bounded limits. The application loads `.env` when present.
 The application schema has six tables; SQLx migration metadata is separate.
-Browser transport is currently disabled pending safe network enforcement.
+Browser transport uses Chromiumoxide; access challenges require human handling.
 
 Read local skills matching the task before editing, plus their applicable linked
 references:
@@ -35,7 +35,8 @@ moon run pipeline:test
 moon run pipeline:build
 moon run pipeline:doc
 env -u CI moon run pipeline:fmt-write
-env -u CI moon run pipeline:run
+env -u CI moon run pipeline:run -- scrape --config config.toml
+env -u CI moon run pipeline:run -- export --config config.toml --output athletes.xlsx
 moon ci --force
 ```
 

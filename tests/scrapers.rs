@@ -514,11 +514,17 @@ async fn given_conflicting_linked_profiles_when_observed_then_needs_review_preve
                 },
             )
             .await?;
-            let reviews: Vec<bool> =
-                sqlx::query_scalar("SELECT needs_review FROM athletes ORDER BY id")
+            let reviews: Vec<(i64, bool)> =
+                sqlx::query_as("SELECT id,needs_review FROM athletes ORDER BY id")
                     .fetch_all(&test.pool)
                     .await?;
-            assert_eq!(reviews, vec![true, true]);
+            assert_eq!(
+                reviews
+                    .iter()
+                    .map(|(_, review)| *review)
+                    .collect::<Vec<_>>(),
+                vec![true, true]
+            );
             database.close().await;
             let output = test.directory().join("review.xlsx");
             assert_success(
@@ -530,7 +536,30 @@ async fn given_conflicting_linked_profiles_when_observed_then_needs_review_preve
                     ])
                     .await?,
             );
-            assert_eq!(sheet_rows(&output, "Athletes")?.len(), 1);
+            let rows = sheet_rows(&output, "Athletes")?;
+            let headers = rows.first().context("missing athlete headers")?;
+            let id_column = headers
+                .iter()
+                .position(|header| header == "athlete_id")
+                .context("missing canonical athlete ID")?;
+            let review_column = headers
+                .iter()
+                .position(|header| header == "needs_review")
+                .context("missing review flag")?;
+            let mut written = std::collections::BTreeSet::new();
+            for values in rows.iter().skip(1) {
+                assert!(
+                    written.insert(values.get(id_column).context("missing athlete ID")?.clone())
+                );
+                assert_eq!(
+                    values.get(review_column).context("missing review flag")?,
+                    "true"
+                );
+            }
+            assert_eq!(
+                written,
+                reviews.iter().map(|(id, _)| id.to_string()).collect()
+            );
             assert_eq!(sheet_rows(&output, "Issues")?.len(), 3);
             Ok(())
         })
@@ -793,7 +822,7 @@ async fn given_compatible_explicit_link_when_observed_then_two_sources_share_one
 }
 
 #[tokio::test]
-async fn given_unknown_graduation_year_when_exported_then_athlete_is_issued_not_silently_eligible()
+async fn given_unknown_graduation_year_when_exported_then_source_row_is_visible_and_flagged()
 -> Result<()> {
     with_schema(|test| {
         Box::pin(async move {
@@ -822,11 +851,16 @@ async fn given_unknown_graduation_year_when_exported_then_athlete_is_issued_not_
                     ])
                     .await?,
             );
-            assert_eq!(sheet_rows(&output, "Athletes")?.len(), 1);
+            let athletes = sheet_rows(&output, "Athletes")?;
+            assert_eq!(athletes.len(), 2);
+            assert_eq!(cell(&athletes, "name")?, "Alex Morgan");
+            assert_eq!(cell(&athletes, "graduation_year")?, "");
+            assert_eq!(cell(&athletes, "needs_review")?, "true");
+            assert!(cell(&athletes, "review_notes")?.contains("unknown graduation year"));
             let issues = sheet_rows(&output, "Issues")?;
             assert_eq!(issues.len(), 2);
             assert_eq!(cell(&issues, "name")?, "Alex Morgan");
-            assert!(!cell(&issues, "issues")?.is_empty());
+            assert!(cell(&issues, "issues")?.contains("unknown graduation year"));
             Ok(())
         })
     })

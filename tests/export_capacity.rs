@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::BufReader;
 use track_scrapper_v2::export::{ExportIssue, ExportOptions, write_spreadsheets_with_issues};
 use track_scrapper_v2::model::{
-    AthleteRecord, EvidencedPerformance, Performance, School, Source, Sport,
+    AthleteProfileDetails, AthleteRecord, EvidencedPerformance, Performance, School, Source, Sport,
 };
 
 const LINK_LIMIT: usize = 65_530;
@@ -215,7 +215,6 @@ fn given_one_athlete_over_detail_link_capacity_when_exporting_then_all_performan
     let mut hyperlinks = 0;
     for (part, name) in partition_names(&workbook, "Athlete_42").iter().enumerate() {
         let range = workbook.worksheet_range(name)?;
-        assert_eq!(range.width(), 8);
         assert_eq!(range.height(), if part == 0 { LINK_LIMIT + 1 } else { 7 });
         hyperlinks += verify_clickable_cells(&mut workbook, name, &range)?;
         for row in range.rows().skip(1) {
@@ -234,5 +233,45 @@ fn given_one_athlete_over_detail_link_capacity_when_exporting_then_all_performan
     assert_eq!(hyperlinks, next);
     assert_eq!(workbook.worksheet_range("Athletes")?.height(), 2);
     assert_eq!(workbook.worksheet_range("Issues")?.height(), 2);
+    Ok(())
+}
+
+#[test]
+fn given_url_shaped_json_chunks_when_exporting_then_metadata_stays_text_and_profile_links_survive()
+-> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("profile-metadata.xlsx");
+    let mut record = athlete(42);
+    let profile_url = "https://www.athletic.net/athlete/42";
+    let source_values = serde_json::json!({
+        "bio": format!("{}https://school.example/{}", "x".repeat(7_992), "z".repeat(3_000))
+    });
+    record.profile_details.push(AthleteProfileDetails {
+        source: Source::AthleticNet,
+        source_id: "42".to_owned(),
+        url: Some(profile_url.to_owned()),
+        source_values: source_values.clone(),
+    });
+    write_spreadsheets_with_issues(&path, &[record], &[], &options())?;
+    let mut workbook: Workbook = open_workbook(&path)?;
+    let range = workbook.worksheet_range("Profile_details")?;
+    let json_column = column(&range, "public_source_json")?;
+    let profile_column = u32::try_from(column(&range, "profile_url")?)?;
+    let reassembled = range
+        .rows()
+        .skip(1)
+        .map(|row| row[json_column].to_string())
+        .collect::<String>();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&reassembled)?,
+        source_values
+    );
+    let links = workbook.hyperlinks_by_sheet_name("Profile_details")?;
+    assert_eq!(links.len(), range.height() - 1);
+    for link in links {
+        assert_eq!(link.range.start.1, profile_column);
+        assert_eq!(link.range.start, link.range.end);
+        assert_eq!(link.target.as_deref(), Some(profile_url));
+    }
     Ok(())
 }

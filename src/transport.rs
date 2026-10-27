@@ -1,5 +1,5 @@
 mod http;
-mod policy;
+pub(crate) mod policy;
 mod redact;
 
 use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
@@ -97,7 +97,7 @@ impl Transport {
             .one(target, &headers)
             .await
             .map_err(|error| failure(&error))?;
-        check_response(response)
+        prepare_response(target.kind, response)
     }
 
     #[tracing::instrument(skip_all)]
@@ -233,8 +233,23 @@ fn public_token(body: &[u8], url: &str) -> Result<String> {
     Ok(token.to_owned())
 }
 
-pub(crate) fn check_response(mut capture: Capture) -> Result<Capture, Failure> {
+pub(crate) fn prepare_response(kind: PageKind, mut capture: Capture) -> Result<Capture, Failure> {
+    if kind != PageKind::Contacts {
+        return check_response(capture);
+    }
+    let denied = denied_url(&capture.url);
+    if !(200..300).contains(&capture.status) || denied {
+        capture.body.clear();
+    }
+    finish_status(capture, denied)
+}
+
+pub(crate) fn check_response(capture: Capture) -> Result<Capture, Failure> {
     let denied = denied_capture(&capture);
+    finish_response(capture, denied)
+}
+
+fn finish_response(mut capture: Capture, denied: bool) -> Result<Capture, Failure> {
     let blocked = access_stop_status(capture.status) || denied;
     capture.body = redact::body(&capture.body).map_err(|error| {
         let mut failure = failure(&error);
@@ -247,6 +262,11 @@ pub(crate) fn check_response(mut capture: Capture) -> Result<Capture, Failure> {
         }
         failure
     })?;
+    finish_status(capture, denied)
+}
+
+fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {
+    let blocked = access_stop_status(capture.status) || denied;
     if !(200..300).contains(&capture.status) || denied {
         return Err(Failure {
             detail: format!(
@@ -336,6 +356,50 @@ pub fn validate_target(target: &Target) -> Result<()> {
 mod tests {
     use super::{Mode, Options, Transport};
     use crate::model::{PageContext, PageKind, Source, Target};
+
+    fn contact_capture(url: &str, status: u16) -> crate::model::Capture {
+        crate::model::Capture {
+            url: url.into(),
+            status,
+            content_type: "text/html".into(),
+            body: b"<form><input type='password' value='transient-canary'></form><script>const userToken = getToken('transient-canary');</script>".to_vec(),
+        }
+    }
+
+    #[test]
+    fn given_transient_contact_markup_when_prepared_then_body_survives_but_provider_redaction_stays_strict()
+     {
+        let capture = super::prepare_response(
+            PageKind::Contacts,
+            contact_capture("https://school.example.edu/staff", 200),
+        )
+        .expect("public transient contact page");
+        assert!(String::from_utf8_lossy(&capture.body).contains("transient-canary"));
+        let failure = super::prepare_response(PageKind::Athlete, capture)
+            .expect_err("provider captures remain strict");
+        assert!(failure.capture.is_none());
+        assert!(!format!("{failure:?}").contains("transient-canary"));
+    }
+
+    #[test]
+    fn given_contact_http_failure_or_denied_url_when_prepared_then_status_survives_without_raw_body()
+     {
+        for (url, status, blocked) in [
+            ("https://school.example.edu/staff", 403, true),
+            ("https://school.example.edu/staff", 500, false),
+            ("https://school.example.edu/login", 200, true),
+        ] {
+            let failure = super::prepare_response(PageKind::Contacts, contact_capture(url, status))
+                .expect_err("nonpublic response");
+            assert_eq!(failure.blocked, blocked);
+            assert!(!format!("{failure:?}").contains("transient-canary"));
+            assert!(!failure.to_string().contains("transient-canary"));
+            let capture = failure.capture.expect("status metadata");
+            assert_eq!(capture.status, status);
+            assert_eq!(capture.url, url);
+            assert!(capture.body.is_empty());
+        }
+    }
 
     #[test]
     fn access_stop_urls_require_complete_path_segments() {

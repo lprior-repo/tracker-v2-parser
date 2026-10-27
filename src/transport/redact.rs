@@ -24,11 +24,19 @@ static FORM: LazyLock<Result<Regex, regex::Error>> =
 static ENTITY: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"&#(?:[xX][0-9a-fA-F]+|[0-9]+);"));
 
+pub(super) fn jwt_pattern() -> Result<&'static Regex> {
+    JWT.as_ref().context("compiling token redaction")
+}
+
+pub(super) fn secret_key_pattern() -> Result<&'static Regex> {
+    SECRET.as_ref().context("compiling secret redaction")
+}
+
 pub(super) fn body(raw: &[u8]) -> Result<Vec<u8>> {
     let text = std::str::from_utf8(raw).context("source response is not UTF-8")?;
-    let jwt = JWT.as_ref().context("compiling token redaction")?;
+    let jwt = jwt_pattern()?;
     let strings = STRING.as_ref().context("compiling JSON string matcher")?;
-    let secret = SECRET.as_ref().context("compiling secret redaction")?;
+    let secret = secret_key_pattern()?;
     if serde_json::from_str::<IgnoredAny>(text).is_ok() {
         return json(text, strings, secret, jwt);
     }

@@ -131,3 +131,40 @@ async fn given_linked_school_states_when_scoped_then_school_and_cohort_determine
     })
     .await
 }
+
+#[tokio::test]
+async fn given_whitespace_around_or_instead_of_school_states_when_scoped_then_candidates_survive()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            for (id, state) in [
+                ("31", "\tWI\t"),
+                ("32", "\t\r\n"),
+                ("33", "OH"),
+                ("34", "\u{00a0}WI\u{2003}"),
+                ("35", "\u{00a0}\u{2003}"),
+            ] {
+                seed(&database, id, None, Some(state), Some(2027), false, false).await?;
+            }
+            let records = database
+                .athlete_records_for(&["WI".to_owned()], &[2027])
+                .await?;
+            assert_eq!(
+                records
+                    .iter()
+                    .map(|record| (record.name.as_str(), record.needs_review))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("Runner 31", false),
+                    ("Runner 32", true),
+                    ("Runner 34", false),
+                    ("Runner 35", true),
+                ]
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}

@@ -16,6 +16,10 @@ pub fn comparable(evidence: &EvidencedPerformance) -> Option<ComparableMark> {
     comparable_performance(evidence.source, &evidence.url, &evidence.performance)
 }
 
+pub fn comparison(evidence: &EvidencedPerformance) -> Result<ComparableMark, &'static str> {
+    comparison_performance(evidence.source, &evidence.url, &evidence.performance)
+}
+
 #[must_use]
 pub fn event_specification(label: &str) -> Option<String> {
     event::resolve(label)?.specification
@@ -59,21 +63,31 @@ pub fn comparable_performance(
     url: &str,
     performance: &Performance,
 ) -> Option<ComparableMark> {
-    let event = event::resolve(&performance.event)?;
-    if performance.is_relay
-        || event.relay
-        || performance
-            .reported_status
-            .as_deref()
-            .and_then(failure_status)
-            .is_some()
+    comparison_performance(source, url, performance).ok()
+}
+
+fn comparison_performance(
+    source: Source,
+    url: &str,
+    performance: &Performance,
+) -> Result<ComparableMark, &'static str> {
+    let event = event::resolve(&performance.event).ok_or("unsupported event")?;
+    if performance.is_relay || event.relay {
+        return Err("team relay, not an individual split");
+    }
+    if performance
+        .reported_status
+        .as_deref()
+        .and_then(failure_status)
+        .is_some()
     {
-        return None;
+        return Err("source-reported non-finish or disqualification");
     }
     if !event::has_comparable_specification(&performance.event, &event.label) {
-        return None;
+        return Err("missing or unsupported implement/hurdle specification");
     }
-    let value = parse_mark(&performance.mark, event.measure)?;
+    let value =
+        parse_mark(&performance.mark, event.measure).ok_or("unsupported or non-finish mark")?;
     let timing = notation::timing(
         &performance.mark,
         performance.timing.as_deref(),
@@ -101,7 +115,7 @@ pub fn comparable_performance(
             None => append_unknown_course(&mut column, url, performance),
         }
     }
-    Some(ComparableMark {
+    Ok(ComparableMark {
         column,
         value,
         measure: event.measure,

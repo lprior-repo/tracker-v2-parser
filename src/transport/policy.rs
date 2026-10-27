@@ -5,7 +5,7 @@ use url::Url;
 
 use crate::model::{PageKind, Source, Target};
 
-pub(super) fn source_url(target: &Target, address: &str) -> Result<Url> {
+pub fn source_url(target: &Target, address: &str) -> Result<Url> {
     let url = Url::parse(address).context("parsing source URL")?;
     ensure!(
         matches!(url.scheme(), "https" | "http"),
@@ -30,16 +30,29 @@ pub(super) fn source_url(target: &Target, address: &str) -> Result<Url> {
             "source URL is outside the selected website"
         );
     }
+    check_url_secrets(&url)?;
+    Ok(url)
+}
+
+pub fn check_url_secrets(url: &Url) -> Result<()> {
+    let jwt = super::redact::jwt_pattern()?;
+    let secret = super::redact::secret_key_pattern()?;
+    let fragment_pairs = url
+        .fragment()
+        .filter(|fragment| fragment.contains('='))
+        .into_iter()
+        .flat_map(|fragment| url::form_urlencoded::parse(fragment.as_bytes()));
     ensure!(
-        !url.query_pairs().any(|(name, _)| {
-            let name = name.to_ascii_lowercase();
-            ["token", "password", "authorization", "cookie"]
-                .iter()
-                .any(|secret| name.contains(secret))
-        }),
+        !jwt.is_match(url.as_str())
+            && !url
+                .query_pairs()
+                .chain(fragment_pairs)
+                .any(|(name, value)| {
+                    secret.is_match(name.as_ref()) || jwt.is_match(value.as_ref())
+                }),
         "source URL must not carry authentication secrets"
     );
-    Ok(url)
+    Ok(())
 }
 
 pub(super) async fn public_addresses(url: &Url) -> Result<Vec<SocketAddr>> {

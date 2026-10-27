@@ -1,4 +1,4 @@
-use crate::marks::{ComparableMark, comparable};
+use crate::marks::{ComparableMark, comparison};
 use crate::model::{AthleteRecord, EvidencedPerformance};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,13 +35,23 @@ pub(super) fn prepare(record: &AthleteRecord) -> Prepared<'_> {
             notes: BTreeSet::new(),
         },
         |mut row, evidence| {
-            let Some(mark) = comparable(evidence) else {
-                row.unmapped = row.unmapped.saturating_add(1);
-                row.notes.insert(format!(
-                    "not comparable: {} | {} | {}",
-                    evidence.performance.event, evidence.performance.mark, evidence.url
-                ));
-                return row;
+            let mark = match comparison(evidence) {
+                Ok(mark) => mark,
+                Err(reason) => {
+                    row.unmapped = row.unmapped.saturating_add(1);
+                    row.notes.insert(format!(
+                        "not comparable ({reason}): {} | {} | reported_status={} | {}",
+                        evidence.performance.event,
+                        evidence.performance.mark,
+                        evidence
+                            .performance
+                            .reported_status
+                            .as_deref()
+                            .map_or("", |value| value),
+                        evidence.url
+                    ));
+                    return row;
+                }
             };
             let replace = row
                 .bests
@@ -112,8 +122,13 @@ pub(super) fn cells(
         joined(record.coaches.iter().map(|coach| coach.email.as_str())),
         caveat(record),
         row.unmapped.to_string(),
-        joined(row.notes.iter().map(String::as_str)),
-        record.needs_review.to_string(),
+        joined(
+            row.notes
+                .iter()
+                .map(String::as_str)
+                .chain(super::selection::issues(record)),
+        ),
+        (super::selection::requires_review(record) || row.unmapped > 0).to_string(),
     ];
     base.into_iter()
         .chain(columns.iter().flat_map(|column| {

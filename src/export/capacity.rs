@@ -30,7 +30,15 @@ pub(super) fn write(
     let (_, sheet) = rows.try_fold(
         (1_u32, new_sheet(base, 1, headers)?),
         |(part, sheet), cells| {
-            let hyperlinks = cells.iter().filter(|text| is_hyperlink(text)).count();
+            anyhow::ensure!(
+                cells.len() == headers.len(),
+                "worksheet row/header column count mismatch"
+            );
+            let hyperlinks = cells
+                .iter()
+                .zip(headers)
+                .filter(|(text, header)| is_hyperlink(header, text))
+                .count();
             anyhow::ensure!(
                 hyperlinks <= MAX_HYPERLINKS,
                 "row exceeds hyperlink capacity"
@@ -48,7 +56,7 @@ pub(super) fn write(
             } else {
                 (part, sheet)
             };
-            write_row(&mut sheet, &cells, hyperlinks)?;
+            write_row(&mut sheet, headers, &cells, hyperlinks)?;
             Ok::<_, anyhow::Error>((part, sheet))
         },
     )?;
@@ -97,26 +105,38 @@ fn new_sheet(base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
     })
 }
 
-fn is_hyperlink(text: &str) -> bool {
-    (text.starts_with("https://") || text.starts_with("http://")) && !text.contains("; ")
+fn is_hyperlink(header: &str, text: &str) -> bool {
+    (matches!(header, "source_profiles" | "profile_url" | "source_url")
+        || header.ends_with("::source_url"))
+        && (text.starts_with("https://") || text.starts_with("http://"))
+        && !text.contains("; ")
 }
 
-fn write_row(sheet: &mut Sheet, cells: &[String], hyperlinks: usize) -> Result<()> {
+fn write_row(
+    sheet: &mut Sheet,
+    headers: &[String],
+    cells: &[String],
+    hyperlinks: usize,
+) -> Result<()> {
     let row = sheet
         .rows
         .checked_add(1)
         .context("worksheet row overflow")?;
-    cells.iter().enumerate().try_for_each(|(column, text)| {
-        let column = u16::try_from(column)?;
-        if is_hyperlink(text) {
-            sheet
-                .worksheet
-                .write_url(row, column, Url::new(text.as_str()))?;
-        } else {
-            sheet.worksheet.write_string(row, column, text)?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })?;
+    cells
+        .iter()
+        .zip(headers)
+        .enumerate()
+        .try_for_each(|(column, (text, header))| {
+            let column = u16::try_from(column)?;
+            if is_hyperlink(header, text) {
+                sheet
+                    .worksheet
+                    .write_url(row, column, Url::new(text.as_str()))?;
+            } else {
+                sheet.worksheet.write_string(row, column, text)?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
     sheet.rows = row;
     sheet.hyperlinks = sheet
         .hyperlinks

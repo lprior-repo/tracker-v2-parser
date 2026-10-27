@@ -14,6 +14,18 @@ use crate::model::{PageContext, PageKind, ParsedPage, School, Source, Target};
 
 const MAX_PAGE_BYTES: usize = 8 * 1024 * 1024;
 
+#[derive(Debug)]
+pub(crate) struct AccessDenied;
+
+impl std::fmt::Display for AccessDenied {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .write_str("Official school website access challenge; no alternate transport attempted")
+    }
+}
+
+impl std::error::Error for AccessDenied {}
+
 pub fn targets(source: Source, school: &School, season: i32) -> Result<Vec<Target>> {
     let Some(website) = school
         .website
@@ -26,7 +38,16 @@ pub fn targets(source: Source, school: &School, season: i32) -> Result<Vec<Targe
         !school.id.trim().is_empty() && !school.name.trim().is_empty(),
         "contacts require school ID and name"
     );
-    let url = public_url(website)?;
+    let url = official_url(website)?;
+    if !website.contains("://") {
+        tracing::warn!(
+            source = source.as_str(),
+            school_id = %school.id,
+            published_website = website,
+            request_url = %url,
+            "Assuming HTTPS for published scheme-less school website; original school website retained"
+        );
+    }
     Ok(vec![Target::get(
         source,
         PageKind::Contacts,
@@ -66,6 +87,7 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         "contacts response is not HTML"
     );
     let document = Html::parse_document(body);
+    check_access(&document, &target.url)?;
     ensure!(
         document
             .select(&selector(
@@ -98,9 +120,106 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
     })
 }
 
+fn check_access(document: &Html, url: &str) -> Result<()> {
+    let titles = selector("title")?;
+    let headings = selector("h1")?;
+    let primary = document.select(&headings).find(|heading| {
+        !heading
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .any(|ancestor| {
+                let element = ancestor.value();
+                matches!(
+                    element.name(),
+                    "footer" | "aside" | "nav" | "dialog" | "form"
+                ) || element.attr("hidden").is_some()
+                    || element
+                        .attr("aria-hidden")
+                        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+            })
+    });
+    let challenged = document
+        .select(&titles)
+        .take(1)
+        .chain(primary)
+        .any(|heading| {
+            let heading = normalized(&text(heading));
+            [
+                "accessdenied",
+                "justamoment",
+                "attentionrequired",
+                "verifyyouarehuman",
+                "verifythatyouarehuman",
+                "checkingyourbrowser",
+                "captchachallenge",
+                "signin",
+                "login",
+                "subscribe",
+            ]
+            .iter()
+            .any(|marker| heading.starts_with(marker))
+        });
+    let challenge_form = selector("#challenge-form, #cf-challenge-running")?;
+    if challenged
+        || crate::transport::denied_url(url)
+        || document.select(&challenge_form).next().is_some()
+    {
+        return Err(AccessDenied.into());
+    }
+    Ok(())
+}
+
 fn selector(css: &str) -> Result<Selector> {
     Selector::parse(css)
         .map_err(|error| anyhow::anyhow!("invalid contacts selector {css}: {error}"))
+}
+
+fn official_url(value: &str) -> Result<Url> {
+    ensure!(
+        !value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+            && !value.contains('\\'),
+        "invalid official school URL: whitespace, control characters, or backslashes are ambiguous"
+    );
+    if let Some((scheme, authority)) = value.split_once("://") {
+        ensure!(
+            (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+                && !authority.starts_with('/'),
+            "invalid official school URL: malformed or unsupported scheme"
+        );
+        return public_url(value);
+    }
+    ensure!(
+        scheme_less_hostname(value),
+        "invalid official school URL: scheme-less website must be an unambiguous hostname and optional path"
+    );
+    public_url(&format!("https://{value}"))
+}
+
+fn scheme_less_hostname(value: &str) -> bool {
+    if value.contains([':', '@']) {
+        return false;
+    }
+    let host = value
+        .split(['/', '?', '#'])
+        .next()
+        .map_or("", std::convert::identity);
+    let Some((_, suffix)) = host.rsplit_once('.') else {
+        return false;
+    };
+    host.len() <= 253
+        && suffix.len() >= 2
+        && suffix.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 fn public_url(value: &str) -> Result<Url> {
@@ -112,6 +231,7 @@ fn public_url(value: &str) -> Result<Url> {
             && url.password().is_none(),
         "official school URL must be HTTP(S) without credentials"
     );
+    crate::transport::policy::check_url_secrets(&url)?;
     Ok(url)
 }
 

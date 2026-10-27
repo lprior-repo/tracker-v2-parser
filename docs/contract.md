@@ -85,6 +85,10 @@ paywalls, and rate-limit refusals stop the source rather than rotating transport
 proxies, identities, or solving a CAPTCHA. Interrupted unfinished pages resume
 without discarding previously committed data. Explicit refresh is distinguishable
 from automatic retry.
+Official-school contact access stops are scoped to the affected authority across
+providers; they do not stop unrelated contact sites or athlete acquisition.
+Embedded public contact-form widgets/sign-in links are not full-page challenges.
+
 
 One running scraper owns the acquisition session. Concurrency is bounded at one
 initially. Source requests are paced at no more than 1 RPS; supplemental official
@@ -121,15 +125,18 @@ course context. No unsupported distance conversions, timing adjustment, or
 estimated relay splits. Unknown contexts are not silently treated as equivalent.
 Bests mean best comparable **observed** results, not certified complete careers.
 
-**C7 — spreadsheet:** selected known cohorts/states, one local athlete ID per
-row, school/postal and distinct coach/school email fields, observed PR columns,
-and source links. Review-flagged athletes remain on their single row with an
-explicit `needs_review` column; conflicting identities and missing facts also
-remain visible in `Issues`. Unknown cohorts/states are not guessed into the
-selection. Optional athlete sheets use the same snapshot. Split oversized
-outputs without exceeding Excel bounds. Strings are written as strings, not
-interpreted formulas. Full public profile metadata is retained in ordered JSON
-chunks on `Profile_details`, not additional athlete PR rows.
+**C7 — spreadsheet:** one local athlete ID per row, school/postal and distinct
+coach/school email fields, observed PR columns, and source links. Known
+out-of-scope cohorts/states remain excluded. Unknown cohorts/states remain blank
+and visible as review candidates, not guessed into accepted membership.
+Review-flagged athletes remain on their single row with explicit `needs_review`
+and `review_notes`; conflicting identities and missing facts also remain visible
+in `Issues`. Non-comparable observations retain the original mark, reported
+status and comparison rejection reason. Optional athlete sheets use the same
+snapshot. Split oversized outputs without exceeding Excel bounds. Strings are
+written as strings, not interpreted formulas. Full public profile metadata is
+retained in ordered JSON chunks on `Profile_details`, not additional athlete PR
+rows; URL-looking chunks stay literal text, not inferred hyperlinks.
 Page notes, unfinished page status and errors, and unassigned results appear in
 the Issues sheet with their source and URL, regardless of athlete filters. Each
 split workbook includes these snapshot-wide issues; a successful reparse replaces

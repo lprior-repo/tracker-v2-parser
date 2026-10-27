@@ -14,7 +14,17 @@ pub(super) fn parse(document: &Html, target: &Target) -> Result<Vec<Target>> {
     if depth >= 2 {
         return Ok(Vec::new());
     }
-    let base = public_url(&target.url)?;
+    let mut document_url = public_url(&target.url)?;
+    document_url.set_fragment(None);
+    let bases = selector("base[href]")?;
+    let declared_base = document
+        .select(&bases)
+        .next()
+        .and_then(|base| base.value().attr("href"))
+        .and_then(|href| document_url.join(href).ok());
+    let base = declared_base
+        .as_ref()
+        .map_or(&document_url, core::convert::identity);
     let interesting =
         Regex::new(r"(?i)coach|athletic|staff|directory|contact|cross[- ]?country|\btrack\b")?;
     let anchors = selector("a[href]")?;
@@ -27,12 +37,12 @@ pub(super) fn parse(document: &Html, target: &Target) -> Result<Vec<Target>> {
             (interesting.is_match(url.path()) || interesting.is_match(&label))
                 .then_some((url, label))
         })
-        .filter(|(url, label)| followable(&base, url, label, &interesting))
+        .filter(|(url, label)| followable(&document_url, url, label, &interesting))
         .map(|(mut url, _)| {
             url.set_fragment(None);
             url.to_string()
         })
-        .filter(|url| url != &target.url)
+        .filter(|url| url != document_url.as_str())
         .scan(BTreeSet::new(), |seen, url| {
             Some(seen.insert(url.clone()).then_some(url))
         })

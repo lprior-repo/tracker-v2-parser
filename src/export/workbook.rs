@@ -11,18 +11,13 @@ pub(super) fn write_and_verify(
     issues: &[ExportIssue],
     options: &ExportOptions,
 ) -> Result<()> {
-    let eligible: Vec<_> = records
-        .iter()
-        .copied()
-        .filter(|record| selection::eligible(record, options))
-        .collect();
     let mut workbook = Workbook::new();
     let mut expected = Vec::new();
-    write_athletes(&mut workbook, &eligible, &mut expected)?;
+    write_athletes(&mut workbook, records, &mut expected)?;
     write_issues(&mut workbook, records, issues, &mut expected)?;
     super::profiles::write(&mut workbook, records, &mut expected)?;
     if options.per_athlete_sheets {
-        eligible
+        records
             .iter()
             .try_for_each(|record| write_detail(&mut workbook, record, &mut expected))?;
     }
@@ -114,12 +109,13 @@ fn write_detail(
         "date",
         "course",
         "comparison_context",
+        "reported_status",
     ]
     .map(str::to_owned);
     let rows = record.performances.iter().map(|evidence| {
         let performance = &evidence.performance;
-        let context = crate::marks::comparable(evidence).map_or_else(
-            || "not comparable; retained as published".to_owned(),
+        let context = crate::marks::comparison(evidence).map_or_else(
+            |reason| format!("not comparable ({reason}); retained as published"),
             |mark| mark.column,
         );
         vec![
@@ -137,6 +133,10 @@ fn write_detail(
                 .clone()
                 .map_or(String::new(), core::convert::identity),
             context,
+            performance
+                .reported_status
+                .clone()
+                .map_or(String::new(), core::convert::identity),
         ]
     });
     capacity::write(
