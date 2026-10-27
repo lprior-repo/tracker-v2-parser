@@ -22,10 +22,9 @@ pub(super) fn in_scope(record: &AthleteRecord, options: &ExportOptions) -> bool 
 }
 
 pub(super) fn eligible(record: &AthleteRecord, options: &ExportOptions) -> bool {
-    !record.needs_review
-        && record
-            .graduation_year
-            .is_some_and(|year| options.graduation_years.contains(&year))
+    record
+        .graduation_year
+        .is_some_and(|year| options.graduation_years.contains(&year))
         && record
             .schools
             .iter()

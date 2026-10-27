@@ -121,12 +121,15 @@ course context. No unsupported distance conversions, timing adjustment, or
 estimated relay splits. Unknown contexts are not silently treated as equivalent.
 Bests mean best comparable **observed** results, not certified complete careers.
 
-**C7 — spreadsheet:** selected known cohorts/states, one accepted local athlete
-per row, school/postal and distinct coach/school email fields, observed PR columns,
-and source links. Unknown/conflicting identities or missing facts are visible in
-an Issues sheet. Optional athlete sheets use the same snapshot. Split oversized
+**C7 — spreadsheet:** selected known cohorts/states, one local athlete ID per
+row, school/postal and distinct coach/school email fields, observed PR columns,
+and source links. Review-flagged athletes remain on their single row with an
+explicit `needs_review` column; conflicting identities and missing facts also
+remain visible in `Issues`. Unknown cohorts/states are not guessed into the
+selection. Optional athlete sheets use the same snapshot. Split oversized
 outputs without exceeding Excel bounds. Strings are written as strings, not
-interpreted formulas.
+interpreted formulas. Full public profile metadata is retained in ordered JSON
+chunks on `Profile_details`, not additional athlete PR rows.
 Page notes, unfinished page status and errors, and unassigned results appear in
 the Issues sheet with their source and URL, regardless of athlete filters. Each
 split workbook includes these snapshot-wide issues; a successful reparse replaces

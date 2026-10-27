@@ -32,6 +32,23 @@ pub struct Job {
     pub target: Target,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobClass {
+    Profile,
+    Roster,
+    Bulk,
+}
+
+impl JobClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Profile => "profile",
+            Self::Roster => "roster",
+            Self::Bulk => "bulk",
+        }
+    }
+}
+
 impl Database {
     #[tracing::instrument(skip(url))]
     pub async fn connect(url: &str) -> Result<Self> {
@@ -79,7 +96,7 @@ impl Database {
 
     #[tracing::instrument(skip(self))]
     pub async fn next_job(&self, source: Option<Source>, max_attempts: u32) -> Result<Option<Job>> {
-        self.next_job_with_priority(source, max_attempts, false)
+        self.next_job_with_priority(source, max_attempts, JobClass::Profile)
             .await
     }
 
@@ -88,9 +105,9 @@ impl Database {
         &self,
         source: Option<Source>,
         max_attempts: u32,
-        prefer_bulk: bool,
+        preferred: JobClass,
     ) -> Result<Option<Job>> {
-        queue::next(&self.pool, source, max_attempts, prefer_bulk).await
+        queue::next(&self.pool, source, max_attempts, preferred).await
     }
 
     #[tracing::instrument(skip(self))]

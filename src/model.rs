@@ -126,6 +126,8 @@ pub struct Athlete {
     pub same_as: Vec<String>,
     #[serde(default)]
     pub needs_review: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_values: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +219,14 @@ pub struct EvidencedPerformance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AthleteProfileDetails {
+    pub source: Source,
+    pub source_id: String,
+    pub url: Option<String>,
+    pub source_values: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AthleteRecord {
     pub id: i64,
     pub name: String,
@@ -228,4 +238,6 @@ pub struct AthleteRecord {
     pub coaches: Vec<Coach>,
     pub profiles: Vec<String>,
     pub performances: Vec<EvidencedPerformance>,
+    #[serde(default)]
+    pub profile_details: Vec<AthleteProfileDetails>,
 }

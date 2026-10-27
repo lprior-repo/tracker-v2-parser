@@ -12,6 +12,7 @@ fn athlete(id: i64, name: String) -> AthleteRecord {
         grade: None,
         graduation_year: Some(2028),
         needs_review: false,
+        profile_details: Vec::new(),
         schools: vec![School {
             state: Some("OR".to_owned()),
             ..School::default()

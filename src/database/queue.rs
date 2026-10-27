@@ -7,7 +7,7 @@ use crate::{
     transport::validate_target,
 };
 
-use super::{Job, keys};
+use super::{Job, JobClass, keys};
 
 #[tracing::instrument(skip(connection, targets))]
 pub(super) async fn enqueue(
@@ -54,17 +54,22 @@ pub(super) async fn next(
     pool: &PgPool,
     source: Option<Source>,
     max_attempts: u32,
-    prefer_bulk: bool,
+    preferred: JobClass,
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT id,cursor FROM scrape_pages WHERE status IN ('pending','failed') AND attempts < $2 \
          AND ($1::text IS NULL OR source=$1) \
          ORDER BY (attempts = 0) DESC, \
-         ((cursor->>'kind' IN ('roster','athlete')) <> $3) DESC, id LIMIT 1",
+         CASE cursor->>'kind' \
+           WHEN 'athlete' THEN ($3 <> 'profile')::int \
+           WHEN 'roster' THEN ($3 <> 'roster')::int \
+           ELSE ($3 <> 'bulk')::int END, \
+         CASE cursor->>'kind' WHEN 'athlete' THEN 0 WHEN 'roster' THEN 1 ELSE 2 END, \
+         id LIMIT 1",
     )
     .bind(source.map(Source::as_str))
     .bind(attempt_limit(max_attempts)?)
-    .bind(prefer_bulk)
+    .bind(preferred.as_str())
     .fetch_optional(pool)
     .await?;
     row.map(|(id, target)| {

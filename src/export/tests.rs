@@ -12,6 +12,7 @@ fn athlete() -> AthleteRecord {
         grade: Some("11".to_owned()),
         graduation_year: Some(2028),
         needs_review: false,
+        profile_details: Vec::new(),
         schools: vec![School {
             id: "school1".to_owned(),
             name: "+School, North".to_owned(),
@@ -119,7 +120,7 @@ fn given_many_events_when_exporting_then_one_literal_string_row_contains_bests_a
 }
 
 #[test]
-fn given_unknown_year_or_unresolved_identity_when_exporting_then_issues_not_guessed_rows()
+fn given_review_flag_when_exporting_then_known_cohort_row_remains_visible_and_flagged()
 -> anyhow::Result<()> {
     let destination = path("issues");
     let mut unknown = athlete();
@@ -131,7 +132,12 @@ fn given_unknown_year_or_unresolved_identity_when_exporting_then_issues_not_gues
     outside.id = 44;
     outside.graduation_year = Some(2027);
     write_spreadsheets(&destination, &[unknown, unresolved, outside], &options())?;
-    assert_eq!(range(&destination, "Athletes")?.height(), 1);
+    let athletes = range(&destination, "Athletes")?;
+    assert_eq!(athletes.height(), 2);
+    let values = row(&athletes)?;
+    assert_eq!(values["athlete_id"], "43");
+    assert_eq!(values["needs_review"], "true");
+    assert!(values.values().any(|value| value == "10.4a"));
     let issues = range(&destination, "Issues")?;
     assert_eq!(issues.height(), 3);
     assert!(

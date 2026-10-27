@@ -2,7 +2,7 @@ use crate::marks::{ComparableMark, comparable};
 use crate::model::{AthleteRecord, EvidencedPerformance};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) const BASE_HEADERS: [&str; 15] = [
+pub(super) const BASE_HEADERS: [&str; 16] = [
     "athlete_id",
     "name",
     "gender",
@@ -18,6 +18,7 @@ pub(super) const BASE_HEADERS: [&str; 15] = [
     "identity_coverage_caveat",
     "unmapped_count",
     "review_notes",
+    "needs_review",
 ];
 
 pub(super) struct Prepared<'a> {
@@ -112,6 +113,7 @@ pub(super) fn cells(
         caveat(record),
         row.unmapped.to_string(),
         joined(row.notes.iter().map(String::as_str)),
+        record.needs_review.to_string(),
     ];
     base.into_iter()
         .chain(columns.iter().flat_map(|column| {

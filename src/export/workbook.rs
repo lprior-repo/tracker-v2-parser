@@ -20,6 +20,7 @@ pub(super) fn write_and_verify(
     let mut expected = Vec::new();
     write_athletes(&mut workbook, &eligible, &mut expected)?;
     write_issues(&mut workbook, records, issues, &mut expected)?;
+    super::profiles::write(&mut workbook, records, &mut expected)?;
     if options.per_athlete_sheets {
         eligible
             .iter()

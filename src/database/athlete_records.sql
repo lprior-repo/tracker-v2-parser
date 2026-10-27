@@ -27,7 +27,13 @@ WITH school_links AS (
 ), profile_data AS (
     SELECT p.athlete_id,
            COALESCE(jsonb_agg(DISTINCT p.profile_url ORDER BY p.profile_url)
-                    FILTER (WHERE p.profile_url IS NOT NULL), '[]'::jsonb) AS profiles
+                    FILTER (WHERE p.profile_url IS NOT NULL), '[]'::jsonb) AS profiles,
+           COALESCE(jsonb_agg(jsonb_build_object(
+               'source', p.source, 'source_id', p.source_id, 'url', p.profile_url,
+               'source_values', p.details->'source_values'
+           ) ORDER BY p.source, p.source_id)
+           FILTER (WHERE jsonb_typeof(p.details->'source_values') = 'object'), '[]'::jsonb)
+               AS profile_details
     FROM athlete_sources p JOIN selected a ON a.id = p.athlete_id
     GROUP BY p.athlete_id
 ), school_data AS (
@@ -63,6 +69,7 @@ SELECT jsonb_build_object(
     'schools', COALESCE(sd.schools, '[]'::jsonb),
     'coaches', COALESCE(cd.coaches, '[]'::jsonb),
     'profiles', COALESCE(pd.profiles, '[]'::jsonb),
+    'profile_details', COALESCE(pd.profile_details, '[]'::jsonb),
     'performances', COALESCE(pr.performances, '[]'::jsonb)
 )
 FROM selected a

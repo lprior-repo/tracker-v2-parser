@@ -1,0 +1,31 @@
+{
+  "captures": [
+    {
+      "fixture": "athlete-oh-15005189-current.html",
+      "url": "https://oh.milesplit.com/athletes/15005189-brice-fuller",
+      "captured_at": "2026-10-27T12:48:49.989960+00:00",
+      "capture_source": "Direct public HTTPS GET, curl --fail exit 0; projection removes scripts except published JSON-LD and literal progressionTrackerData/gender assignments to exclude source credential material. Original HTML is not claimed.",
+      "projection": true,
+      "sha256": "157fdc9e3440e0dbd0a6a471abebc8f834d9ec6f20986c64eb17acb504faa898",
+      "source_sha256": "4daa94b017440e9e55eacf47fe684d1ce5dda0224ae06c505ed04be75d47223e"
+    },
+    {
+      "fixture": "athlete-oh-15005189-progression-current.html",
+      "url": "https://oh.milesplit.com/athletes/15005189-brice-fuller/progression",
+      "captured_at": "2026-10-27T12:48:49.990662+00:00",
+      "capture_source": "Direct public HTTPS GET, curl --fail exit 0; projection removes scripts except published JSON-LD and literal progressionTrackerData/gender assignments to exclude source credential material. Original HTML is not claimed.",
+      "projection": true,
+      "sha256": "0510ccb05e7e6a23b43a18a9e4d57d3619ff9e54233caeb9a7861780f52e16b1",
+      "source_sha256": "b2411a8a4d5ae8b907c7012ebf8775083c82209267f7ad6255f318472396630d"
+    },
+    {
+      "fixture": "athlete-al-15797488-current.html",
+      "url": "https://al.milesplit.com/athletes/15797488-baylee-bennett",
+      "projection": true,
+      "capture_source": "Parent-provided direct public HTTP 200 capture /tmp/track-profile-baylee.html; projection removes scripts except published JSON-LD and literal progressionTrackerData/gender assignments. Original HTML is not claimed.",
+      "projected_at": "2026-10-27T12:52:57.215701+00:00",
+      "sha256": "ce8a0e92c7b8f999c6e656938954e3e9b26e302efdc0ead12eb20840bbd7a67a",
+      "source_sha256": "80dbaa6b87e329733d4f54cb98371d65513982d7ee0a822b4f0aa45a840f05bc"
+    }
+  ]
+}

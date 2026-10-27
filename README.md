@@ -44,6 +44,27 @@ Large worksheets continue as `Athletes_2`, `Issues_2`, or
 remain clickable; every continuation sheet is reopened and checked before
 publication. The configured athlete-row file splitting still applies.
 
+The `Athletes` sheet has exactly one row per canonical athlete ID in the selected
+known cohort/state. Each comparable event/category gets PR columns on that row;
+indoor, outdoor and XC marks are not collapsed together. A review flag does not
+hide an otherwise selected athlete: `needs_review` is explicit on the row and
+the conflict is also listed in `Issues`. Unknown graduation years remain unknown
+and are reported in `Issues`, not assigned to the requested cohort.
+
+MileSplit profiles retain all public sport/competition-level PRs, visible career
+results, biography/identity sections, JSON-LD, published progression values,
+links and media metadata. `Profile_details` contains the exact retained JSON in
+ordered UTF-8-safe chunks, without multiplying rows in `Athletes`. Masked results
+and subscription examples are not invented career performances.
+
+Before parsing a MileSplit athlete response, the CLI retains its
+transport-sanitized bytes under their SHA-256 content address. The default
+directory is `${XDG_DATA_HOME:-$HOME/.local/share}/track-scrapper-v2/evidence`;
+`TRACK_SCRAPPER_EVIDENCE_DIR` can select another absolute path. Per-page database
+metadata records the artifact, hash, byte length, effective URL, status and
+retention time. Replay reuses identical bytes and refuses to overwrite corrupt
+evidence. An evidence-write failure leaves the page failed, not successful.
+
 
 Import the published CSV from
 [`rust-athletic-school-addresses`](https://github.com/lprior-repo/rust-athletic-school-addresses)
@@ -160,9 +181,10 @@ Published manual and spreadsheet-style result tables are retained as unassigned
 results when no source athlete identifier is available. When the published
 canonical file matches the selected result, its rows are not queued twice.
 AthleticRUNMEET tables retain individual and relay rows, including DNS/DQ and
-duplicate published rows, without inventing athlete IDs. Roster and profile
-work receives three scheduling reservations per bulk reservation, so athlete
-discovery no longer waits behind the entire national directory queue.
+duplicate published rows, without inventing athlete IDs. Within each source's
+eight scheduling turns, six reservations go to profiles, one to rosters and one
+to bulk pages; empty classes fall back to available work. This prevents the
+national roster backlog from starving already-discovered athlete profiles.
 
 MileSplit's public structured performance response supplies athlete identities
 only when the athlete ID agrees with a published HTTPS profile URL and the row
@@ -175,6 +197,51 @@ MileSplit's explicit unknown graduation markers, including `0`, remain unknown.
 Unsupported structured graduation claims remain unset and flag the athlete for
 review; the claim and original source JSON remain available. A separately
 published failure status does not replace the original mark and cannot win a PR.
+
+## Backup and recovery
+
+PostgreSQL is the durable authority. Normal process-crash recovery uses its WAL;
+do not replace the data directory or reset checkpoints to recover a stopped
+scraper. The exercised server has `fsync`, `full_page_writes` and
+`synchronous_commit` enabled. WAL archiving is disabled, so this setup does not
+provide point-in-time recovery after loss of the data directory.
+
+A complete **application** backup consists of a PostgreSQL custom-format dump
+of `public` plus the retained evidence directory. It includes all six application
+tables, UUIDs, source mappings, result history, attempts/checkpoints and SQLx
+migration history. Role passwords and cluster configuration are not included.
+With an existing private backup directory:
+
+```sh
+pg_dump --dbname "$DATABASE_URL" --format=custom --schema=public \
+  --no-owner --no-privileges --file "$BACKUP/database.dump"
+tar --create --gzip --file "$BACKUP/evidence.tar.gz" \
+  --directory "$HOME/.local/share/track-scrapper-v2" evidence
+```
+
+Adjust the archive directory for a custom XDG/evidence path. Retain a SHA-256
+manifest for both files. Copy the backup off the database disk for disk-loss
+protection. Older pages fetched before evidence retention was introduced do not
+gain original response bytes retroactively.
+
+Restore only into a newly created, isolated database. The following exercised
+restore command removes matching objects in that **restore target**, never the
+live database:
+
+```sh
+pg_restore --dbname "$RESTORE_DATABASE_URL" --no-owner --no-privileges \
+  --single-transaction --exit-on-error --clean --if-exists "$BACKUP/database.dump"
+tar --extract --gzip --keep-old-files --file "$BACKUP/evidence.tar.gz" \
+  --directory "$RESTORE_APPLICATION_DATA"
+```
+
+Recreate the application login with the required database permissions separately.
+Restore evidence at its recorded location, or locate backed-up bodies by their
+recorded SHA-256 in the configured evidence root. Re-run `scrape` against the
+restored database to continue unfinished checkpoints; `export` does not scrape.
+The recovery drill compares row counts and ordered full-row SHA-256 fingerprints
+for all six tables and migration history, then exercises the restored CLI.
+A verified snapshot recovers its captured state, not subsequent writes.
 
 ## Checks
 

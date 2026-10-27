@@ -145,7 +145,11 @@ async fn update(
         "UPDATE athlete_sources SET name=COALESCE(name,$2),school_id=COALESCE(school_id,$3), \
          state=COALESCE(state,$4),gender=COALESCE(gender,$5),grade=COALESCE($6,grade), \
          graduation_year=COALESCE(graduation_year,$7),profile_url=COALESCE(profile_url,$8), \
-         details=details || (jsonb_strip_nulls($9::jsonb) - 'same_as') || \
+         details=details || (jsonb_strip_nulls($9::jsonb) - 'same_as' - 'source_values') || \
+         CASE WHEN $9::jsonb ? 'source_values' THEN jsonb_build_object('source_values', \
+         COALESCE(details->'source_values','{}'::jsonb) || ($9::jsonb->'source_values') || \
+         jsonb_build_object('pages', COALESCE(details->'source_values'->'pages','{}'::jsonb) || \
+         COALESCE($9::jsonb->'source_values'->'pages','{}'::jsonb))) ELSE '{}'::jsonb END || \
          jsonb_build_object('needs_review', COALESCE((details->>'needs_review')::boolean,FALSE) OR $10, \
          '_identity_conflict', COALESCE((details->>'_identity_conflict')::boolean,FALSE) OR \
          COALESCE(lower(btrim(name))<>lower(btrim($2)),FALSE) OR \

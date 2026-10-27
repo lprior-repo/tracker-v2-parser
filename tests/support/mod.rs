@@ -44,6 +44,7 @@ pub async fn run_cli(directory: &Path, url: Option<&str>, args: &[&str]) -> Resu
         .env_remove("DATABASE_URL")
         .env_remove("TEST_DATABASE_URL")
         .env("RUST_LOG", "error")
+        .env("TRACK_SCRAPPER_EVIDENCE_DIR", directory.join("evidence"))
         .kill_on_drop(true);
     if let Some(url) = url {
         command.args(["--database-url", url]);

@@ -7,6 +7,7 @@ pub mod database;
 pub mod export;
 pub mod marks;
 pub mod model;
+mod profile_evidence;
 pub mod runner;
 pub mod school_address_download;
 pub mod school_directory;

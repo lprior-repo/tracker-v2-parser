@@ -1,3 +1,6 @@
+mod details;
+mod results;
+
 use anyhow::{Result, ensure};
 use scraper::{ElementRef, Html};
 use serde_json::Value;
@@ -51,27 +54,35 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
         same_as,
         grade: None,
         needs_review: false,
+        source_values: Some(details::values(target, document)?),
     };
     let mut page = ParsedPage {
         schools: school.into_iter().collect(),
         ..ParsedPage::default()
     };
-    let table = root
-        .select(&html::selector("#prTable")?)
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("MileSplit profile has no recognized PR table"))?;
-    page = table
-        .select(&html::selector("tr[data-pr-mode]")?)
-        .try_fold(page, |page, row| record(&athlete, row, page))?;
-    page = table
-        .select(&html::selector("tr[data-pr-mode='all']")?)
-        .try_fold(page, headline)?;
+    if let Some(table) = root.select(&html::selector("#prTable")?).next() {
+        page = table
+            .select(&html::selector("tr[data-pr-mode]")?)
+            .try_fold(page, |page, row| record(&athlete, row, page))?;
+        page = table
+            .select(&html::selector("tr[data-pr-mode='all']")?)
+            .try_fold(page, headline)?;
+    } else {
+        ensure!(
+            root.select(&html::selector("#progression, .profile-navigation")?)
+                .next()
+                .is_some(),
+            "MileSplit profile has no recognized public profile section"
+        );
+    }
+    results::parse(target, &athlete, root, &mut page)?;
+    details::enqueue(target, root, &mut page)?;
     if html::masked(root)? {
         page.notes.push("Incomplete public access: masked athlete historical results retained in capture; public PRs only, no zero marks or absence inferred".to_owned());
     }
     if page.performances.is_empty() && page.notes.is_empty() {
         page.notes
-            .push("Published athlete PR table contains no personal records".to_owned());
+            .push("No normalized public sport-specific records on this profile page; retained public evidence is not proof of career absence".to_owned());
     }
     enqueue_school(target, root, &athlete, &mut page)?;
     page.athletes.push(athlete);
@@ -163,11 +174,12 @@ fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Resul
     let level = row
         .value()
         .attr("data-pr-level")
-        .map_or("all", |value| value);
-    if level != "all" {
+        .ok_or_else(|| anyhow::anyhow!("PR competition level missing"))?;
+    ensure!(!level.trim().is_empty(), "PR competition level missing");
+    let Ok(sport) = targets::sport(mode) else {
+        page.notes.push(format!("Published PR mode {mode:?}, level {level:?} retained with athlete {} without guessing sport", athlete.id));
         return Ok(page);
-    }
-    let sport = targets::sport(mode)?;
+    };
     let cells = row.select(&html::selector("td")?).collect::<Vec<_>>();
     ensure!(
         cells.len() == 5,
@@ -213,9 +225,12 @@ fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Resul
     let performance = Performance {
         athlete_id: athlete.id.clone(),
         event,
+        reported_status: crate::marks::failure_status(&mark).map(str::to_owned),
         mark,
-        reported_status: None,
-        source_values: None,
+        source_values: Some(serde_json::json!({
+            "kind": "personal_record", "mode": mode, "level": level,
+            "row": details::evidence(row)?
+        })),
         sport,
         result_id,
         source_row: None,

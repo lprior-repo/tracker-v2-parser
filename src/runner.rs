@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::{
     config::{Config, TransportMode},
-    database::{Database, Job},
+    database::{Database, Job, JobClass},
     model::{Capture, Source, Target},
     sources,
     transport::{MAX_BODY_BYTES, Mode, Options, Transport, validate_target},
@@ -30,10 +30,15 @@ impl Schedule {
         }
     }
 
-    const fn prefer_bulk(&self, source: Source) -> bool {
-        match source {
-            Source::AthleticNet => self.athleticnet == 3,
-            Source::MileSplit => self.milesplit == 3,
+    const fn preferred(&self, source: Source) -> JobClass {
+        let slot = match source {
+            Source::AthleticNet => self.athleticnet,
+            Source::MileSplit => self.milesplit,
+        };
+        match slot {
+            3 => JobClass::Roster,
+            7 => JobClass::Bulk,
+            _ => JobClass::Profile,
         }
     }
 
@@ -42,7 +47,7 @@ impl Schedule {
             Source::AthleticNet => &mut self.athleticnet,
             Source::MileSplit => &mut self.milesplit,
         };
-        *count = if *count == 3 {
+        *count = if *count == 7 {
             0
         } else {
             count.saturating_add(1)
@@ -233,7 +238,7 @@ async fn acquire_job(database: &Database, job: &Job, transport: &mut Transport) 
     info!("acquiring {}", job.target.url);
     match transport.fetch(&job.target).await {
         Ok(capture) => {
-            if let Some(error) = persist_capture(database, job, &capture).await? {
+            if let Some(error) = persist_capture(database, job, capture).await? {
                 tracing::warn!("page {} failed: {error:#}", job.target.url);
             }
             Ok(())
@@ -286,7 +291,7 @@ async fn next_enabled_job(
             .next_job_with_priority(
                 Some(source),
                 config.limits.max_attempts,
-                schedule.prefer_bulk(source),
+                schedule.preferred(source),
             )
             .await?
         {
@@ -336,19 +341,42 @@ async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
 async fn persist_capture(
     database: &Database,
     job: &Job,
-    capture: &Capture,
+    capture: Capture,
 ) -> Result<Option<anyhow::Error>> {
+    let (capture, retained) = match retain_profile_capture(job, capture).await {
+        Ok(retained) => retained,
+        Err(error) => {
+            return record_failure(
+                database,
+                job,
+                None,
+                false,
+                error.context("retaining profile evidence"),
+            )
+            .await
+            .map(|()| None);
+        }
+    };
     let parsed = match std::str::from_utf8(&capture.body)
         .context("source response is not UTF-8")
         .and_then(|body| sources::parse(&job.target, body))
     {
-        Ok(parsed) => parsed,
+        Ok(mut parsed) => {
+            if let Some(evidence) = retained {
+                evidence.attach(&mut parsed, &job.target.url)?;
+            }
+            parsed
+        }
         Err(error) => {
             let blocked = error.is::<sources::AccessDenied>();
             let error = error.context("parsing source page");
+            let error = match retained {
+                Some(evidence) => error.context(evidence.describe()),
+                None => error,
+            };
             let detail = format!("{error:#}");
             database
-                .fail_job(job, Some(capture), &detail, blocked)
+                .fail_job(job, Some(&capture), &detail, blocked)
                 .await
                 .with_context(|| format!("recording page failure after: {detail}"))?;
             if blocked {
@@ -358,20 +386,33 @@ async fn persist_capture(
         }
     };
     match database
-        .persist(Some(job.id), &job.target, capture, &parsed)
+        .persist(Some(job.id), &job.target, &capture, &parsed)
         .await
     {
         Ok(_) => Ok(None),
         Err(error) => record_failure(
             database,
             job,
-            Some(capture),
+            Some(&capture),
             false,
             error.context("persisting source page"),
         )
         .await
         .map(|()| None),
     }
+}
+
+async fn retain_profile_capture(
+    job: &Job,
+    capture: Capture,
+) -> Result<(Capture, Option<crate::profile_evidence::RetainedCapture>)> {
+    if job.target.source != Source::MileSplit || job.target.kind != crate::model::PageKind::Athlete
+    {
+        return Ok((capture, None));
+    }
+    crate::profile_evidence::retain(capture)
+        .await
+        .map(|(capture, evidence)| (capture, Some(evidence)))
 }
 
 async fn record_failure(
@@ -434,7 +475,7 @@ async fn replay_page(
         Ok(capture) => capture,
         Err(error) => return record_failure(database, &job, None, false, error).await,
     };
-    persist_capture(database, &job, &capture)
+    persist_capture(database, &job, capture)
         .await?
         .map_or_else(|| Ok(()), Err)
 }
@@ -499,25 +540,56 @@ fn combine(result: Result<()>, cleanup: Result<()>) -> Result<()> {
 
 #[cfg(test)]
 mod schedule_tests {
-    use super::{Schedule, Source};
+    use super::{JobClass, Schedule, Source};
+
+    const CYCLE: [JobClass; 8] = [
+        JobClass::Profile,
+        JobClass::Profile,
+        JobClass::Profile,
+        JobClass::Roster,
+        JobClass::Profile,
+        JobClass::Profile,
+        JobClass::Profile,
+        JobClass::Bulk,
+    ];
 
     #[test]
-    fn reservations_rotate_sources_and_bound_each_priority_cycle() {
+    fn given_both_sources_when_reserving_two_cycles_then_sources_alternate_and_all_classes_progress()
+     {
         let mut schedule = Schedule::new();
-        for _ in 0..3 {
-            assert!(!schedule.prefer_bulk(Source::AthleticNet));
-            assert_eq!(schedule.next_source, Source::AthleticNet);
-            schedule.reserved(Source::AthleticNet);
-            assert_eq!(schedule.next_source, Source::MileSplit);
-            assert!(!schedule.prefer_bulk(Source::MileSplit));
-            schedule.reserved(Source::MileSplit);
+        for _ in 0..2 {
+            for expected in CYCLE {
+                for source in [Source::AthleticNet, Source::MileSplit] {
+                    assert_eq!(schedule.next_source, source);
+                    assert_eq!(schedule.preferred(source), expected);
+                    schedule.reserved(source);
+                }
+            }
         }
-        assert!(schedule.prefer_bulk(Source::AthleticNet));
-        assert!(schedule.prefer_bulk(Source::MileSplit));
-        schedule.reserved(Source::AthleticNet);
-        assert!(!schedule.prefer_bulk(Source::AthleticNet));
-        assert!(schedule.prefer_bulk(Source::MileSplit));
-        schedule.reserved(Source::MileSplit);
-        assert!(!schedule.prefer_bulk(Source::MileSplit));
+        assert_eq!(schedule.athleticnet, 0);
+        assert_eq!(schedule.milesplit, 0);
+        assert_eq!(schedule.next_source, Source::AthleticNet);
+    }
+
+    #[test]
+    fn given_only_one_runnable_source_when_reserving_then_other_source_keeps_its_own_cycle() {
+        for source in [Source::AthleticNet, Source::MileSplit] {
+            let mut schedule = Schedule::new();
+            let other = match source {
+                Source::AthleticNet => Source::MileSplit,
+                Source::MileSplit => Source::AthleticNet,
+            };
+            for _ in 0..2 {
+                for expected in CYCLE {
+                    assert_eq!(schedule.preferred(source), expected);
+                    assert_eq!(schedule.preferred(other), JobClass::Profile);
+                    schedule.reserved(source);
+                    assert_eq!(schedule.next_source, other);
+                }
+            }
+            assert_eq!(schedule.preferred(source), JobClass::Profile);
+            schedule.reserved(other);
+            assert_eq!(schedule.next_source, source);
+        }
     }
 }

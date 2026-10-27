@@ -583,12 +583,12 @@ async fn given_native_milesplit_profile_when_replayed_then_all_sports_retain_pub
         assert_success(&test.cli(&args).await?);
         let profiles: Vec<(String,String,Option<i32>)> = sqlx::query_as("SELECT source_id,name,graduation_year FROM athlete_sources").fetch_all(&test.pool).await?;
         assert_eq!(profiles,vec![("15005189".to_owned(),"Brice Fuller".to_owned(),Some(2028))]);
-        for (sport,event,expected) in [("outdoor","1600m","4:12.69"),("indoor","3000m","8:26.83"),("xc","5K","14:49.06")] {
+        for (sport,event,expected) in [("outdoor","1600m",vec!["4:12.69","4:33.74"]),("indoor","3000m",vec!["8:26.83"]),("xc","5K",vec!["14:49.06"])] {
             let marks: Vec<String> = sqlx::query_scalar("SELECT DISTINCT raw_mark FROM results WHERE sport=$1 AND event=$2 ORDER BY raw_mark").bind(sport).bind(event).fetch_all(&test.pool).await?;
-            assert_eq!(marks,vec![expected.to_owned()],"{sport} {event}");
+            assert_eq!(marks,expected,"{sport} {event}");
         }
-        let date: String = sqlx::query_scalar("SELECT DISTINCT meet_date FROM results WHERE sport='outdoor' AND event='1600m'").fetch_one(&test.pool).await?;
-        assert_eq!(date,"2026-06-04");
+        let dates: Vec<(String,String)> = sqlx::query_as("SELECT DISTINCT raw_mark,meet_date FROM results WHERE sport='outdoor' AND event='1600m' ORDER BY raw_mark").fetch_all(&test.pool).await?;
+        assert_eq!(dates,vec![("4:12.69".to_owned(),"2026-06-04".to_owned()),("4:33.74".to_owned(),"2024-05-11".to_owned())]);
         Ok(())
     })).await
 }
