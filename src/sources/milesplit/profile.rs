@@ -214,7 +214,9 @@ fn record(
         .map(html::text)
         .filter(|date| !date.is_empty() && date != "-")
         .map(|date| html::date(&date));
-    let meet_url = html::attribute(row, "a[href*='/meets/']", "href")?;
+    let meet_url = html::attribute(row, "a[href*='/meets/']", "href")?
+        .map(|href| targets::linked(&target.url, &href))
+        .transpose()?;
     let meet_id = meet_url
         .as_deref()
         .map(|url| targets::path_id(url, "meets"))
