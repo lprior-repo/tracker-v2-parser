@@ -18,7 +18,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_numeric_workbook_stem_when_exact_manifest_exists_then_selection_requires_it(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             workbook = root / "athletes-2026.xlsx"
             content = b"original workbook"
             workbook.write_bytes(content)
@@ -58,7 +58,7 @@ class BackupBoundaries(unittest.TestCase):
             {"complete": True, "parts": [{"file": "other.xlsx"}]},
         ):
             with self.subTest(details=details), tempfile.TemporaryDirectory() as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 workbook = root / "athletes-0001.xlsx"
                 workbook.write_bytes(b"partial workbook")
                 (root / "athletes.manifest.json").write_text(json.dumps({
@@ -69,7 +69,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_only_one_numbered_part_when_completion_manifest_exists_then_selection_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             parts = []
             for number in (1, 2):
                 path = root / f"athletes-{number:04d}.xlsx"
@@ -89,7 +89,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_case_colliding_export_names_when_selected_then_unrestorable_bundle_is_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             upper = root / "Report.xlsx"
             lower = root / "report.xlsx"
             upper.write_bytes(b"upper")
@@ -99,18 +99,33 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_symlink_source_when_selected_then_backup_refuses_the_link(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             target = root / "actual.toml"
             target.write_text("states=['WI']\n", encoding="utf-8")
+            self.assertEqual(backup.source_path(target), target)
             link = root / "config.toml"
             link.symlink_to(target)
-            with self.assertRaises(MigrationError):
+            with self.assertRaisesRegex(MigrationError, "Refusing symbolic-link source: " + str(link)):
                 backup.source_path(link)
+            self.assertEqual(target.read_text(encoding="utf-8"), "states=['WI']\n")
+
+    def test_given_symlink_parent_when_selecting_canonical_file_then_alias_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            directory = root / "data"
+            directory.mkdir()
+            target = directory / "config.toml"
+            target.write_text("states=['WI']\n", encoding="utf-8")
+            link = root / "alias"
+            link.symlink_to(directory, target_is_directory=True)
+            self.assertEqual(backup.source_path(target), target)
+            with self.assertRaisesRegex(MigrationError, "Refusing symbolic-link source: " + str(link)):
+                backup.source_path(link / target.name)
             self.assertEqual(target.read_text(encoding="utf-8"), "states=['WI']\n")
 
     def test_given_credentials_in_config_when_selected_then_backup_refuses_without_disclosure(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "config.toml"
+            path = Path(temporary).resolve() / "config.toml"
             password = "not-for-the-transfer-bundle"
             path.write_text(f"database_url='postgresql://user:{password}@host/database'\n", encoding="utf-8")
             with self.assertRaises(MigrationError) as failure:
@@ -119,7 +134,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_missing_workbook_part_when_manifest_is_selected_then_export_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             exports = root / "exports"
             exports.mkdir()
             manifest = Path("athletes.manifest.json")
@@ -133,7 +148,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_same_size_changed_workbook_when_manifest_is_checked_then_corruption_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             exports = root / "exports"
             exports.mkdir()
             workbook = Path("athletes-0001.xlsx")
@@ -149,7 +164,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_misnamed_evidence_when_packaged_then_backup_refuses_unverified_capture(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             evidence = root / "source-evidence"
             evidence.mkdir()
             name = hashlib.sha256(b"original public profile").hexdigest() + ".body"
@@ -162,7 +177,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_existing_archive_when_packaged_then_original_archive_is_not_replaced(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             staging = root / "payload"
             staging.mkdir()
             (staging / "config.toml").write_text("states=['WI']\n", encoding="utf-8")
@@ -174,7 +189,7 @@ class BackupBoundaries(unittest.TestCase):
 
     def test_given_unicode_payload_when_archived_then_paths_bytes_and_private_modes_survive(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             staging = root / "payload"
             staging.mkdir()
             exports = staging / "exports"

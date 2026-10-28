@@ -35,7 +35,7 @@ cargo run -- scrape --help
 cargo run -- export --help
 ```
 The checked-in configuration starts with Wisconsin (`WI`), graduation year 2027,
-season 2026, and MileSplit enabled. Add states to the `states` array after
+season 2026, a 1,000-page checkpoint budget, and MileSplit enabled. Add states to the `states` array after
 checking the Wisconsin acquisition/export loop. Athletic.net is disabled in this
 starting configuration; enable it only when ordinary public access is available.
 Changing states restricts resumed checkpoint acquisition and unfinished-work
@@ -440,6 +440,48 @@ Beads issues move separately using `bd dolt push` on the source and `bd dolt pul
 on the destination.
 
 ## Checks
+
+### Native macOS
+
+Use native Apple Silicon tools on an ARM64 Mac. Chrome can be installed as a
+macOS application; it need not have a `chrome` command on `PATH` when the browser
+discovery library finds `/Applications/Google Chrome.app`. Keep its sandbox
+enabled and let the application create its own temporary browser profile.
+Build from source with the pinned toolchain; do not copy Linux executables,
+`target` directories, profiles, or systemd launch wrappers.
+
+Install PostgreSQL through Homebrew if needed. For a migration, first discover
+the source server's major version and install the matching formula. A private
+local cluster on a separate loopback port can keep this application independent
+of other services. Provision separate application and disposable test databases,
+with non-superuser login roles. Provision the read-only NOLOGIN test role and
+grant membership as described below, without granting the test user CREATEROLE.
+Keep destination credentials in private local settings; never copy Linux `.env`.
+
+Bound compiler and test resources when running the documented checks:
+
+```sh
+CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 MOON_CONCURRENCY=1 moon ci --force
+```
+
+Set `TEST_DATABASE_URL` and `TEST_EXPORT_READONLY_ROLE` privately before that
+command. The application is an on-demand CLI, not an HTTP service. Start its
+database before invoking `scrape --input` for offline replay or `export`, and
+stop only its own database cluster when finished. Replay a representative fixture
+twice, verify stable identities/results/checkpoints, then export and reopen the
+workbook and verify every manifest part's byte length and SHA-256.
+
+macOS temporary-directory paths can contain a `/var` symlink. Migration backup
+inputs must use canonical, existing paths: source symlinks and symlinked parents
+are intentionally rejected. Test fixture roots are canonicalized before creating
+their contents so security assertions exercise the selected path itself.
+
+A fresh fixture database does not restore the real dataset or authorize a new
+crawl. Durable source access stops apply across machines and databases. Keep
+Athletic.net disabled, retain the Wisconsin scope and 1,000-page budget, and
+resolve the existing MileSplit access stop before starting live acquisition.
+
+### Canonical gate
 
 ```sh
 moon run pipeline:fmt

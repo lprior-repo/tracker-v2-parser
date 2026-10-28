@@ -57,7 +57,7 @@ def valid_entries(extra_payload=None):
 class RestoreArchiveBoundaries(unittest.TestCase):
     def test_given_oversized_configuration_when_packaged_or_restored_then_both_sides_refuse(self):
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "config.toml"
+            path = Path(temporary).resolve() / "config.toml"
             prefix = b"states=['WI']\n"
             path.write_bytes(prefix + b" " * (1024 * 1024 - len(prefix)))
             for checker in (backup.check_config, restore.validate_config):
@@ -71,7 +71,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_unicode_and_long_export_paths_when_producer_archive_is_restored_then_pax_paths_survive(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             source = root / "source"
             source.mkdir()
             names = ["exports/Ż seniors.xlsx", "exports/" + "recruiting-" * 12 + ".xlsx"]
@@ -93,7 +93,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_traversal_member_when_unpacked_then_no_file_escapes_staging(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "bad.tar.gz"
@@ -104,7 +104,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_symlink_member_when_unpacked_then_no_symlink_is_created(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "bad.tar.gz"
@@ -120,7 +120,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_duplicate_path_when_unpacked_then_first_payload_cannot_be_replaced(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "duplicate.tar.gz"
@@ -131,7 +131,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_case_colliding_paths_when_unpacked_then_bundle_is_not_mac_portable(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "collision.tar.gz"
@@ -143,7 +143,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_checksum_mismatch_when_unpacked_then_corrupted_bundle_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "corrupted.tar.gz"
@@ -156,7 +156,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_unlisted_regular_file_when_unpacked_then_manifest_cannot_hide_extra_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "extra.tar.gz"
@@ -167,7 +167,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_env_file_in_archive_when_unpacked_then_source_credentials_are_refused(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "credentials.tar.gz"
@@ -178,7 +178,7 @@ class RestoreArchiveBoundaries(unittest.TestCase):
 
     def test_given_concatenated_gzip_payload_when_unpacked_then_hidden_trailer_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             stage = root / "stage"
             stage.mkdir()
             archive = root / "trailer.tar.gz"

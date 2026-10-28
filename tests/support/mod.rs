@@ -9,7 +9,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgConnection, PgPool};
-use tempfile::{TempDir, tempdir};
+use tempfile::TempDir;
 use tokio::process::Command;
 use url::Url;
 
@@ -140,7 +140,7 @@ where
             .acquire_timeout(Duration::from_secs(10))
             .connect(url)
             .await?,
-        directory: tempdir()?,
+        directory: tempfile::tempdir_in(std::env::temp_dir().canonicalize()?)?,
     };
     let result = scenario(&test).await;
     test.pool.close().await;
