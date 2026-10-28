@@ -21,6 +21,8 @@ ON CONFLICT (source_result_key) DO UPDATE SET
         SELECT jsonb_object_agg(key, value)
         FROM jsonb_each(EXCLUDED.raw)
         WHERE key <> 'raw'
+          AND NOT (key = 'members' AND value = '[]'::jsonb
+              AND COALESCE(EXCLUDED.raw #> '{raw,relayLegs}', 'null'::jsonb) = 'null'::jsonb)
           AND value <> 'null'::jsonb
           AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}') <> '')
     ), '{}'::jsonb) || jsonb_build_object('raw',
@@ -60,6 +62,7 @@ ON CONFLICT (source_result_key) DO UPDATE SET
                 ELSE value END)
             FROM jsonb_each(CASE WHEN jsonb_typeof(EXCLUDED.raw->'raw') = 'object'
                 THEN EXCLUDED.raw->'raw' ELSE '{}'::jsonb END)
+            WHERE key <> 'relayLegs' OR value <> 'null'::jsonb
         ), '{}'::jsonb)),
     last_seen = clock_timestamp(),
     normalized_numeric = EXCLUDED.normalized_numeric,
