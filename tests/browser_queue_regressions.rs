@@ -220,13 +220,8 @@ async fn given_non_http_login_rejection_when_origin_is_unavailable_then_original
                 .enqueue(&[contact("https://a.example.edu/contact", "a")], false)
                 .await?;
             let failure = track_scrapper_v2::transport::Failure {
-                stopped_origin: None,
-                capture: Some(Capture {
-                    url: job.target.url.clone(),
-                    status: 403,
-                    content_type: "text/plain".into(),
-                    body: Vec::new(),
-                }),
+                stopped_origin: Some("https://a.example.edu".into()),
+                capture: None,
                 blocked: true,
                 detail: "browser destination requires human access review".into(),
             };
