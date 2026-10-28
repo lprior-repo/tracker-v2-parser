@@ -36,6 +36,14 @@ impl Feed {
                 "43.1",
             ),
             1 => ("Example School", "", "", "", "", ""),
+            5 => (
+                "Example School",
+                "10 Main",
+                "New York",
+                "WI",
+                "00123",
+                "43.1",
+            ),
             2 => (
                 "Corrected School",
                 "20 Main",
@@ -372,4 +380,48 @@ async fn given_unverifiable_published_ownership_when_corrected_then_conflict_pre
 async fn given_unverifiable_private_ownership_when_corrected_then_conflict_preserves_values()
 -> Result<()> {
     support::with_schema(|test| Box::pin(unverifiable_legacy(test, Feed::Private))).await
+}
+
+async fn equivalent_location(test: &support::Scenario, feed: Feed) -> Result<()> {
+    Database::connect(&test.url).await?.close().await;
+    sqlx::query("INSERT INTO schools(source,source_id,name,state,city,address,source_url) VALUES ('athleticnet','equivalent','Example School','wi','NEW  YORK','10 Main','source')").execute(&test.pool).await?;
+    let first = import(test, feed, 5).await?;
+    assert_eq!((first.3, first.4), (1, 0));
+    let location: (String, String, String, String) = sqlx::query_as(
+        "SELECT state,city,address,postal_code FROM schools WHERE source='athleticnet'",
+    )
+    .fetch_one(&test.pool)
+    .await?;
+    assert_eq!(
+        location,
+        (
+            "wi".into(),
+            "NEW  YORK".into(),
+            "10 Main".into(),
+            "00123".into()
+        )
+    );
+    let repeat = import(test, feed, 5).await?;
+    assert_eq!((repeat.3, repeat.4), (0, 0));
+    let changed = import(test, feed, 2).await?;
+    assert_eq!((changed.3, changed.4), (1, 1));
+    let retained: (String, String, String, String) = sqlx::query_as(
+        "SELECT state,city,address,postal_code FROM schools WHERE source='athleticnet'",
+    )
+    .fetch_one(&test.pool)
+    .await?;
+    assert_eq!(retained, location);
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_equivalent_public_location_when_enriched_then_zip_fills_without_rewriting_spelling()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(equivalent_location(test, Feed::Published))).await
+}
+
+#[tokio::test]
+async fn given_equivalent_private_location_when_enriched_then_zip_fills_without_rewriting_spelling()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(equivalent_location(test, Feed::Private))).await
 }
