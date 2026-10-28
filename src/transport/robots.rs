@@ -10,7 +10,7 @@ enum Escape {
     Second(u8),
 }
 
-pub(crate) fn check(address: &str) -> Result<()> {
+pub fn check(address: &str) -> Result<()> {
     let url = Url::parse(address).context("parsing robots policy destination")?;
     let Some(host) = url.host_str() else {
         return Ok(());
