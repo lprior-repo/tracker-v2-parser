@@ -66,9 +66,17 @@ impl DestinationPolicy {
         self.local_origins.push(origin);
     }
 
+    pub fn check_stop(&self) -> Result<()> {
+        self.pacing.check_stop()
+    }
+
     fn url(&self, address: &str) -> Result<Url> {
         if denied_url(address) {
-            let url = Url::parse(address)?;
+            let url = [address, self.target.url.as_str()]
+                .into_iter()
+                .filter_map(|value| Url::parse(value).ok())
+                .find(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+                .context("access-stop has no HTTP authority")?;
             return Err(crate::transport::AccessStop {
                 origin: url.origin().ascii_serialization(),
                 status: None,

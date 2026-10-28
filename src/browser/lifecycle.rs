@@ -182,6 +182,10 @@ impl Acquisition {
             Err(error) => Err(error),
         };
         let result = finish_page_fetch(result, prepared);
+        let result = match interceptor.as_ref() {
+            Some(interceptor) => interceptor.preserve_stop(result),
+            None => result,
+        };
         let target = page.target_id().clone();
         let closing = async {
             #[cfg(test)]

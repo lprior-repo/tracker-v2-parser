@@ -204,8 +204,13 @@ async fn serve(
         socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 16777217\r\nConnection: close\r\n\r\n").await?;
         return Ok(());
     }
-    if path == "/hang" {
-        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: keep-alive\r\n\r\n").await?;
+    if matches!(path, "/hang" | "/hang-denied" | "/hang-throttled") {
+        let status = match path {
+            "/hang-denied" => 403,
+            "/hang-throttled" => 429,
+            _ => 200,
+        };
+        socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: keep-alive\r\n\r\n").as_bytes()).await?;
         match socket.read(&mut buffer).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}

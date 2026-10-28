@@ -47,7 +47,7 @@ impl Pacing {
         Ok(())
     }
 
-    fn check_stop(&self) -> Result<()> {
+    pub fn check_stop(&self) -> Result<()> {
         let stopped = self
             .stopped
             .lock()
