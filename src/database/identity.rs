@@ -145,6 +145,11 @@ async fn update(
     athlete: &Athlete,
 ) -> Result<()> {
     let school = schools::find(connection, source, athlete.school_id.as_deref()).await?;
+    let current_affiliation = source == Source::MileSplit
+        && athlete
+            .source_values
+            .as_ref()
+            .is_some_and(|values| values.get("current_affiliation").is_some());
     sqlx::query(
         "UPDATE athletes a SET \
          needs_review=a.needs_review OR $8 \
@@ -157,7 +162,8 @@ async fn update(
          OR COALESCE(lower(btrim(a.state)) <> lower(btrim($4)), FALSE) \
          OR COALESCE(lower(btrim(a.gender)) <> lower(btrim($5)), FALSE) \
          OR COALESCE(a.graduation_year <> $7, FALSE), \
-         name=COALESCE(a.name,$2),school_id=COALESCE(a.school_id,$3),state=COALESCE(a.state,$4), \
+         name=COALESCE(a.name,$2),school_id=CASE WHEN $9 THEN $3 ELSE COALESCE(a.school_id,$3) END, \
+         state=CASE WHEN $9 THEN $4 ELSE COALESCE(a.state,$4) END, \
          gender=COALESCE(a.gender,$5),grade=COALESCE($6,a.grade), \
          graduation_year=COALESCE(a.graduation_year,$7) \
          FROM athlete_sources p WHERE p.id=$1 AND a.id=p.athlete_id",
@@ -170,13 +176,15 @@ async fn update(
     .bind(&athlete.grade)
     .bind(athlete.graduation_year)
     .bind(athlete.needs_review)
+    .bind(current_affiliation)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "UPDATE athlete_sources SET name=COALESCE(name,$2),school_id=COALESCE(school_id,$3), \
-         state=COALESCE(state,$4),gender=COALESCE(gender,$5),grade=COALESCE($6,grade), \
+        "UPDATE athlete_sources SET name=COALESCE(name,$2), \
+         school_id=CASE WHEN $11 THEN $3 ELSE COALESCE(school_id,$3) END, \
+         state=CASE WHEN $11 THEN $4 ELSE COALESCE(state,$4) END,gender=COALESCE(gender,$5),grade=COALESCE($6,grade), \
          graduation_year=COALESCE(graduation_year,$7),profile_url=COALESCE(profile_url,$8), \
-         details=details || (jsonb_strip_nulls($9::jsonb) - 'same_as' - 'source_values') || \
+         details=(CASE WHEN $11 THEN details - 'school_id' - 'state' ELSE details END) || (jsonb_strip_nulls($9::jsonb) - 'same_as' - 'source_values') || \
          CASE WHEN $9::jsonb ? 'source_values' THEN jsonb_build_object('source_values', \
          COALESCE(details->'source_values','{}'::jsonb) || ($9::jsonb->'source_values') || \
          jsonb_build_object('pages', COALESCE(details->'source_values'->'pages','{}'::jsonb) || \
@@ -202,6 +210,7 @@ async fn update(
     .bind(&athlete.profile_url)
     .bind(serde_json::to_value(athlete)?)
     .bind(athlete.needs_review)
+    .bind(current_affiliation)
     .execute(connection)
     .await?;
     Ok(())

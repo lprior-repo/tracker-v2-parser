@@ -33,9 +33,9 @@ async fn linked_raw_schools_are_persisted_before_identified_and_unassigned_resul
         let results: Vec<(String, String, bool)> = sqlx::query_as("SELECT s.source_id, r.raw_mark, r.athlete_id IS NOT NULL FROM results r JOIN schools s ON s.id = r.represented_school_id ORDER BY s.source_id")
             .fetch_all(&test.pool).await?;
         assert_eq!(results, vec![("98765".to_owned(), "12:40.6".to_owned(), true), ("98766".to_owned(), "12:54.8".to_owned(), false)]);
-        let athlete_school: String = sqlx::query_scalar("SELECT s.source_id FROM athlete_sources a JOIN schools s ON s.id = a.school_id WHERE a.source_id = '123456'")
+        let athlete_school: Option<i64> = sqlx::query_scalar("SELECT school_id FROM athlete_sources WHERE source_id = '123456'")
             .fetch_one(&test.pool).await?;
-        assert_eq!(athlete_school, "98765");
+        assert_eq!(athlete_school, None);
         database.close().await;
         Ok(())
     })).await
