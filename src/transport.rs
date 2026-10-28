@@ -74,6 +74,8 @@ pub struct Transport {
     browser: Option<Browser>,
     clients: BTreeMap<String, Client>,
     next_request: BTreeMap<Source, Instant>,
+    #[cfg(test)]
+    stall_dns: bool,
 }
 
 impl Transport {
@@ -87,6 +89,8 @@ impl Transport {
             browser: None,
             clients: BTreeMap::new(),
             next_request: BTreeMap::new(),
+            #[cfg(test)]
+            stall_dns: false,
         })
     }
 

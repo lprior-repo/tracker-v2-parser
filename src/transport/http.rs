@@ -21,6 +21,16 @@ impl Transport {
         target: &Target,
         headers: &BTreeMap<String, String>,
     ) -> Result<Capture> {
+        tokio::time::timeout(Duration::from_secs(45), self.http_request(target, headers))
+            .await
+            .context("source HTTP request timed out")?
+    }
+
+    async fn http_request(
+        &mut self,
+        target: &Target,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Capture> {
         let url = policy::source_url(target, &target.url)?;
         let (_, state) = stream::iter((0..6).map(Ok::<_, anyhow::Error>))
             .try_fold((self, Hop::Next(url)), |(transport, state), _| async move {
@@ -79,6 +89,10 @@ impl Transport {
         if let Some(client) = self.clients.get(&origin) {
             return Ok(client.clone());
         }
+        #[cfg(test)]
+        if self.stall_dns {
+            futures::future::pending::<()>().await;
+        }
         let addresses = policy::public_addresses(url).await?;
         let host = url.host_str().context("source URL has no host")?;
         let client = Client::builder()
@@ -92,6 +106,46 @@ impl Transport {
             .context("building pinned public HTTP client")?;
         self.clients.insert(origin, client.clone());
         Ok(client)
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::{
+        model::{PageContext, PageKind, Source},
+        transport::{Mode, Options},
+    };
+
+    #[tokio::test(start_paused = true)]
+    async fn given_stalled_dns_when_http_fetches_then_total_deadline_includes_resolution()
+    -> Result<()> {
+        let mut transport = Transport::new(Options {
+            mode: Mode::Http,
+            driver_url: None,
+            profile: std::path::PathBuf::new(),
+            headless: true,
+            rps: 1.0,
+        })?;
+        transport.stall_dns = true;
+        let target = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            "https://www.milesplit.com/athletes/fixture".into(),
+            PageContext::default(),
+        );
+        let start = tokio::time::Instant::now();
+        let result = tokio::time::timeout(Duration::from_secs(46), transport.fetch(&target)).await;
+        let elapsed = start.elapsed();
+        transport.close().await?;
+        let failure = result
+            .expect("transport's own 45 second deadline must beat fixture watchdog")
+            .expect_err("stalled resolution must time out");
+        assert_eq!(elapsed, Duration::from_secs(45));
+        assert!(!failure.blocked);
+        assert!(failure.capture.is_none());
+        assert!(failure.detail.contains("timed out"), "{}", failure.detail);
+        Ok(())
     }
 }
 

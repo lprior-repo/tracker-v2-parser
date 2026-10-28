@@ -51,15 +51,15 @@ pub(super) async fn enqueue_rows(
 pub(super) async fn note_contact_stops(connection: &mut PgConnection) -> Result<()> {
     sqlx::query(
         "UPDATE scrape_pages p SET notes=array_append(p.notes, \
-           'Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' | ' || COALESCE(blocked.last_error,'access stop')) \
-         FROM scrape_pages blocked \
+           'Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' -> ' || COALESCE(blocked.cursor->>'access_stop_url',blocked.url) || ' | ' || COALESCE(blocked.last_error,'access stop')) \
+         FROM scrape_pages blocked CROSS JOIN LATERAL unnest(ARRAY[blocked.url,blocked.cursor->>'access_stop_url']) AS stop(url) \
          WHERE p.status IN ('pending','failed') AND p.cursor->>'kind'='contacts' \
          AND blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
-         AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
-           CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+         AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
+           CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
          regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
            CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') \
-         AND NOT ('Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' | ' || COALESCE(blocked.last_error,'access stop')) = ANY(p.notes)",
+         AND NOT ('Contact acquisition stopped by blocked site checkpoint: ' || blocked.url || ' -> ' || COALESCE(blocked.cursor->>'access_stop_url',blocked.url) || ' | ' || COALESCE(blocked.last_error,'access stop')) = ANY(p.notes)",
     )
     .execute(connection)
     .await?;
@@ -104,9 +104,9 @@ pub(super) async fn next(
              AND p.cursor->'context'->>'state' IS NULL \
              AND p.cursor->'context'->>'subject_id'=array_to_string($4,','))) \
          AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
-           SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
-           AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
-             CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+           SELECT 1 FROM scrape_pages blocked CROSS JOIN LATERAL unnest(ARRAY[blocked.url,blocked.cursor->>'access_stop_url']) AS stop(url) WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+           AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
            regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
              CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))) \
          ORDER BY (p.attempts = 0) DESC, \
@@ -141,9 +141,9 @@ pub(super) async fn start_attempt(pool: &PgPool, page_id: i64, max_attempts: u32
         "UPDATE scrape_pages p SET attempts=attempts+1,status='pending' \
          WHERE p.id=$1 AND p.status IN ('pending','failed') AND p.attempts < $2 \
          AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
-           SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
-           AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
-             CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+           SELECT 1 FROM scrape_pages blocked CROSS JOIN LATERAL unnest(ARRAY[blocked.url,blocked.cursor->>'access_stop_url']) AS stop(url) WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+           AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
+             CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
            regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
              CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'')))",
     )
@@ -190,12 +190,15 @@ pub(super) async fn fail(
         |response| format!("HTTP {}: {detail}", response.status),
     );
     let id: Option<i64> = sqlx::query_scalar(
-        "UPDATE scrape_pages SET status=$3,last_error=$4 WHERE id=$1 AND page_key=$2 RETURNING id",
+        "UPDATE scrape_pages SET status=$3,last_error=$4, \
+         cursor=CASE WHEN $5::text IS NULL THEN cursor ELSE jsonb_set(cursor,'{access_stop_url}',to_jsonb($5::text)) END \
+         WHERE id=$1 AND page_key=$2 RETURNING id",
     )
     .bind(job.id)
     .bind(keys::target(&job.target)?)
     .bind(status)
     .bind(error)
+    .bind(response.filter(|_| blocked).map(|capture| capture.url.as_str()))
     .fetch_optional(&mut *connection)
     .await?;
     if id.is_none() {

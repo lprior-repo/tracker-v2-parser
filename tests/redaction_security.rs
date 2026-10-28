@@ -109,6 +109,26 @@ fn ordinary_html_is_preserved() -> Result<()> {
 }
 
 #[test]
+fn given_braced_unicode_secret_identifier_when_retained_then_canary_is_removed() -> Result<()> {
+    for assignment in [
+        r"window.to\u{6b}en = 'synthetic-braced-canary';",
+        r"window.\u{74}oken = 'synthetic-braced-canary';",
+        r"window.to\u{00006B}en = 'synthetic-braced-canary';",
+    ] {
+        let source = format!(
+            "<p>Public Athlete 44.88</p><script>{assignment}</script><script type='application/ld+json'>{{\"name\":\"Public Athlete\"}}</script>"
+        );
+        let retained = redact_capture(capture(source.as_bytes()))?;
+        let text = std::str::from_utf8(&retained.body)?;
+        assert!(!text.contains("synthetic-braced-canary"), "{assignment}");
+        assert!(text.contains("<p>Public Athlete 44.88</p>"));
+        assert!(text.contains("{\"name\":\"Public Athlete\"}"));
+        assert_eq!(redact_capture(capture(&retained.body))?.body, retained.body);
+    }
+    Ok(())
+}
+
+#[test]
 fn given_harmless_sdk_computed_reads_and_public_json_when_retained_then_source_is_preserved()
 -> Result<()> {
     let source = br#"<main><p>Public Athlete 44.88</p><a href="mailto:coach@example.org">Public Coach</a></main><script>sdk[(index)] = handler; sdk[(handlers[index])](event); const name = sdk[(`event`)]; const flags = [`enabled`]; const grouped = sdk[(("event"))] === "ready";</script><script type="application/ld+json">{"name":"Public Athlete","Result":"44.88","coach":"Public Coach"}</script>"#;

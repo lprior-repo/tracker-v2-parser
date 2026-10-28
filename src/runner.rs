@@ -487,9 +487,9 @@ async fn replay_page(
             "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE p.id=$1 \
              AND (p.status='succeeded' OR (p.status IN ('pending','failed') AND p.attempts >= $2)) \
              AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
-               SELECT 1 FROM scrape_pages blocked WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
-               AND regexp_replace(lower(substring(blocked.url from '(?i)^https?://([^/?#]+)')), \
-                 CASE WHEN lower(blocked.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
+               SELECT 1 FROM scrape_pages blocked CROSS JOIN LATERAL unnest(ARRAY[blocked.url,blocked.cursor->>'access_stop_url']) AS stop(url) WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
+               AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
+                 CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
                regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
                  CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))))",
         )
