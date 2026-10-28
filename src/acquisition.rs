@@ -20,6 +20,8 @@ pub enum AcquisitionPolicy {
         reviewed_media_stops: Vec<ReviewedMediaStop>,
         #[serde(default)]
         collect_contacts: bool,
+        #[serde(default)]
+        profile_coverage_only: bool,
     },
 }
 
@@ -78,6 +80,16 @@ impl From<ReviewedMediaStop> for String {
 }
 
 impl AcquisitionPolicy {
+    pub(crate) const fn profile_coverage_only(&self) -> bool {
+        matches!(
+            self,
+            Self::PublicResults {
+                profile_coverage_only: true,
+                ..
+            }
+        )
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::PublicResults {
             reviewed_media_stops,
@@ -158,5 +170,46 @@ impl AcquisitionPolicy {
                 .and_then(Value::as_str)
                 == Some(EXCLUSION)
             && self.exclusion_reason(&target).is_some())
+    }
+}
+
+#[cfg(test)]
+mod profile_coverage_tests {
+    use super::*;
+    use crate::model::PageContext;
+    use serde_json::json;
+
+    #[test]
+    fn given_focused_profile_coverage_when_access_stops_are_checked_then_the_same_review_and_exclusion_rules_apply()
+    -> Result<()> {
+        let reviewed = "https://wi.milesplit.com/athletes/42-runner/photos";
+        let photo = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            reviewed.into(),
+            PageContext::default(),
+        );
+        let profile = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            "https://wi.milesplit.com/athletes/42-runner".into(),
+            PageContext::default(),
+        );
+        for focused in [false, true] {
+            let policy: AcquisitionPolicy = serde_json::from_value(
+                json!({"mode":"public_results","profile_coverage_only":focused,"reviewed_media_stops":[reviewed]}),
+            )?;
+            assert_eq!(policy.profile_coverage_only(), focused);
+            assert!(!policy.includes_contacts());
+            assert!(policy.exclusion_reason(&photo).is_some());
+            assert!(policy.exclusion_reason(&profile).is_none());
+            assert!(policy.permits_preserved_stop(reviewed, 1, &serde_json::to_value(&photo)?)?);
+            let mut cursor = serde_json::to_value(&profile)?;
+            cursor["public_results_exclusion"] = json!(EXCLUSION);
+            assert!(!policy.permits_preserved_stop(&profile.url, 1, &cursor)?);
+            assert!(!policy.permits_preserved_stop(&profile.url, 0, &cursor)?);
+        }
+        assert!(!AcquisitionPolicy::Complete.profile_coverage_only());
+        Ok(())
     }
 }

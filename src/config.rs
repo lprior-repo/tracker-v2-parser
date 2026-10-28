@@ -117,6 +117,11 @@ impl Config {
     pub fn validate(&mut self) -> Result<()> {
         self.acquisition.validate()?;
         self.validate_limits()?;
+        ensure!(
+            !self.acquisition.profile_coverage_only()
+                || (!self.sources.athleticnet.enabled && self.sources.milesplit.enabled),
+            "profile_coverage_only requires MileSplit enabled and Athletic.net disabled"
+        );
         let mut states = self
             .states
             .iter()

@@ -530,6 +530,29 @@ reviewed_media_stops = ["https://mn.milesplit.com/athletes/13557507-tana-borland
 collect_contacts = true
 ```
 
+Normal public-results runs prioritize saved school chains before broad
+discovery: team, roster, matching athlete profile and published result sections.
+
+To finish the queued school chains in the selected state and graduation cohort,
+add `profile_coverage_only = true` to `[acquisition]`. This
+optional setting defaults to false and requires MileSplit enabled with
+Athletic.net disabled. Focused runs complete queued team and roster parents,
+then the matching athletes' base profiles and published stats/progression
+sections within those school chains, then saved school contacts when
+`collect_contacts = true`. A queued roster can discover additional matching
+athletes before the crawler advances to the next school. Focused runs add no
+directory seeds or contact backfill and do not expand into media, articles or
+broad meet discovery. Optional contact requests that exhaust their attempt
+budget retain their failure details and allow the next school to proceed;
+unfinished team or athlete stages still prevent a false completion.
+Roster profiles with no graduation year receive a base-page check to establish
+their year. Result follow-ups and the recruiting worksheet require the selected
+graduation year; known nonmatching athletes remain outside that work.
+The configured rate (at most one request per second), page budget and access-stop
+guards still apply. Profiles already fetched
+without public marks do not gain invented PRs; this mode does not establish
+statewide completeness.
+
 `collect_contacts = true` enables the existing school-contact parser/backfill
 while retaining authority-scoped contact access stops. Its default is false.
 The listed stop was reviewed as subscription photos. Its blocked checkpoint is

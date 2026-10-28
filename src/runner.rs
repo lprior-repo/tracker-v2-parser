@@ -81,6 +81,10 @@ impl Runner {
     ) -> Result<()> {
         let mut config = config.clone();
         config.validate()?;
+        ensure!(
+            !(refresh && config.acquisition.profile_coverage_only()),
+            "profile_coverage_only does not refresh completed profiles"
+        );
         let database = Database::connect(database_url).await?;
         let result = self.scrape_locked(&database, &config, refresh).await;
         database.close().await;
@@ -120,13 +124,15 @@ impl Runner {
         config: &Config,
         refresh: bool,
     ) -> Result<()> {
-        let targets = Self::discover_targets(config)?;
-        targets.iter().try_for_each(validate_target)?;
-        database.enqueue(&targets, refresh).await?;
-        if config.acquisition.includes_contacts() {
-            database
-                .backfill_contacts(&config.states, &config.enabled_sources(), config.season)
-                .await?;
+        if !config.acquisition.profile_coverage_only() {
+            let targets = Self::discover_targets(config)?;
+            targets.iter().try_for_each(validate_target)?;
+            database.enqueue(&targets, refresh).await?;
+            if config.acquisition.includes_contacts() {
+                database
+                    .backfill_contacts(&config.states, &config.enabled_sources(), config.season)
+                    .await?;
+            }
         }
         let mut athleticnet = make_transport(config, Source::AthleticNet)?;
         let mut milesplit = make_transport(config, Source::MileSplit)?;
@@ -300,7 +306,38 @@ async fn next_enabled_job(
     let mut sources = config.enabled_sources();
     sources.sort_by_key(|source| *source != schedule.next_source);
     for source in sources {
-        if let Some(job) = database
+        if source == Source::MileSplit
+            && matches!(
+                &config.acquisition,
+                crate::acquisition::AcquisitionPolicy::PublicResults { .. }
+            )
+        {
+            let profile = database
+                .next_profile_coverage_job(
+                    Some(source),
+                    config.limits.max_attempts,
+                    &config.states,
+                    &config.graduation_years,
+                    config.acquisition.includes_contacts(),
+                )
+                .await?;
+            if profile.is_some() {
+                return Ok(profile);
+            }
+            database
+                .check_profile_coverage_exhausted(
+                    source,
+                    config.limits.max_attempts,
+                    &config.states,
+                    &config.graduation_years,
+                    config.acquisition.includes_contacts(),
+                )
+                .await?;
+        }
+        if config.acquisition.profile_coverage_only() {
+            continue;
+        }
+        let job = database
             .next_job_for_cohort(
                 Some(source),
                 config.limits.max_attempts,
@@ -308,8 +345,8 @@ async fn next_enabled_job(
                 &config.states,
                 &config.graduation_years,
             )
-            .await?
-        {
+            .await?;
+        if let Some(job) = job {
             return Ok(Some(job));
         }
     }
@@ -346,6 +383,17 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
 }
 
 async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
+    if config.acquisition.profile_coverage_only() {
+        return database
+            .check_profile_coverage_exhausted(
+                Source::MileSplit,
+                config.limits.max_attempts,
+                &config.states,
+                &config.graduation_years,
+                config.acquisition.includes_contacts(),
+            )
+            .await;
+    }
     for source in config.enabled_sources() {
         let exhausted: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2 \

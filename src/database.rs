@@ -15,6 +15,7 @@ mod contacts;
 mod export_snapshot;
 mod identity;
 mod keys;
+mod profile_coverage;
 mod queue;
 mod records;
 mod report;
