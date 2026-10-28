@@ -185,6 +185,17 @@ pub(super) async fn fail(
     blocked: bool,
 ) -> Result<()> {
     let status = if blocked { "blocked" } else { "failed" };
+    let stopped_origin = response
+        .filter(|_| blocked)
+        .map(|capture| {
+            let url = url::Url::parse(&capture.url).context("invalid access-stop URL")?;
+            anyhow::ensure!(
+                matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+                "access-stop URL must have an HTTP authority"
+            );
+            Ok::<_, anyhow::Error>(url.origin().ascii_serialization())
+        })
+        .transpose()?;
     let error = response.map_or_else(
         || detail.to_owned(),
         |response| format!("HTTP {}: {detail}", response.status),
@@ -198,7 +209,7 @@ pub(super) async fn fail(
     .bind(keys::target(&job.target)?)
     .bind(status)
     .bind(error)
-    .bind(response.filter(|_| blocked).map(|capture| capture.url.as_str()))
+    .bind(stopped_origin)
     .fetch_optional(&mut *connection)
     .await?;
     if id.is_none() {

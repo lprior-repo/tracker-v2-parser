@@ -76,6 +76,10 @@ pub struct Transport {
     next_request: BTreeMap<Source, Instant>,
     #[cfg(test)]
     stall_dns: bool,
+    #[cfg(test)]
+    http_test_budget: Option<Duration>,
+    #[cfg(test)]
+    http_test_url: Option<url::Url>,
 }
 
 impl Transport {
@@ -91,6 +95,10 @@ impl Transport {
             next_request: BTreeMap::new(),
             #[cfg(test)]
             stall_dns: false,
+            #[cfg(test)]
+            http_test_budget: None,
+            #[cfg(test)]
+            http_test_url: None,
         })
     }
 

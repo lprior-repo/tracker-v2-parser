@@ -19,7 +19,7 @@ static ASSIGNMENT: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
     Regex::new(
         r#"(?x)
         (?P<key>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|
-            (?:[A-Za-z0-9_$-]|\\(?:u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]{1,6}\})|x[0-9a-fA-F]{2})|&\#(?:[xX][0-9a-fA-F]+|[0-9]+);)+)
+            (?:[A-Za-z0-9_$-]|\\(?:u(?:[A-Za-z0-9]{0,4}|\{[^}\s=;]*\}?)|x[A-Za-z0-9]{0,2})|&\#(?:[xX][0-9a-fA-F]+|[0-9]+);)+)
         (?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r?\n|$))*
         (?:\](?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r?\n|$))*)?
         (?P<operator>:|(?:\*\*|<<|>>>|>>|&&|\|\||\?\?|[+\-*/%&|^])?=)
@@ -34,8 +34,11 @@ static FORM: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"(?is)<(?:input|meta)\b[^>]*>"));
 static ENTITY: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"&#(?:[xX][0-9a-fA-F]+|[0-9]+);"));
-static IDENTIFIER_ESCAPE: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"\\u\{(?P<hex>[0-9a-fA-F]{1,6})\}"));
+static IDENTIFIER_ESCAPE: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
+    Regex::new(
+        r"\\(?:u(?:\{(?P<braced>[0-9a-fA-F]+)\}|(?P<fixed>[0-9a-fA-F]{4}))|x(?P<byte>[0-9a-fA-F]{2}))",
+    )
+});
 
 pub(super) fn jwt_pattern() -> Result<&'static Regex> {
     JWT.as_ref().context("compiling token redaction")
@@ -188,11 +191,7 @@ fn decode_identifier(key: &str) -> Result<String> {
         (String::with_capacity(key.len()), 0),
         |(mut decoded, end), capture| -> Result<_> {
             let matched = capture.get(0).context("missing identifier escape")?;
-            let hex = capture
-                .name("hex")
-                .context("missing identifier codepoint")?;
-            let character = char::from_u32(u32::from_str_radix(hex.as_str(), 16)?)
-                .context("invalid identifier codepoint")?;
+            let character = escaped_character(&capture)?;
             decoded.push_str(
                 key.get(end..matched.start())
                     .context("invalid identifier boundary")?,
@@ -207,6 +206,22 @@ fn decode_identifier(key: &str) -> Result<String> {
         "cannot safely decode assignment key"
     );
     Ok(decoded)
+}
+
+fn escaped_character(capture: &regex::Captures<'_>) -> Result<char> {
+    let hex = capture
+        .name("braced")
+        .or_else(|| capture.name("fixed"))
+        .or_else(|| capture.name("byte"))
+        .context("missing identifier codepoint")?;
+    let significant = hex.as_str().trim_start_matches('0');
+    ensure!(significant.len() <= 6, "invalid identifier codepoint");
+    let scalar = if significant.is_empty() {
+        0
+    } else {
+        u32::from_str_radix(significant, 16)?
+    };
+    char::from_u32(scalar).context("invalid identifier codepoint")
 }
 
 fn decode_entities(text: &str, entities: &Regex) -> String {

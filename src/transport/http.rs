@@ -21,25 +21,23 @@ impl Transport {
         target: &Target,
         headers: &BTreeMap<String, String>,
     ) -> Result<Capture> {
-        tokio::time::timeout(Duration::from_secs(45), self.http_request(target, headers))
-            .await
-            .context("source HTTP request timed out")?
-    }
-
-    async fn http_request(
-        &mut self,
-        target: &Target,
-        headers: &BTreeMap<String, String>,
-    ) -> Result<Capture> {
+        let budget = Duration::from_secs(45);
+        #[cfg(test)]
+        let budget = self.http_test_budget.map_or(budget, std::convert::identity);
         let url = policy::source_url(target, &target.url)?;
-        let (_, state) = stream::iter((0..6).map(Ok::<_, anyhow::Error>))
-            .try_fold((self, Hop::Next(url)), |(transport, state), _| async move {
-                let next = match state {
-                    Hop::Complete(capture) => Hop::Complete(capture),
-                    Hop::Next(url) => transport.hop(target, headers, &url).await?,
-                };
-                Ok((transport, next))
-            })
+        let (_, state, _) = stream::iter((0..6).map(Ok::<_, anyhow::Error>))
+            .try_fold(
+                (self, Hop::Next(url), budget),
+                |(transport, state, mut remaining), _| async move {
+                    let next = match state {
+                        Hop::Complete(capture) => Hop::Complete(capture),
+                        Hop::Next(url) => {
+                            transport.hop(target, headers, &url, &mut remaining).await?
+                        }
+                    };
+                    Ok((transport, next, remaining))
+                },
+            )
             .await?;
         match state {
             Hop::Complete(capture) => Ok(capture),
@@ -53,34 +51,79 @@ impl Transport {
         target: &Target,
         headers: &BTreeMap<String, String>,
         url: &Url,
+        remaining: &mut Duration,
     ) -> Result<Hop> {
-        let client = self.client_for(url).await?;
         let method = Method::from_bytes(target.method.as_deref().map_or(b"GET", str::as_bytes))
             .context("parsing source HTTP method")?;
         ensure!(
             matches!(method, Method::GET | Method::POST),
             "source only supports GET and POST requests"
         );
+        ensure!(!remaining.is_zero(), "source HTTP request timed out");
         self.pace(target).await?;
-        let mut request = client.request(method.clone(), url.clone());
+        let start = tokio::time::Instant::now();
+        let deadline = start
+            .checked_add(*remaining)
+            .context("HTTP network deadline overflow")?;
+        let result = self
+            .network_hop(target, headers, url, &method, deadline)
+            .await;
+        *remaining = remaining.saturating_sub(start.elapsed());
+        result
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn network_hop(
+        &mut self,
+        target: &Target,
+        headers: &BTreeMap<String, String>,
+        url: &Url,
+        method: &Method,
+        deadline: tokio::time::Instant,
+    ) -> Result<Hop> {
+        let response =
+            tokio::time::timeout_at(deadline, self.send_request(target, headers, url, method))
+                .await
+                .context("source HTTP request timed out")??;
+        if response.status().is_redirection() {
+            return redirect(target, url, &response, method, headers);
+        }
+        let status = response.status().as_u16();
+        let captured = tokio::time::timeout_at(deadline, capture(response))
+            .await
+            .context("source HTTP response body timed out")
+            .and_then(std::convert::identity);
+        if access_stop_status(status) {
+            return captured
+                .map(Hop::Complete)
+                .map_err(|error| AccessStopCaptureError { status, error }.into());
+        }
+        captured.map(Hop::Complete)
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn send_request(
+        &mut self,
+        target: &Target,
+        headers: &BTreeMap<String, String>,
+        url: &Url,
+        method: &Method,
+    ) -> Result<Response> {
+        let client = self.client_for(url).await?;
+        let request_url = url.clone();
+        #[cfg(test)]
+        let request_url = self
+            .http_test_url
+            .clone()
+            .map_or(request_url, std::convert::identity);
+        let mut request = client.request(method.clone(), request_url);
         request = headers.iter().fold(request, |request, (name, value)| {
             request.header(name, value)
         });
         if let Some(body) = &target.body {
             request = request.json(body);
         }
-        let response = request.send().await.context("fetching source response")?;
-        if response.status().is_redirection() {
-            return redirect(target, url, &response, &method, headers);
-        }
-        let status = response.status().as_u16();
-        if access_stop_status(status) {
-            return capture(response)
-                .await
-                .map(Hop::Complete)
-                .map_err(|error| AccessStopCaptureError { status, error }.into());
-        }
-        capture(response).await.map(Hop::Complete)
+        request.send().await.context("fetching source response")
     }
 
     #[tracing::instrument(skip_all)]
@@ -108,6 +151,9 @@ impl Transport {
         Ok(client)
     }
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod deadline_tests {

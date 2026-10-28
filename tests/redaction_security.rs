@@ -129,6 +129,42 @@ fn given_braced_unicode_secret_identifier_when_retained_then_canary_is_removed()
 }
 
 #[test]
+fn given_zero_padded_and_mixed_identifier_escapes_when_retained_then_canary_is_removed()
+-> Result<()> {
+    for key in [
+        r"to\u{0000006b}en".to_owned(),
+        format!(r"to\u{{{}6b}}en", "0".repeat(4096)),
+        r"\u0074o\u{0000006b}\x65n".to_owned(),
+    ] {
+        let source = format!(
+            "<p>Public result 44.88</p><script>window.{key} = 'synthetic-padded-canary';</script>"
+        );
+        let retained = redact_capture(capture(source.as_bytes()))?;
+        let text = std::str::from_utf8(&retained.body)?;
+        assert!(!text.contains("synthetic-padded-canary"), "{key}");
+        assert!(text.contains("<p>Public result 44.88</p>"));
+    }
+    Ok(())
+}
+
+#[test]
+fn given_malformed_or_invalid_identifier_escapes_when_retained_then_capture_is_rejected() {
+    for key in [
+        r"to\u{}en",
+        r"to\u{zz}en",
+        r"to\u{000000110000}en",
+        r"to\u{d800}en",
+        r"to\u{6ben",
+        r"to\u{6b}\u00zzn",
+    ] {
+        let source = format!("<script>window.{key} = 'synthetic-invalid-canary';</script>");
+        let error = redact_capture(capture(source.as_bytes()))
+            .expect_err("invalid escape cannot be safely retained");
+        assert!(!format!("{error:#}").contains("synthetic-invalid-canary"));
+    }
+}
+
+#[test]
 fn given_harmless_sdk_computed_reads_and_public_json_when_retained_then_source_is_preserved()
 -> Result<()> {
     let source = br#"<main><p>Public Athlete 44.88</p><a href="mailto:coach@example.org">Public Coach</a></main><script>sdk[(index)] = handler; sdk[(handlers[index])](event); const name = sdk[(`event`)]; const flags = [`enabled`]; const grouped = sdk[(("event"))] === "ready";</script><script type="application/ld+json">{"name":"Public Athlete","Result":"44.88","coach":"Public Coach"}</script>"#;
