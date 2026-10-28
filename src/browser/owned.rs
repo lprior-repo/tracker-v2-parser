@@ -463,6 +463,7 @@ mod inventory_tests {
             &target,
             &BTreeMap::new(),
             browser.chromium.endpoint(),
+            std::time::Duration::ZERO,
             None,
             None,
         )

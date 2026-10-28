@@ -11,6 +11,8 @@ LEFT JOIN LATERAL (
         FROM schools s
         WHERE s.id IN (
             SELECT p.school_id FROM athlete_sources p WHERE p.athlete_id=a.id AND p.school_id IS NOT NULL
+              AND NOT COALESCE((p.details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean
+                  AND p.details#>>'{source_values,current_affiliation,unverified_school_state}'=s.state,FALSE)
         )
     ) school_states
 ) ss ON true

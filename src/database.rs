@@ -165,7 +165,26 @@ impl Database {
         blocked: bool,
     ) -> Result<()> {
         let mut transaction = self.pool.begin().await?;
-        let result = queue::fail(&mut transaction, job, capture, detail, blocked).await;
+        let result = queue::fail(&mut transaction, job, capture, detail, blocked, None).await;
+        finish(transaction, result).await
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub async fn fail_acquisition(
+        &self,
+        job: &Job,
+        failure: &crate::transport::Failure,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        let result = queue::fail(
+            &mut transaction,
+            job,
+            failure.capture.as_ref(),
+            &failure.detail,
+            failure.blocked,
+            failure.stopped_origin.as_deref(),
+        )
+        .await;
         finish(transaction, result).await
     }
 

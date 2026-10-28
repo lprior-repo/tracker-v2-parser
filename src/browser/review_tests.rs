@@ -20,11 +20,14 @@ use tokio::{
 use super::Browser;
 use crate::model::{PageContext, PageKind, Source, Target};
 
+mod regressions;
+
 type Routes = BTreeMap<String, (u16, String, String, String)>;
 
 struct Fixture {
     origin: String,
     requests: Arc<Mutex<Vec<String>>>,
+    received: Arc<Mutex<Vec<(String, tokio::time::Instant)>>>,
     connections: Arc<AtomicUsize>,
     active: Arc<AtomicUsize>,
     changed: Arc<Notify>,
@@ -42,6 +45,8 @@ impl Fixture {
         let origin = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
         let observed = Arc::clone(&requests);
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let timestamps = Arc::clone(&received);
         let connections = Arc::new(AtomicUsize::new(0));
         let accepted = Arc::clone(&connections);
         let active = Arc::new(AtomicUsize::new(0));
@@ -64,6 +69,7 @@ impl Fixture {
                     socket,
                     Arc::clone(&routes),
                     Arc::clone(&observed),
+                    Arc::clone(&timestamps),
                     Arc::clone(&running),
                     Arc::clone(&notifications),
                     gate.clone(),
@@ -77,6 +83,7 @@ impl Fixture {
         Ok(Self {
             origin,
             requests,
+            received,
             connections,
             active,
             changed,
@@ -150,6 +157,7 @@ async fn serve(
     mut socket: TcpStream,
     routes: Arc<Routes>,
     requests: Arc<Mutex<Vec<String>>>,
+    received: Arc<Mutex<Vec<(String, tokio::time::Instant)>>>,
     active: Arc<AtomicUsize>,
     changed: Arc<Notify>,
     gate: Option<Arc<Notify>>,
@@ -176,6 +184,10 @@ async fn serve(
         .split_whitespace()
         .nth(1)
         .context("fixture request omitted path")?;
+    received
+        .lock()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        .push((path.to_owned(), tokio::time::Instant::now()));
     requests
         .lock()
         .map_err(|error| anyhow::anyhow!(error.to_string()))?
@@ -192,8 +204,13 @@ async fn serve(
         socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 16777217\r\nConnection: close\r\n\r\n").await?;
         return Ok(());
     }
-    if path == "/hang" {
-        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: keep-alive\r\n\r\n").await?;
+    if matches!(path, "/hang" | "/hang-denied" | "/hang-throttled") {
+        let status = match path {
+            "/hang-denied" => 403,
+            "/hang-throttled" => 429,
+            _ => 200,
+        };
+        socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: keep-alive\r\n\r\n").as_bytes()).await?;
         match socket.read(&mut buffer).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
@@ -559,14 +576,21 @@ async fn given_authentication_redirect_when_chromium_navigates_then_login_receiv
     let profile = tempfile::tempdir()?;
     let browser = browser(&safe.origin, profile.path()).await?;
     let scenario = async {
-        let capture = browser
+        let error = browser
             .fetch(
                 &target(&safe.origin, "/redirect"),
                 &BTreeMap::new(),
                 Duration::ZERO,
             )
-            .await?;
-        assert_eq!(capture.status, 403);
+            .await
+            .expect_err("login redirect must preserve a typed stop");
+        let failure = crate::transport::failure(&error);
+        assert!(failure.blocked);
+        assert!(failure.capture.is_none());
+        assert_eq!(
+            failure.stopped_origin.as_deref(),
+            Some(safe.origin.as_str())
+        );
         let requests = safe.recorded()?;
         assert!(
             requests
@@ -653,6 +677,10 @@ async fn given_oversized_challenge_when_chromium_captures_then_access_stop_survi
             .downcast_ref::<crate::transport::AccessStopCaptureError>()
             .context("challenge status must remain typed")?;
         assert_eq!(stop.status, 403);
+        assert_eq!(
+            crate::transport::failure(&error).stopped_origin.as_deref(),
+            Some(safe.origin.as_str())
+        );
         assert_eq!(browser.chromium.pages().await?.len(), initial_pages);
         Ok::<_, anyhow::Error>(())
     }

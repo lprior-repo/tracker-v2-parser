@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use futures::{TryStreamExt, stream};
 use serde_json::Value;
 use sqlx::PgConnection;
@@ -8,6 +8,9 @@ use sqlx::PgConnection;
 use crate::model::{PageContext, PageKind, Performance, Source, Target};
 
 use super::{keys, school_evidence};
+
+mod masked;
+pub(super) use masked::review as review_masked;
 
 type Incoming<'a> = BTreeMap<(&'a str, &'a str), (usize, usize)>;
 #[derive(Default)]
@@ -156,13 +159,100 @@ async fn retained_matches(
 #[tracing::instrument(skip(connection, ids))]
 async fn flag_ambiguity(connection: &mut PgConnection, ids: &[i64]) -> Result<()> {
     sqlx::query(
-        "UPDATE results SET raw=jsonb_set(raw,'{source_values,identity_reconciliation}', \
-         '\"ambiguous_legacy_context\"'::jsonb,TRUE) WHERE id=ANY($1)",
+        "UPDATE results SET raw=jsonb_set(jsonb_set(raw,'{source_values,identity_reconciliation}', \
+         '\"ambiguous_legacy_context\"'::jsonb,TRUE),'{source_values,revision_status}', \
+         '\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=ANY($1)",
     )
     .bind(ids)
     .execute(&mut *connection)
     .await?;
     sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id IN (SELECT athlete_id FROM results WHERE id=ANY($1))")
         .bind(ids).execute(connection).await?;
+    Ok(())
+}
+
+pub(super) async fn review(
+    connection: &mut PgConnection,
+    performances: &[Performance],
+) -> Result<()> {
+    masked::reconfirm(connection, performances).await?;
+    let contexts = performances.iter().try_fold(
+        BTreeMap::<String, Vec<&str>>::new(),
+        |mut contexts, row| -> Result<_> {
+            if let Some(values) = &row.source_values
+                && let Some(id) = row.result_id.as_deref()
+                && let Some(context) = context(&row.athlete_id, values)?
+            {
+                contexts.entry(context).or_default().push(id);
+            }
+            Ok(contexts)
+        },
+    )?;
+    if contexts.is_empty() {
+        return Ok(());
+    }
+    let athletes = performances
+        .iter()
+        .map(|row| row.athlete_id.as_str())
+        .collect::<Vec<_>>();
+    let rows = sqlx::query_as::<_, (i64, String, String, Value)>(
+        "SELECT r.id,p.source_id,r.source_result_id,r.raw->'source_values' FROM results r \
+         JOIN athlete_sources p ON p.id=r.athlete_source_id \
+         WHERE r.source='milesplit' AND p.source='milesplit' AND p.source_id=ANY($1) \
+         AND r.source_result_id IS NOT NULL AND r.raw#>>'{source_values,kind}'='career_result' ORDER BY r.id LIMIT 10001 FOR UPDATE OF r",
+    )
+    .bind(athletes)
+    .fetch_all(&mut *connection)
+    .await?;
+    ensure!(
+        rows.len() <= 10000,
+        "career replay review exceeds 10000 observations"
+    );
+    stream::iter(rows.into_iter().map(Ok::<_, anyhow::Error>))
+        .try_fold(connection, |connection, (id, athlete, identity, values)| {
+            let contexts = &contexts;
+            async move {
+                if let Some(context) = context(&athlete, &values)?
+                    && let Some(observed) = contexts.get(&context)
+                {
+                    let confirmed = observed.contains(&identity.as_str());
+                    set_revision(connection, id, confirmed).await?;
+                }
+                Ok(connection)
+            }
+        })
+        .await
+        .map(|_| ())
+}
+
+fn context(athlete: &str, values: &Value) -> Result<Option<String>> {
+    if values.get("kind").and_then(Value::as_str) != Some("career_result") {
+        return Ok(None);
+    }
+    let Some(html) = values.pointer("/row/html").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let target = Target::get(
+        Source::MileSplit,
+        PageKind::Athlete,
+        format!("https://www.milesplit.com/athletes/{athlete}"),
+        PageContext::default(),
+    );
+    Ok(
+        crate::sources::milesplit::profile_history_identity(&target, athlete, html)?
+            .map(|(identity, _)| identity),
+    )
+}
+
+async fn set_revision(connection: &mut PgConnection, id: i64, confirmed: bool) -> Result<()> {
+    if confirmed {
+        sqlx::query("UPDATE results SET raw=raw #- '{source_values,revision_status}' WHERE id=$1 AND raw#>>'{source_values,revision_status}'='unverified_prior_revision'")
+            .bind(id).execute(connection).await?;
+    } else {
+        sqlx::query("UPDATE results SET raw=jsonb_set(raw,'{source_values,revision_status}','\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=$1")
+            .bind(id).execute(&mut *connection).await?;
+        sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id=(SELECT athlete_id FROM results WHERE id=$1)")
+            .bind(id).execute(connection).await?;
+    }
     Ok(())
 }

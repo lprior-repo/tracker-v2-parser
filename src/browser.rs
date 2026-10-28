@@ -5,6 +5,7 @@ mod interception;
 mod lifecycle;
 mod native;
 mod owned;
+mod pacing;
 
 #[cfg(test)]
 mod review_tests;
@@ -398,11 +399,7 @@ async fn browser_fetch(
     }
     .map_err(|error| {
         if access_stop_status(value.status) || denied_url(&value.url) {
-            AccessStopCaptureError {
-                status: value.status,
-                error,
-            }
-            .into()
+            AccessStopCaptureError::new(value.status, error, &value.url).into()
         } else {
             error
         }
@@ -634,10 +631,11 @@ mod tests {
             )?;
             let failure = check_response(preserved).expect_err("challenge must remain blocked");
             assert!(failure.blocked);
-            let original = anyhow::Error::new(crate::transport::AccessStopCaptureError {
-                status: 403,
-                error: anyhow::anyhow!("capture failed"),
-            });
+            let original = anyhow::Error::new(crate::transport::AccessStopCaptureError::new(
+                403,
+                anyhow::anyhow!("capture failed"),
+                &origin,
+            ));
             let combined =
                 finish_page_fetch(Err(original), Err(anyhow::anyhow!("page close failed")))
                     .expect_err("capture failure must survive cleanup failure");
@@ -646,9 +644,12 @@ mod tests {
             assert_eq!(failure.capture.expect("challenge capture").status, 403);
             let before = api_requests.load(Ordering::SeqCst);
             target.browser_origin = Some(format!("{origin}/redirect-subscribe"));
-            let redirected = browser.fetch(&target, &headers, Duration::ZERO).await?;
-            assert_eq!(redirected.status, 403);
-            let failure = check_response(redirected).expect_err("subscription must stop");
+            let redirected = browser
+                .fetch(&target, &headers, Duration::ZERO)
+                .await
+                .expect_err("subscription must stop before capture");
+            let failure = crate::transport::failure(&redirected);
+            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
             assert!(failure.blocked);
             assert_eq!(api_requests.load(Ordering::SeqCst), before);
             target.method = None;
@@ -657,22 +658,20 @@ mod tests {
             target.url = format!("{origin}/redirect-login");
             let redirected = browser
                 .fetch(&target, &BTreeMap::new(), Duration::ZERO)
-                .await?;
-            assert_eq!(redirected.status, 403);
-            assert!(
-                check_response(redirected)
-                    .expect_err("login must stop")
-                    .blocked
-            );
+                .await
+                .expect_err("login must stop before capture");
+            let failure = crate::transport::failure(&redirected);
+            assert!(failure.blocked);
+            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
             target.browser_origin = Some(origin.clone());
             target.url = format!("{origin}/api-redirect");
-            let redirected = browser.fetch(&target, &headers, Duration::ZERO).await?;
-            assert_eq!(redirected.status, 403);
-            assert!(
-                check_response(redirected)
-                    .expect_err("signin must stop")
-                    .blocked
-            );
+            let redirected = browser
+                .fetch(&target, &headers, Duration::ZERO)
+                .await
+                .expect_err("signin must stop before capture");
+            let failure = crate::transport::failure(&redirected);
+            assert!(failure.blocked);
+            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
             Ok::<(), anyhow::Error>(())
         }
         .await;

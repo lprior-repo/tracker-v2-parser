@@ -21,6 +21,8 @@ ON CONFLICT (source_result_key) DO UPDATE SET
         SELECT jsonb_object_agg(key, value)
         FROM jsonb_each(EXCLUDED.raw)
         WHERE key <> 'raw'
+          AND NOT (key = 'members' AND value = '[]'::jsonb
+              AND COALESCE(EXCLUDED.raw #> '{raw,relayLegs}', 'null'::jsonb) = 'null'::jsonb)
           AND value <> 'null'::jsonb
           AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}') <> '')
     ), '{}'::jsonb) || jsonb_build_object('raw',
@@ -60,9 +62,18 @@ ON CONFLICT (source_result_key) DO UPDATE SET
                 ELSE value END)
             FROM jsonb_each(CASE WHEN jsonb_typeof(EXCLUDED.raw->'raw') = 'object'
                 THEN EXCLUDED.raw->'raw' ELSE '{}'::jsonb END)
+            WHERE key <> 'relayLegs' OR value <> 'null'::jsonb
         ), '{}'::jsonb)),
     last_seen = clock_timestamp(),
     normalized_numeric = EXCLUDED.normalized_numeric,
     normalized_unit = EXCLUDED.normalized_unit,
     specification = EXCLUDED.specification
-WHERE results.athlete_source_id IS NULL OR EXCLUDED.is_relay
+WHERE results.athlete_source_id IS NULL
+   OR (EXCLUDED.is_relay AND (
+       EXCLUDED.source <> 'milesplit'
+       OR EXISTS (
+           SELECT 1 FROM athlete_sources
+           WHERE athlete_sources.id = results.athlete_source_id
+             AND athlete_sources.source_id = EXCLUDED.raw #>> '{raw,athleteId}'
+       )
+   ))

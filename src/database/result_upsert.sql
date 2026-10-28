@@ -32,7 +32,10 @@ ON CONFLICT (source_result_key) DO UPDATE SET
         SELECT jsonb_object_agg(key,
             CASE WHEN key = 'source_values' AND jsonb_typeof(value) = 'object' THEN
                 (CASE WHEN jsonb_typeof(results.raw->'source_values') = 'object'
-                    THEN results.raw->'source_values' ELSE '{}'::jsonb END) || COALESCE((
+                    THEN results.raw->'source_values' ELSE '{}'::jsonb END)
+                - CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+                    THEN ARRAY['statusCode'] ELSE ARRAY[]::text[] END
+                || COALESCE((
                     SELECT jsonb_object_agg(evidence.key, CASE
                         WHEN evidence.key IN ('eventType', 'row', 'context')
                          AND jsonb_typeof(evidence.value) = 'object' THEN

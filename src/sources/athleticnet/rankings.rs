@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::{Context as _, Result};
 use serde_json::{Value, json};
 
-use crate::model::{Athlete, PageContext, PageKind, ParsedPage, School, Sport, Target};
+use crate::model::{Athlete, PageContext, PageKind, ParsedPage, School, Target};
 
 use super::{API, api_target, athlete_target, meet_target, values as v};
 
@@ -116,11 +116,16 @@ fn retain_row(
                 .is_some()
         });
     if !relay {
-        retain_athlete(row, school, state, sport, athletes, page)?;
+        retain_athlete(row, school, state, &request.context, athletes, page)?;
     }
     if let Some(id) = v::id(row, "MeetID").filter(|id| meets.insert(id.clone())) {
         let mut meet = meet_target(&id, sport)?;
         meet.context.state.clone_from(&request.context.state);
+        meet.context.acquisition_state = request
+            .context
+            .acquisition_state
+            .clone()
+            .or_else(|| request.context.state.clone());
         page.next.push(meet);
     }
     Ok(())
@@ -130,11 +135,14 @@ fn retain_athlete(
     row: &Value,
     school: Option<String>,
     state: Option<String>,
-    sport: Sport,
+    context: &PageContext,
     seen: &mut BTreeSet<String>,
     page: &mut ParsedPage,
 ) -> Result<()> {
-    let (Some(id), Some(name)) = (v::id(row, "AthleteID"), v::text(row, "AthleteName")) else {
+    let (Some(id), Some(name)) = (
+        v::id(row, "AthleteID"),
+        v::text(row, "AthleteName").filter(|name| v::public_name(name)),
+    ) else {
         page.notes
             .push("Public ranking row has incomplete athlete identity".to_owned());
         return Ok(());
@@ -142,7 +150,12 @@ fn retain_athlete(
     if !seen.insert(id.clone()) {
         return Ok(());
     }
-    let next = athlete_target(&id, state.as_deref(), sport)?;
+    let sport = context.sport.context("rankings target has no sport")?;
+    let mut next = athlete_target(&id, state.as_deref(), sport)?;
+    next.context.acquisition_state = context
+        .acquisition_state
+        .clone()
+        .or_else(|| context.state.clone());
     page.athletes.push(Athlete {
         profile_url: Some(format!(
             "https://www.athletic.net/athlete/{id}/track-and-field"

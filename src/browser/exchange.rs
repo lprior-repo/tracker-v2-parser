@@ -23,6 +23,7 @@ use crate::{
 };
 
 pub(super) struct DestinationPolicy {
+    pacing: super::pacing::Pacing,
     target: Target,
     caller_headers: BTreeSet<String>,
     #[cfg(test)]
@@ -47,8 +48,9 @@ impl std::fmt::Display for RejectedDestination {
 impl std::error::Error for RejectedDestination {}
 
 impl DestinationPolicy {
-    pub fn new(target: &Target, headers: &BTreeMap<String, String>) -> Self {
+    pub fn new(target: &Target, headers: &BTreeMap<String, String>, interval: Duration) -> Self {
         Self {
+            pacing: super::pacing::Pacing::new(interval),
             target: target.clone(),
             caller_headers: headers
                 .keys()
@@ -64,7 +66,23 @@ impl DestinationPolicy {
         self.local_origins.push(origin);
     }
 
+    pub fn check_stop(&self) -> Result<()> {
+        self.pacing.check_stop()
+    }
+
     fn url(&self, address: &str) -> Result<Url> {
+        if denied_url(address) {
+            let url = [address, self.target.url.as_str()]
+                .into_iter()
+                .filter_map(|value| Url::parse(value).ok())
+                .find(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+                .context("access-stop has no HTTP authority")?;
+            return Err(crate::transport::AccessStop {
+                origin: url.origin().ascii_serialization(),
+                status: None,
+            }
+            .into());
+        }
         self.checked_url(address)
             .map_err(|error| anyhow::Error::new(RejectedDestination(error)))
     }
@@ -112,7 +130,9 @@ pub(super) async fn request(
 ) -> Result<Response> {
     let request = &event.request;
     let url = policy.url(&request.url)?;
-    let addresses = policy.addresses(&url).await?;
+    let addresses = tokio::time::timeout(super::COMMAND_TIMEOUT, policy.addresses(&url))
+        .await
+        .context("browser DNS resolution timed out")??;
     let host = url.host_str().context("browser destination has no host")?;
     let client = Client::builder()
         .no_proxy()
@@ -132,12 +152,19 @@ pub(super) async fn request(
     );
     let headers = request_headers(policy, request, &url)?;
     let body = request_body(page, event).await?;
+    policy.pacing.admit().await?;
     let response = client
-        .request(method, url)
+        .request(method, url.clone())
         .headers(headers)
         .body(body)
         .send()
         .await?;
+    if access_stop_status(response.status().as_u16()) {
+        policy.pacing.stop(
+            url.origin().ascii_serialization(),
+            response.status().as_u16(),
+        )?;
+    }
     capture(policy, request, response).await
 }
 
@@ -238,11 +265,12 @@ async fn capture(
     response: reqwest::Response,
 ) -> Result<Response> {
     let status = response.status().as_u16();
+    let address = response.url().as_str().to_owned();
     capture_response(policy, request, response)
         .await
         .map_err(|error| {
             if access_stop_status(status) {
-                AccessStopCaptureError { status, error }.into()
+                AccessStopCaptureError::new(status, error, &address).into()
             } else {
                 error
             }

@@ -9,8 +9,8 @@ use tokio::{
 use super::{DEADLINE, observe::Denial};
 
 pub(super) enum Command {
-    #[cfg(test)]
     Begin {
+        #[cfg(test)]
         local_origins: Vec<url::Origin>,
         reply: oneshot::Sender<Result<usize>>,
     },
@@ -50,9 +50,9 @@ impl NativeStatus {
         }
     }
 
-    #[cfg(test)]
-    pub async fn begin(&self, local_origins: Vec<url::Origin>) -> Result<usize> {
+    pub async fn begin(&self, #[cfg(test)] local_origins: Vec<url::Origin>) -> Result<usize> {
         self.request(|reply| Command::Begin {
+            #[cfg(test)]
             local_origins,
             reply,
         })

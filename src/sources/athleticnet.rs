@@ -1,4 +1,5 @@
 mod bio;
+mod competition;
 mod directory;
 mod event_types;
 mod meet;

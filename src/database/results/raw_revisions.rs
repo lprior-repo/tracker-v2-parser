@@ -5,7 +5,22 @@ use futures::{TryStreamExt, stream};
 use serde_json::Value;
 use sqlx::PgConnection;
 
-use crate::model::{ParsedPage, Source};
+use crate::model::{Capture, ParsedPage, Source, Target};
+
+mod adoption;
+
+pub(in crate::database) async fn prepare(
+    connection: &mut PgConnection,
+    target: &Target,
+    capture: &Capture,
+    page: &ParsedPage,
+) -> Result<()> {
+    if target.source == Source::MileSplit {
+        super::legacy_history::review_masked(connection, target, capture).await?;
+        adoption::reconcile(connection, page).await?;
+    }
+    Ok(())
+}
 
 #[tracing::instrument(skip(connection, page))]
 pub(in crate::database) async fn review(
@@ -16,6 +31,7 @@ pub(in crate::database) async fn review(
     if source != Source::MileSplit {
         return Ok(Vec::new());
     }
+    super::legacy_history::review(connection, &page.performances).await?;
     stream::iter(observed(page).into_iter().map(Ok::<_, anyhow::Error>))
         .try_fold((connection, Vec::new()), |(connection, mut notes), (file, ids)| async move {
             let missing = mark_revision(connection, file, &ids).await?;
