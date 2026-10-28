@@ -273,8 +273,8 @@ async fn apply(
     if !related && !corroborated(school, entry, address.as_deref(), directory, websites) {
         return Ok(Outcome::Uncorroborated);
     }
-    let current = json!({"address": school.address, "postal_code": school.postal_code});
-    let incoming = json!({"address": address, "postal_code": postal});
+    let current = json!({"address": school.address, "postal_code": school.postal_code, "city": school.city, "state": school.state});
+    let incoming = json!({"address": address, "postal_code": postal, "city": entry.city, "state": entry.state});
     let previous_details = provenance
         .pointer("/postal_code/row_details")
         .or_else(|| provenance.pointer("/address/row_details"));
@@ -458,6 +458,24 @@ fn merged_details(existing: Option<&Value>, incoming: Option<&Value>) -> Value {
     Value::Object(merged)
 }
 
+fn postal_field(field: &str) -> bool {
+    ["address", "city", "state", "postal_code"].contains(&field)
+}
+
+fn postal_conflict(current: &Value, incoming: &Value, provenance: &Value, owner: &Value) -> bool {
+    ["address", "city", "state", "postal_code"]
+        .iter()
+        .any(|field| {
+            field_decision(
+                current.get(*field).and_then(Value::as_str),
+                incoming.get(*field).and_then(Value::as_str),
+                provenance.get(*field),
+                owner,
+            )
+            .1
+        })
+}
+
 fn merge_fields(
     current: &Value,
     incoming: &Value,
@@ -466,6 +484,8 @@ fn merge_fields(
     owner: &Value,
     fields: &[&str],
 ) -> (Value, Value, bool, bool) {
+    let provenance_before = provenance;
+    let tuple_conflict = postal_conflict(current, incoming, provenance, owner);
     let values = current
         .as_object()
         .map_or_else(serde_json::Map::new, Clone::clone);
@@ -482,6 +502,7 @@ fn merge_fields(
                 provenance.get(*field),
                 owner,
             );
+            let replace = replace && !(tuple_conflict && postal_field(field));
             if let Some(value) = incoming.filter(|_| replace) {
                 values.insert((*field).to_owned(), json!(value));
                 provenance.insert((*field).to_owned(), field_provenance(source, owner, value));
@@ -494,11 +515,22 @@ fn merge_fields(
             )
         },
     );
+    let mut updated_provenance = Value::Object(provenance);
+    if let Some(evidence) = updated_provenance
+        .as_object_mut()
+        .filter(|_| tuple_conflict)
+    {
+        evidence.insert(
+            "postal_conflict".to_owned(),
+            json!({"incoming": incoming, "source": source, "owner": owner}),
+        );
+    }
+    let evidence_changed = updated_provenance != *provenance_before;
     (
         Value::Object(values),
-        Value::Object(provenance),
-        changed,
-        conflicted,
+        updated_provenance,
+        changed || evidence_changed,
+        conflicted || tuple_conflict,
     )
 }
 

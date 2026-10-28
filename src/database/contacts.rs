@@ -15,6 +15,7 @@ pub(super) async fn save_all(
 ) -> Result<()> {
     if target.kind == PageKind::Contacts {
         mark_previous_claims(connection, target, url).await?;
+        withdraw_unconfirmed_office(connection, target).await?;
     }
     stream::iter(coaches.iter().map(Ok::<_, anyhow::Error>))
         .try_fold(connection, |connection, coach| async move {
@@ -69,6 +70,49 @@ async fn mark_previous_claims(
     .bind(target.context.school_id.as_deref())
     .bind(&target.url)
     .bind(url)
+    .bind("Earlier contact source claim; not confirmed by latest parse")
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, target))]
+pub(super) async fn review_office(
+    connection: &mut PgConnection,
+    target: &Target,
+    url: &str,
+) -> Result<()> {
+    if target.kind != PageKind::Contacts {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE contacts c SET raw=jsonb_set(c.raw,'{review_notes}', \
+         COALESCE(c.raw->'review_notes','[]'::jsonb) || jsonb_build_array($5::text)) \
+         FROM schools s WHERE c.school_id=s.id AND s.source=$1 AND s.source_id=$2 \
+         AND c.kind='school_office' AND (c.source_url IN ($3,$4) OR c.raw->>'checkpoint_url'=$3) \
+         AND NOT COALESCE(c.raw->'review_notes','[]'::jsonb) @> jsonb_build_array($5::text)",
+    )
+    .bind(target.source.as_str())
+    .bind(target.context.school_id.as_deref())
+    .bind(&target.url)
+    .bind(url)
+    .bind("Earlier contact source claim; not confirmed by latest parse")
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, target))]
+async fn withdraw_unconfirmed_office(connection: &mut PgConnection, target: &Target) -> Result<()> {
+    sqlx::query(
+        "UPDATE schools s SET public_email=NULL WHERE s.source=$1 AND s.source_id=$2 \
+         AND EXISTS (SELECT 1 FROM contacts c WHERE c.school_id=s.id AND c.kind='school_office' \
+         AND c.email=s.public_email AND COALESCE(c.raw->'review_notes','[]'::jsonb) @> jsonb_build_array($3::text)) \
+         AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.school_id=s.id AND c.kind='school_office' \
+         AND c.email=s.public_email AND NOT COALESCE(c.raw->'review_notes','[]'::jsonb) @> jsonb_build_array($3::text))",
+    )
+    .bind(target.source.as_str())
+    .bind(target.context.school_id.as_deref())
     .bind("Earlier contact source claim; not confirmed by latest parse")
     .execute(connection)
     .await?;

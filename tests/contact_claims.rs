@@ -660,3 +660,53 @@ async fn given_existing_contacts_when_upsert_or_checkpoint_fails_then_annotation
         Ok(())
     })).await
 }
+
+async fn persist_contact_html(database: &Database, target: &Target, body: &str) -> Result<()> {
+    let parsed = track_scrapper_v2::sources::contacts::parse(target, body)?;
+    let capture = track_scrapper_v2::model::Capture {
+        url: target.url.clone(),
+        status: 200,
+        content_type: "text/html".into(),
+        body: body.as_bytes().to_vec(),
+    };
+    database.persist(None, target, &capture, &parsed).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_office_claim_when_reparse_cannot_confirm_then_history_survives_without_current_export()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        let target = contact_target("https://school.example.edu/contact");
+        records::persist(&database, &target, &page(vec![coach(Some("Ada Runner"), None, None)], None)).await?;
+        let visible = "<main><h1>Example High School</h1><p>Main Office: <a href='mailto:office@school.edu'>Email office</a></p></main>";
+        persist_contact_html(&database, &target, visible).await?;
+        let confirmed = export_row(test, "confirmed-office.xlsx").await?;
+        assert_eq!(confirmed["school_public_emails"], "office@school.edu");
+        for rejected in [
+            visible.replace("<a href", "<a style='display:none' href"),
+            visible.replace("Example High School", "Example High School East"),
+            "<main><h1>Example High School</h1><p>Contact information unavailable</p></main>".into(),
+        ] {
+            for _ in 0..2 {
+                persist_contact_html(&database, &target, &rejected).await?;
+            }
+            let stored: Option<String> = sqlx::query_scalar("SELECT public_email FROM schools WHERE source_id='school-1'").fetch_one(&test.pool).await?;
+            assert_eq!(stored, None);
+            let history: Vec<(String, serde_json::Value)> = sqlx::query_as("SELECT email,raw FROM contacts WHERE kind='school_office'").fetch_all(&test.pool).await?;
+            assert_eq!(history.len(), 1);
+            assert_eq!(history[0].0, "office@school.edu");
+            assert_eq!(history[0].1["review_notes"], serde_json::json!(["Earlier contact source claim; not confirmed by latest parse"]));
+            assert_eq!(export_row(test, "unconfirmed-office.xlsx").await?["school_public_emails"], "");
+            persist_contact_html(&database, &target, visible).await?;
+            assert_eq!(export_row(test, "reconfirmed-office.xlsx").await?["school_public_emails"], "office@school.edu");
+        }
+        sqlx::query("UPDATE schools SET public_email='manual@school.edu' WHERE source_id='school-1'").execute(&test.pool).await?;
+        persist_contact_html(&database, &target, "<main><h1>Example High School</h1></main>").await?;
+        let manual: Option<String> = sqlx::query_scalar("SELECT public_email FROM schools WHERE source_id='school-1'").fetch_one(&test.pool).await?;
+        assert_eq!(manual.as_deref(), Some("manual@school.edu"));
+        database.close().await;
+        Ok(())
+    })).await
+}
