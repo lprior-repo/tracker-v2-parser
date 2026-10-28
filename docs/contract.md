@@ -55,6 +55,16 @@ advance commit together. Constraint/parse failures cannot advance success.
 Publisher result IDs update corrections. Missing IDs use tested source-specific
 keys containing the publisher's page/event/round/row identity, never just a mark.
 Old results are not replaced by a single athlete PR field.
+Sparse replays preserve known fields and nested comparison evidence. Explicit
+status-only failures invalidate normalized marks; later valid partial corrections
+normalize the effective merged event/mark. A published individual-to-relay
+correction clears individual ownership. Raw rows without stable publisher IDs
+are not matched across changed events by names, marks or ordinals: unreconfirmed
+rows remain retained, flagged and ineligible for PR selection.
+MileSplit root/numbered file aliases share one validated file identity. Career
+rows use published IDs or unique validated context; legacy adoption requires
+validated, unambiguous stored and incoming evidence. Ambiguity is retained.
+
 Contacts use `UNIQUE(school_id, kind, source_key)`, not canonical-person identity.
 The 64-hex `source_key` is SHA-256 of PostgreSQL
 `jsonb_build_array(source_url,name,role,sport,lower(btrim(email)))::text` encoded
@@ -79,6 +89,12 @@ but a blocked contact authority still prevents that replay.
 Conflicting school/identity evidence is retained and flagged. Name-only matching,
 guessed graduation years, invented school IDs, and guessed mailboxes are forbidden.
 Ambiguous cross-site identities stay separate and appear in Issues.
+Current profile-school claims supply main-row school, address and coach fields.
+Historical represented schools require result-row evidence and do not become
+current affiliation or state eligibility. Missing current school remains blank
+and flagged. First-profile category disagreements retain both published claims
+and immediately flag review; school-only corrections reevaluate linked identities.
+
 Contact names are never inferred from email spelling. Program headings cannot
 lend track/XC scope to unrelated basketball/football cards; published role text
 and sport scope remain source claims rather than rewritten identities.
@@ -106,9 +122,14 @@ An unspecified address kind is never relabeled as verified physical or mailing.
 
 Imported NCES schools have their own source identities. Existing athletics-site
 schools are enriched only with unambiguous name/state/city candidates corroborated
-by an existing matching address or a website unique to both directories. Conflicts
-remain unchanged. UUID assignment preserves existing numeric foreign keys and
-does not merge source rows. Replaying an import cannot regenerate a UUID.
+by an existing matching address or a website unique to both directories. Subsequent
+same-source corrections require recorded ownership and the exact prior field
+value; manual and unverifiable legacy conflicts remain unchanged. Sparse fields
+do not erase known data. UUIDs and existing numeric foreign keys remain stable.
+
+School CSV admission is bounded at 128 MiB and 250,000 rows; manifests at 1 MiB.
+Accepted parsed rows/indexes still occupy memory. Directory membership never
+establishes athlete affiliation or HS PR eligibility.
 
 
 ## Page transitions and failures
@@ -126,8 +147,9 @@ Embedded public contact-form widgets/sign-in links are not full-page challenges.
 Resumed acquisition selects only the configured states, including saved work
 from earlier runs. State-less Athletic.net directory bootstraps require an exact
 selected-state filter; unknown scope does not authorize unrelated national work.
-Meet continuations preserve their discovery scope without declaring a venue's
-state. Out-of-scope checkpoints and consumed attempts stay unchanged, and their
+Meet continuations preserve `acquisition_state` separately from factual athlete
+or school state; a venue never declares every participant's location.
+Out-of-scope checkpoints and consumed attempts stay unchanged, and their
 exhausted failures do not fail the selected-state run. Provider-wide access
 stops still apply regardless of selected state.
 
@@ -144,6 +166,19 @@ initially. Source requests are paced at no more than 1 RPS; supplemental officia
 school pages use conservative pacing. No distributed leases or fencing protocol.
 Response bodies, redirects, parser/frontier expansion, attempts, and each command's
 page budget have finite bounds. Source failures never mean "no athletes found."
+All target URLs, including token/bootstrap URLs, are validated before insertion;
+invalid batches leave checkpoints unchanged. Browser redirects/subresources use
+preventive destination checks and pinned public addresses, not final-URL checks.
+Owned Chromium/context/task cleanup remains supervised on cancellation. External
+CDP endpoints are unsupported. Native auxiliary transports are restricted rather
+than used to bypass policy, access challenges or publisher limits.
+Unsupported sensitive assignment forms cannot survive in sanitized captures.
+The sanitizer removes entire structurally identified unsupported scripts and
+rechecks the result; unsafe syntax outside such scripts still fails closed.
+Redaction regressions use synthetic canaries and preserve public coaching and
+athletic data. Replay challenge detection considers HTML content even when replay
+metadata has a synthetic content type.
+
 
 Error classes remain observable: configuration, transport/timeout, access stop,
 representation/schema, database/transaction, checkpoint, and export/publication.
@@ -167,12 +202,22 @@ errors are excluded. Strict Clippy applies to production, not test setup style.
 nanoseconds, distance to integer micrometres, and points to integer centipoints
 using checked exact conversions. Time minimizes; distance/points maximize.
 DNS/DNF/DQ/no-mark/malformed/nonfinite results remain stored but never win a PR.
+Decimal points in event distances are never deleted to create a different race.
+Unsupported decimal labels remain unresolved. Published implement, hurdle,
+wheelchair/seated metadata and row dates survive source projection; meet dates
+are fallback only.
+
 
 **C6 — compatibility:** separate indoor/outdoor/XC, distinct race distances,
 hand/FAT/unknown timing, wind classes, implement/hurdle specifications, and XC
 course context. No unsupported distance conversions, timing adjustment, or
 estimated relay splits. Unknown contexts are not silently treated as equivalent.
 Bests mean best comparable **observed** results, not certified complete careers.
+HS eligibility precedes best selection and requires explicit per-observation HS
+evidence. Unknown/all-level/MS/college claims never inherit HS status from grade,
+graduation year, current school or crawl configuration. Numeric normalization is
+independent, so excluded observations remain available without becoming HS PRs.
+
 
 **C7 — spreadsheet:** one local athlete ID per row, school/postal fields,
 `coach_names`, distinct coach/school email fields, observed PR columns, and source
@@ -184,21 +229,32 @@ out-of-scope cohorts/states remain excluded. Unknown cohorts/states remain blank
 and visible as review candidates, not guessed into accepted membership.
 Review-flagged athletes remain on their single row with explicit `needs_review`
 and `review_notes`; conflicting identities and missing facts also remain visible
-in `Issues`. Non-comparable observations retain the original mark, reported
-status and comparison rejection reason. Optional athlete sheets use the same
-snapshot. Split oversized outputs without exceeding Excel bounds. Strings are
-written as strings, not interpreted formulas. Full public profile metadata is
-retained in ordered JSON chunks on `Profile_details`, not additional athlete PR
-rows; URL-looking chunks stay literal text, not inferred hyperlinks.
-Page notes, unfinished page status and errors, and unassigned results appear in
-the Issues sheet with their source and URL, regardless of athlete filters. Each
-split workbook includes these snapshot-wide issues; a successful reparse replaces
-that page's prior notes.
+in `Issues`. Every observation remains in the always-present `Observations`
+supporting sheet, with published mark, status, level and eligibility/rejection
+reason. Optional athlete sheets use the same snapshot. Main PR planning is
+bounded at 5,455 stable keys, with remaining keys/marks in `PR_overflow`. Review
+summaries stay within 1,024 UTF-16 units and explicitly reference complete Issues
+continuations; other oversized cells use lossless `Cell_details` chunks.
+Strings are literal, not formulas. Sanitized public profile JSON and individually
+linked profile URLs remain on `Profile_details`, not duplicate athlete rows.
+State-normalized page notes, unfinished work and unassigned results remain in the
+completed workbook set. Coverage batches are partitioned, not copied into every
+part; a successful reparse replaces that page's prior notes.
 
 
-**C8 — publication:** rust_xlsxwriter writes a new sibling temporary file;
-calamine reopens it and checks required sheets and expected row counts before
-non-overwriting publication. Failure leaves no completed-looking partial file.
+**C8 — publication:** export opens a compatible schema without migrations and
+reads one repeatable-read, read-only snapshot. Batches have at most 1,000 items
+and 8 MiB serialized bytes per category; athlete components are checked before
+aggregation with 10,000-row/category and 32 MiB constituent admission limits.
+The collecting API is additionally limited to 32 MiB/10,000 items. Interrupted
+or failed batch reads invalidate the snapshot rather than skipping undelivered
+rows. PostgreSQL's own per-value materialization is not a peak-RSS guarantee.
+rust_xlsxwriter stages bounded parts; calamine reopens them and verifies required
+sheets/row counts before non-overwriting publication. A manifest naming all
+parts, byte lengths and SHA-256 hashes is published and synced last. Only a valid
+manifest with matching parts establishes completion. Ordinary rollback removes
+only this invocation's links; abrupt termination may leave unmanifested partial
+files, never proof of a complete set.
 
 ## Hazards and evidence boundary
 

@@ -1,5 +1,37 @@
 use anyhow::Result;
 use regex::Regex;
+use scraper::ElementRef;
+
+pub(super) fn hidden(element: ElementRef<'_>) -> bool {
+    std::iter::once(element)
+        .chain(element.ancestors().filter_map(ElementRef::wrap))
+        .any(|parent| {
+            matches!(
+                parent.value().name(),
+                "script" | "style" | "noscript" | "template"
+            ) || parent.value().attr("hidden").is_some()
+                || parent
+                    .value()
+                    .attr("aria-hidden")
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+                || parent.value().attr("style").is_some_and(hidden_style)
+        })
+}
+
+fn hidden_style(style: &str) -> bool {
+    style.split(';').any(|declaration| {
+        let Some((property, value)) = declaration.split_once(':') else {
+            return false;
+        };
+        let value = value
+            .split_once('!')
+            .map_or(value, |(value, _)| value)
+            .trim();
+        (property.trim().eq_ignore_ascii_case("display") && value.eq_ignore_ascii_case("none"))
+            || (property.trim().eq_ignore_ascii_case("visibility")
+                && (value.eq_ignore_ascii_case("hidden") || value.eq_ignore_ascii_case("collapse")))
+    })
+}
 
 pub(super) fn pattern() -> Result<Regex> {
     Ok(Regex::new(

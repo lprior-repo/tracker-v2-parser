@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{collections::HashMap, fs, io::Read, path::Path};
 
 use anyhow::{Context, Result, bail};
 use futures::{TryStreamExt, stream};
@@ -10,6 +10,22 @@ use sqlx::{PgConnection, PgPool};
 pub mod pss;
 pub mod published;
 
+const MAX_IMPORT_BYTES: u64 = 134_217_728;
+const MAX_MANIFEST_BYTES: u64 = 1_048_576;
+const MAX_IMPORT_ROWS: usize = 250_000;
+
+fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let file = fs::File::open(path).context("opening school import file")?;
+    if file.metadata()?.len() > limit {
+        bail!("school import file exceeds the {limit} byte size limit");
+    }
+    let mut bytes = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())? > limit {
+        bail!("school import file exceeds the {limit} byte size limit");
+    }
+    Ok(bytes)
+}
 #[derive(Deserialize)]
 struct Manifest {
     schema_revision: u32,
@@ -71,8 +87,8 @@ fn digest(bytes: &[u8]) -> String {
 
 impl Directory {
     pub fn load(csv_path: &Path, manifest_path: &Path) -> Result<Self> {
-        let manifest_bytes =
-            fs::read(manifest_path).context("reading school directory manifest")?;
+        let manifest_bytes = read_limited(manifest_path, MAX_MANIFEST_BYTES)
+            .context("reading school directory manifest")?;
         let manifest: Manifest =
             serde_json::from_slice(&manifest_bytes).context("parsing school directory manifest")?;
         if manifest.schema_revision != 1 || manifest.generation_digest.trim().is_empty() {
@@ -86,7 +102,8 @@ impl Directory {
         let [artifact] = artifacts.as_slice() else {
             bail!("manifest must contain exactly one school_directory.csv artifact");
         };
-        let bytes = fs::read(csv_path).context("reading school directory CSV")?;
+        let bytes =
+            read_limited(csv_path, MAX_IMPORT_BYTES).context("reading school directory CSV")?;
         let sha256 = digest(&bytes);
         if artifact.sha256 != sha256 || u64::try_from(bytes.len())? != artifact.bytes {
             bail!("school directory CSV does not match manifest hash and size");
@@ -102,8 +119,12 @@ impl Directory {
         });
         let rows = csv::Reader::from_reader(bytes.as_slice())
             .deserialize::<Entry>()
+            .take(MAX_IMPORT_ROWS.saturating_add(1))
             .map(|row| row.context("parsing school directory row"))
             .collect::<Result<Vec<_>>>()?;
+        if rows.len() > MAX_IMPORT_ROWS {
+            bail!("school directory exceeds the {MAX_IMPORT_ROWS} row limit");
+        }
         Ok(Self::from_entries(rows, provenance))
     }
 
@@ -146,6 +167,7 @@ struct School {
     address: Option<String>,
     website: Option<String>,
     postal_code: Option<String>,
+    address_provenance: Option<Value>,
 }
 
 fn nonempty(value: &str) -> Option<&str> {
@@ -184,6 +206,7 @@ pub struct EnrichmentReport {
 
 enum Outcome {
     Updated,
+    UpdatedConflict,
     Conflict,
     Uncorroborated,
     Unchanged,
@@ -226,32 +249,64 @@ async fn apply(
         _ => None,
     };
     let postal = nonempty(&entry.zip);
-    if !compatible(school.address.as_deref(), address.as_deref())
-        || !compatible(school.postal_code.as_deref(), postal)
+    if entry.key.trim().is_empty() || entry.sources.trim().is_empty() {
+        return Ok(Outcome::Unchanged);
+    }
+    let owner = json!({"source": entry.sources, "source_id": entry.key});
+    let provenance = school
+        .address_provenance
+        .as_ref()
+        .filter(|value| value.is_object())
+        .map_or_else(|| json!({}), Clone::clone);
+    let related = ["address", "postal_code"]
+        .iter()
+        .any(|field| provenance.get(*field).and_then(|value| value.get("owner")) == Some(&owner));
+    if !related
+        && (!compatible(school.address.as_deref(), address.as_deref())
+            || !compatible(school.postal_code.as_deref(), postal))
     {
         return Ok(Outcome::Conflict);
     }
-    if entry.key.trim().is_empty() || entry.sources.trim().is_empty() || address.is_none() {
+    if !related && address.is_none() {
         return Ok(Outcome::Unchanged);
     }
-    if !corroborated(school, entry, address.as_deref(), directory, websites) {
+    if !related && !corroborated(school, entry, address.as_deref(), directory, websites) {
         return Ok(Outcome::Uncorroborated);
     }
-    let fill_address = school.address.as_deref().and_then(nonempty).is_none();
-    let fill_postal =
-        school.postal_code.as_deref().and_then(nonempty).is_none() && postal.is_some();
-    if !fill_address && !fill_postal {
-        return Ok(Outcome::Unchanged);
+    let current = json!({"address": school.address, "postal_code": school.postal_code});
+    let incoming = json!({"address": address, "postal_code": postal});
+    let previous_details = provenance
+        .pointer("/postal_code/row_details")
+        .or_else(|| provenance.pointer("/address/row_details"));
+    let details = merged_details(previous_details, entry.details.as_ref());
+    let source = json!({"directory": directory.provenance, "directory_key": entry.key, "directory_sources": entry.sources, "row_details": details});
+    let (values, provenance, changed, conflicted) = merge_fields(
+        &current,
+        &incoming,
+        &provenance,
+        &source,
+        &owner,
+        &["address", "postal_code"],
+    );
+    if !changed {
+        return Ok(if conflicted {
+            Outcome::Conflict
+        } else {
+            Outcome::Unchanged
+        });
     }
-    let source = json!({"directory": directory.provenance, "directory_key": entry.key, "directory_sources": entry.sources, "row_details": entry.details});
-    let provenance = json!({"address": fill_address.then_some(&source), "postal_code": fill_postal.then_some(&source)});
-    let result = sqlx::query("UPDATE schools SET address=CASE WHEN $2 THEN $3 ELSE address END, postal_code=CASE WHEN $4 THEN $5 ELSE postal_code END, address_provenance=COALESCE(address_provenance, '{}'::jsonb) || jsonb_strip_nulls($6::jsonb) WHERE id=$1")
-        .bind(school.id).bind(fill_address).bind(address).bind(fill_postal).bind(postal).bind(provenance)
-        .execute(connection).await.context("updating school address")?;
-    Ok(if result.rows_affected() == 1 {
-        Outcome::Updated
+    sqlx::query("UPDATE schools SET address=$2,postal_code=$3,address_provenance=$4 WHERE id=$1")
+        .bind(school.id)
+        .bind(values.get("address").and_then(Value::as_str))
+        .bind(values.get("postal_code").and_then(Value::as_str))
+        .bind(provenance)
+        .execute(connection)
+        .await
+        .context("updating school address")?;
+    Ok(if conflicted {
+        Outcome::UpdatedConflict
     } else {
-        Outcome::Unchanged
+        Outcome::Updated
     })
 }
 
@@ -269,7 +324,7 @@ async fn enrich_transaction(
     sqlx::query("LOCK TABLE schools IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *connection)
         .await?;
-    let schools: Vec<School> = sqlx::query_as("SELECT id,name,state,city,address,postal_code,website FROM schools WHERE source <> 'nces' ORDER BY id")
+    let schools: Vec<School> = sqlx::query_as("SELECT id,name,state,city,address,postal_code,website,address_provenance FROM schools WHERE source <> 'nces' ORDER BY id")
         .fetch_all(&mut *connection).await?;
     let counts = schools
         .iter()
@@ -293,7 +348,23 @@ async fn enrich_transaction(
             *count = count.saturating_add(1);
             counts
         });
+    let identities: HashMap<_, _> = directory
+        .entries
+        .values()
+        .filter_map(Option::as_ref)
+        .map(|entry| (entry.key.as_str(), entry))
+        .collect();
     let candidates = schools.iter().filter_map(|school| {
+        let previous = school.address_provenance.as_ref().and_then(|provenance| {
+            ["address", "postal_code"].iter().find_map(|field| {
+                let owner = provenance.get(*field)?.get("owner")?;
+                let entry = identities.get(owner.get("source_id")?.as_str()?)?;
+                (owner.get("source")?.as_str()? == entry.sources).then_some(*entry)
+            })
+        });
+        if let Some(entry) = previous {
+            return Some((school, entry));
+        }
         let key = key(
             &school.name,
             school.state.as_deref()?,
@@ -315,6 +386,10 @@ async fn enrich_transaction(
                 async move {
                     match apply(connection, school, entry, directory, websites).await? {
                         Outcome::Updated => report.updated = report.updated.saturating_add(1),
+                        Outcome::UpdatedConflict => {
+                            report.updated = report.updated.saturating_add(1);
+                            report.conflicts = report.conflicts.saturating_add(1);
+                        }
                         Outcome::Conflict => report.conflicts = report.conflicts.saturating_add(1),
                         Outcome::Uncorroborated => {
                             report.uncorroborated = report.uncorroborated.saturating_add(1);
@@ -328,4 +403,220 @@ async fn enrich_transaction(
         .await?
         .1;
     Ok(report)
+}
+
+#[derive(Default)]
+struct ImportCounts {
+    inserted: u64,
+    updated: u64,
+    conflicts: u64,
+}
+
+fn field_decision(
+    current: Option<&str>,
+    incoming: Option<&str>,
+    provenance: Option<&Value>,
+    owner: &Value,
+) -> (bool, bool) {
+    let Some(incoming) = incoming.and_then(nonempty) else {
+        return (false, false);
+    };
+    let Some(current) = current.and_then(nonempty) else {
+        return (true, false);
+    };
+    if current == incoming {
+        return (false, false);
+    }
+    let replaceable = provenance.is_some_and(|provenance| {
+        provenance.get("owner") == Some(owner)
+            && provenance.get("value").and_then(Value::as_str) == Some(current)
+    });
+    (replaceable, !replaceable)
+}
+
+fn field_provenance(source: &Value, owner: &Value, value: &str) -> Value {
+    let mut provenance = source
+        .as_object()
+        .map_or_else(serde_json::Map::new, Clone::clone);
+    provenance.insert("owner".to_owned(), owner.clone());
+    provenance.insert("value".to_owned(), json!(value));
+    Value::Object(provenance)
+}
+
+fn merged_details(existing: Option<&Value>, incoming: Option<&Value>) -> Value {
+    let mut merged = existing
+        .and_then(Value::as_object)
+        .map_or_else(serde_json::Map::new, Clone::clone);
+    if let Some(incoming) = incoming.and_then(Value::as_object) {
+        incoming
+            .iter()
+            .filter(|(_, value)| !value.is_null())
+            .for_each(|(key, value)| {
+                merged.insert(key.clone(), value.clone());
+            });
+    }
+    Value::Object(merged)
+}
+
+fn merge_fields(
+    current: &Value,
+    incoming: &Value,
+    provenance: &Value,
+    source: &Value,
+    owner: &Value,
+    fields: &[&str],
+) -> (Value, Value, bool, bool) {
+    let values = current
+        .as_object()
+        .map_or_else(serde_json::Map::new, Clone::clone);
+    let provenance = provenance
+        .as_object()
+        .map_or_else(serde_json::Map::new, Clone::clone);
+    let (values, provenance, changed, conflicted) = fields.iter().fold(
+        (values, provenance, false, false),
+        |(mut values, mut provenance, changed, conflicted), field| {
+            let incoming = incoming.get(*field).and_then(Value::as_str);
+            let (replace, conflict) = field_decision(
+                values.get(*field).and_then(Value::as_str),
+                incoming,
+                provenance.get(*field),
+                owner,
+            );
+            if let Some(value) = incoming.filter(|_| replace) {
+                values.insert((*field).to_owned(), json!(value));
+                provenance.insert((*field).to_owned(), field_provenance(source, owner, value));
+            }
+            (
+                values,
+                provenance,
+                changed || replace,
+                conflicted || conflict,
+            )
+        },
+    );
+    (
+        Value::Object(values),
+        Value::Object(provenance),
+        changed,
+        conflicted,
+    )
+}
+
+async fn upsert_import(
+    connection: &mut PgConnection,
+    source_id: &str,
+    incoming: Value,
+    mut source: Value,
+) -> Result<ImportCounts> {
+    let existing: Option<(i64, Value, Option<Value>)> = sqlx::query_as(
+        "SELECT id,jsonb_build_object('name',name,'state',state,'city',city,'address',address,'postal_code',postal_code,'source_url',source_url),address_provenance FROM schools WHERE source='nces' AND source_id=$1 FOR UPDATE",
+    ).bind(source_id).fetch_optional(&mut *connection).await?;
+    let owner = json!({"source": source.get("source"), "source_id": source_id});
+    source
+        .as_object_mut()
+        .context("school import provenance must be an object")?
+        .insert("owner".to_owned(), owner.clone());
+    let Some((id, current, provenance)) = existing else {
+        let mut provenance = [
+            "name",
+            "state",
+            "city",
+            "address",
+            "postal_code",
+            "source_url",
+        ]
+        .iter()
+        .filter_map(|field| {
+            incoming.get(*field).and_then(Value::as_str).map(|value| {
+                (
+                    (*field).to_owned(),
+                    field_provenance(&source, &owner, value),
+                )
+            })
+        })
+        .collect::<serde_json::Map<_, _>>();
+        provenance.insert("record".to_owned(), source);
+        sqlx::query("INSERT INTO schools(source,source_id,name,state,city,address,postal_code,source_url,address_provenance) VALUES ('nces',$1,$2,$3,$4,$5,$6,$7,$8)")
+            .bind(source_id).bind(incoming.get("name").and_then(Value::as_str))
+            .bind(incoming.get("state").and_then(Value::as_str))
+            .bind(incoming.get("city").and_then(Value::as_str))
+            .bind(incoming.get("address").and_then(Value::as_str))
+            .bind(incoming.get("postal_code").and_then(Value::as_str))
+            .bind(incoming.get("source_url").and_then(Value::as_str)).bind(Value::Object(provenance))
+            .execute(connection).await.context("inserting imported school")?;
+        return Ok(ImportCounts {
+            inserted: 1,
+            ..ImportCounts::default()
+        });
+    };
+    update_import(connection, id, current, provenance, incoming, source, owner).await
+}
+
+async fn update_import(
+    connection: &mut PgConnection,
+    id: i64,
+    current: Value,
+    provenance: Option<Value>,
+    incoming: Value,
+    mut source: Value,
+    owner: Value,
+) -> Result<ImportCounts> {
+    let provenance = match provenance {
+        Some(value) if value.is_object() => value,
+        _ => json!({}),
+    };
+    let record_owned = provenance.pointer("/record/owner") == Some(&owner);
+    let previous_details = record_owned
+        .then(|| provenance.pointer("/record/row_details"))
+        .flatten();
+    let details = merged_details(previous_details, source.get("row_details"));
+    let details_changed = record_owned
+        && previous_details != Some(&details)
+        && details.as_object().is_some_and(|value| !value.is_empty());
+    source
+        .as_object_mut()
+        .context("school import provenance must be an object")?
+        .insert("row_details".to_owned(), details);
+    let (values, mut updated_provenance, changed, conflicted) = merge_fields(
+        &current,
+        &incoming,
+        &provenance,
+        &source,
+        &owner,
+        &["name", "state", "city", "address", "postal_code"],
+    );
+    if !changed && !details_changed {
+        return Ok(ImportCounts {
+            conflicts: u64::from(conflicted),
+            ..ImportCounts::default()
+        });
+    }
+    let (values, url_provenance, _, url_conflict) = merge_fields(
+        &values,
+        &incoming,
+        &updated_provenance,
+        &source,
+        &owner,
+        &["source_url"],
+    );
+    updated_provenance = url_provenance;
+    if record_owned || provenance.get("record").is_none() {
+        updated_provenance
+            .as_object_mut()
+            .context("school field provenance must be an object")?
+            .insert("record".to_owned(), source);
+    }
+    sqlx::query("UPDATE schools SET name=$2,state=$3,city=$4,address=$5,postal_code=$6,source_url=$7,address_provenance=$8 WHERE id=$1")
+        .bind(id).bind(values.get("name").and_then(Value::as_str))
+        .bind(values.get("state").and_then(Value::as_str))
+        .bind(values.get("city").and_then(Value::as_str))
+        .bind(values.get("address").and_then(Value::as_str))
+        .bind(values.get("postal_code").and_then(Value::as_str))
+        .bind(values.get("source_url").and_then(Value::as_str)).bind(updated_provenance)
+        .execute(connection).await.context("correcting imported school")?;
+    Ok(ImportCounts {
+        updated: 1,
+        conflicts: u64::from(conflicted || url_conflict),
+        ..ImportCounts::default()
+    })
 }

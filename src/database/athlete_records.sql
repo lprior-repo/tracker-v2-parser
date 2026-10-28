@@ -1,10 +1,6 @@
 WITH school_links AS (
-    SELECT p.athlete_id, p.school_id FROM athlete_sources p
+    SELECT DISTINCT p.athlete_id, p.school_id FROM athlete_sources p
     WHERE p.school_id IS NOT NULL
-    UNION
-    SELECT p.athlete_id, r.represented_school_id FROM results r
-    JOIN athlete_sources p ON p.id = r.athlete_source_id
-    WHERE r.represented_school_id IS NOT NULL
 ), school_state_values AS (
     SELECT sl.athlete_id,
            lower(btrim(s.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) AS state
@@ -14,13 +10,14 @@ WITH school_links AS (
            bool_or(NULLIF(state, '') IS NOT NULL) AS has_state,
            bool_or(EXISTS (
                SELECT 1 FROM unnest($1::text[]) AS selected(state)
-               WHERE lower(selected.state) = school_state_values.state
+               WHERE lower(btrim(selected.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) = school_state_values.state
            )) AS matches_state
     FROM school_state_values
     GROUP BY athlete_id
 ), selected AS (
     SELECT a.*,
-           a.needs_review OR (a.state IS NULL AND NOT COALESCE(ss.has_state, false))
+           a.needs_review OR NOT EXISTS (SELECT 1 FROM school_links sl WHERE sl.athlete_id = a.id)
+               OR (a.state IS NULL AND NOT COALESCE(ss.has_state, false))
                OR a.graduation_year IS NULL AS report_needs_review
     FROM athletes a
     LEFT JOIN school_states ss ON ss.athlete_id = a.id
@@ -48,6 +45,7 @@ WITH school_links AS (
                'public_email', s.public_email
            ) ORDER BY s.source, s.source_id) AS schools
     FROM school_links sl JOIN schools s ON s.id = sl.school_id
+    JOIN selected a ON a.id = sl.athlete_id
     GROUP BY sl.athlete_id
 ), coach_data AS (
     SELECT sl.athlete_id,
@@ -57,6 +55,7 @@ WITH school_links AS (
                'review_notes', COALESCE(c.raw->'review_notes', '[]'::jsonb)
            ) ORDER BY s.source, s.source_id, c.id) AS coaches
     FROM school_links sl JOIN schools s ON s.id = sl.school_id
+    JOIN selected a ON a.id = sl.athlete_id
     JOIN contacts c ON c.school_id = s.id AND c.kind = 'coach'
     GROUP BY sl.athlete_id
 ), performance_data AS (

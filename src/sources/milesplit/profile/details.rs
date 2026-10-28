@@ -5,7 +5,12 @@ use serde_json::{Value, json};
 use super::super::{html, targets};
 use crate::model::{PageKind, ParsedPage, Target};
 
-pub(super) fn values(target: &Target, document: &Html) -> Result<Value> {
+pub(super) fn values(
+    target: &Target,
+    document: &Html,
+    schema_gender: Option<&str>,
+    progression_gender: Option<&str>,
+) -> Result<Value> {
     let root = document.root_element();
     let page = json!({
         "sections": elements(root, ".hero, .athlete-info, #bio, #biography, .athlete-bio, .biography, #progression, .record-box, .profile-navigation, section, article, main, #videos, #photos, #articles, .related")?,
@@ -13,6 +18,7 @@ pub(super) fn values(target: &Target, document: &Html) -> Result<Value> {
         "result_rows": elements(root, "#stats .record, #progression tr")?,
         "seasons": elements(root, "#stats .season > h4")?,
         "json_ld": json_ld(root)?,
+        "gender_claims": {"schema_person": schema_gender, "progression": progression_gender},
         "progression": progression(root)?,
         "links": elements(root, "a[href]")?,
         "media": elements(root, "img, video, audio, source, iframe, .video, .photo")?,
@@ -99,4 +105,27 @@ pub(super) fn enqueue(target: &Target, root: ElementRef<'_>, page: &mut ParsedPa
         )
     }));
     Ok(())
+}
+
+pub(super) fn progression_gender(root: ElementRef<'_>) -> Result<Option<String>> {
+    Ok(root.select(&html::selector("script")?).find_map(|script| {
+        let body = script.inner_html();
+        if !body.contains("progressionTrackerData") {
+            return None;
+        }
+        body.lines().find_map(|line| {
+            let assignment = line.trim().strip_prefix("var gender")?;
+            let value = assignment.trim_start().strip_prefix('=')?.trim();
+            let value = value.trim_end_matches(';').trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .or_else(|| {
+                    value
+                        .strip_prefix('\'')
+                        .and_then(|value| value.strip_suffix('\''))
+                })?;
+            html::gender(value)
+        })
+    }))
 }

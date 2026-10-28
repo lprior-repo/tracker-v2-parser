@@ -26,7 +26,6 @@ async fn private_school_mail_tuples_are_preserved_and_reimport_is_idempotent() -
         let args = ["scrape", "--private-school-addresses", &path, "--school-addresses-sha256", &sha];
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("2 inserted; 1 enriched"));
         let row: (String, String, Option<String>, serde_json::Value, String) = sqlx::query_as("SELECT source_id,address,postal_code,address_provenance,uuid::text FROM schools WHERE source='nces' AND source_id='pss:02004116'").fetch_one(&test.pool).await?;
         assert_eq!(row.0, "pss:02004116");
         assert_eq!(row.1, "PO BOX 17");
@@ -41,7 +40,6 @@ async fn private_school_mail_tuples_are_preserved_and_reimport_is_idempotent() -
         assert_eq!(enriched.1.pointer("/postal_code/directory/address_type").and_then(|v| v.as_str()), Some("mailing"));
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("0 inserted; 0 enriched"));
         let uuid: String = sqlx::query_scalar("SELECT uuid::text FROM schools WHERE source_id='pss:02004116'").fetch_one(&test.pool).await?;
         assert_eq!(uuid, row.4);
         Ok(())

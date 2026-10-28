@@ -11,7 +11,7 @@ pub(super) fn write(
 ) -> Result<()> {
     if records
         .iter()
-        .all(|record| record.profile_details.is_empty())
+        .all(|record| record.profile_details.is_empty() && record.profiles.is_empty())
     {
         return Ok(());
     }
@@ -26,39 +26,66 @@ pub(super) fn write(
     ]
     .map(str::to_owned);
     let rows = records.iter().flat_map(|record| {
-        record.profile_details.iter().flat_map(move |profile| {
-            let serialized = profile.source_values.to_string();
-            chunks(&serialized)
-                .enumerate()
-                .map(|(part, chunk)| {
-                    vec![
-                        record.id.to_string(),
-                        record.name.clone(),
-                        profile.source.as_str().to_owned(),
-                        profile.source_id.clone(),
-                        profile
-                            .url
-                            .clone()
-                            .map_or(String::new(), core::convert::identity),
-                        part.saturating_add(1).to_string(),
-                        chunk.to_owned(),
-                    ]
-                })
-                .collect::<Vec<_>>()
-        })
+        let details = record
+            .profile_details
+            .iter()
+            .flat_map(move |profile| profile_rows(record, profile));
+        let links = record
+            .profiles
+            .iter()
+            .filter(|url| {
+                !record
+                    .profile_details
+                    .iter()
+                    .any(|profile| profile.url.as_deref() == Some(url.as_str()))
+            })
+            .map(|url| {
+                Ok(vec![
+                    record.id.to_string(),
+                    record.name.clone(),
+                    String::new(),
+                    String::new(),
+                    url.clone(),
+                    "1".to_owned(),
+                    String::new(),
+                ])
+            });
+        details.chain(links)
     });
-    capacity::write(workbook, "Profile_details", &headers, rows, true, expected)
+    capacity::write_fallible(workbook, "Profile_details", &headers, rows, true, expected)
 }
 
-fn chunks(value: &str) -> impl Iterator<Item = &str> {
-    let mut remaining = value;
-    std::iter::from_fn(move || {
-        if remaining.is_empty() {
-            return None;
-        }
-        let boundary = remaining.floor_char_boundary(8_000);
-        let (chunk, tail) = remaining.split_at(boundary);
-        remaining = tail;
-        Some(chunk)
-    })
+fn profile_rows(
+    record: &AthleteRecord,
+    profile: &crate::model::AthleteProfileDetails,
+) -> Vec<Result<Vec<String>>> {
+    let serialized = match crate::transport::redact_public_json(&profile.source_values) {
+        Ok(serialized) => serialized,
+        Err(error) => return vec![Err(error)],
+    };
+    capacity::chunks(&serialized)
+        .enumerate()
+        .map(|(part, chunk)| {
+            Ok(vec![
+                record.id.to_string(),
+                if part == 0 {
+                    record.name.clone()
+                } else {
+                    String::new()
+                },
+                profile.source.as_str().to_owned(),
+                if part == 0 {
+                    profile.source_id.clone()
+                } else {
+                    String::new()
+                },
+                profile
+                    .url
+                    .clone()
+                    .map_or(String::new(), core::convert::identity),
+                part.saturating_add(1).to_string(),
+                chunk.to_owned(),
+            ])
+        })
+        .collect()
 }

@@ -1,5 +1,6 @@
 mod bio;
 mod directory;
+mod event_types;
 mod meet;
 mod rankings;
 mod team;

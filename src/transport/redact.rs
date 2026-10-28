@@ -1,3 +1,5 @@
+mod scripts;
+
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result, ensure};
@@ -8,11 +10,20 @@ static JWT: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"));
 static STRING: LazyLock<Result<Regex, regex::Error>> =
     LazyLock::new(|| Regex::new(r#""(?:\\.|[^"\\])*""#));
-static SECRET: LazyLock<Result<Regex, regex::Error>> =
-    LazyLock::new(|| Regex::new(r"(?i)token|jwt|authorization|cookie|secret|password"));
+static SECRET: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)token|jwt|authorization|cookie|secret|password|api[_-]?key|access[_-]?key|credential",
+    )
+});
 static ASSIGNMENT: LazyLock<Result<Regex, regex::Error>> = LazyLock::new(|| {
     Regex::new(
-        r#"(?P<key>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|(?:[A-Za-z0-9_$-]|\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})|&#(?:[xX][0-9a-fA-F]+|[0-9]+);)+)\s*[:=]\s*"#,
+        r#"(?x)
+        (?P<key>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|
+            (?:[A-Za-z0-9_$-]|\\(?:u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2})|&\#(?:[xX][0-9a-fA-F]+|[0-9]+);)+)
+        (?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r?\n|$))*
+        (?:\](?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r?\n|$))*)?
+        (?P<operator>:|(?:\*\*|<<|>>>|>>|&&|\|\||\?\?|[+\-*/%&|^])?=)
+        (?:\s|/\*[\s\S]*?\*/|//[^\r\n]*(?:\r?\n|$))*"#,
     )
 });
 static SINGLE_QUOTED: LazyLock<Result<Regex, regex::Error>> =
@@ -33,6 +44,10 @@ pub(super) fn secret_key_pattern() -> Result<&'static Regex> {
 }
 
 pub(super) fn body(raw: &[u8]) -> Result<Vec<u8>> {
+    ensure!(
+        raw.len() <= 16 * 1024 * 1024,
+        "source response exceeds 16 MiB"
+    );
     let text = std::str::from_utf8(raw).context("source response is not UTF-8")?;
     let jwt = jwt_pattern()?;
     let strings = STRING.as_ref().context("compiling JSON string matcher")?;
@@ -49,6 +64,26 @@ pub(super) fn body(raw: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn html(text: &str, secret: &Regex, jwt: &Regex) -> Result<Vec<u8>> {
+    let ranges = scripts::unsupported(text, secret, jwt)?;
+    if ranges.is_empty() {
+        return html_assignments(text, secret, jwt);
+    }
+    let (mut sanitized, end) = ranges.into_iter().try_fold(
+        (String::with_capacity(text.len()), 0),
+        |(mut output, end), range| -> Result<(String, usize)> {
+            ensure!(range.start >= end, "overlapping sensitive script ranges");
+            output.push_str(
+                text.get(end..range.start)
+                    .context("invalid script boundary")?,
+            );
+            Ok((output, range.end))
+        },
+    )?;
+    sanitized.push_str(text.get(end..).context("invalid script boundary")?);
+    html_assignments(&sanitized, secret, jwt)
+}
+
+fn html_assignments(text: &str, secret: &Regex, jwt: &Regex) -> Result<Vec<u8>> {
     let assignments = ASSIGNMENT
         .as_ref()
         .context("compiling assignment matcher")?;
@@ -57,6 +92,10 @@ fn html(text: &str, secret: &Regex, jwt: &Regex) -> Result<Vec<u8>> {
         .context("compiling quoted value matcher")?;
     let forms = FORM.as_ref().context("compiling sensitive form matcher")?;
     let entities = ENTITY.as_ref().context("compiling entity matcher")?;
+    ensure!(
+        !scripts::ambiguous_computed(text),
+        "cannot safely redact computed property assignments"
+    );
     ensure!(
         !forms
             .find_iter(text)
@@ -85,6 +124,12 @@ fn html(text: &str, secret: &Regex, jwt: &Regex) -> Result<Vec<u8>> {
             if !secret.is_match(&key) {
                 return Ok((output, end));
             }
+            ensure!(
+                key.chars()
+                    .all(|character| character.is_ascii_alphanumeric()
+                        || matches!(character, '_' | '$' | '-')),
+                "cannot safely redact ambiguous sensitive assignment key"
+            );
             let value = text
                 .get(assignment.end()..)
                 .context("invalid assignment boundary")?;
@@ -92,6 +137,22 @@ fn html(text: &str, secret: &Regex, jwt: &Regex) -> Result<Vec<u8>> {
                 return Ok((output, end));
             }
             let length = value_length(value, single)?;
+            ensure!(
+                captures
+                    .name("operator")
+                    .is_some_and(|operator| { matches!(operator.as_str(), ":" | "=") }),
+                "cannot safely redact compound sensitive assignment"
+            );
+            let remainder = value
+                .get(length..)
+                .context("invalid sensitive expression boundary")?
+                .trim_start();
+            ensure!(
+                remainder.is_empty()
+                    || remainder.starts_with([';', ',', '}', ']'])
+                    || remainder.starts_with("</script"),
+                "cannot safely redact unsupported sensitive expression"
+            );
             let value_end = assignment
                 .end()
                 .checked_add(length)

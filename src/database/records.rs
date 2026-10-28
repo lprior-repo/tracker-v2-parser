@@ -13,12 +13,18 @@ pub(super) async fn persist(
     response: &Capture,
     page: &ParsedPage,
 ) -> Result<i64> {
-    save_domain(connection, target, page, &response.url).await?;
+    let revision_notes = save_domain(connection, target, page, &response.url).await?;
     queue::enqueue(connection, &page.next, false).await?;
     let id = queue::succeed(connection, job_id, target).await?;
+    let notes = page
+        .notes
+        .iter()
+        .chain(&revision_notes)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     sqlx::query("UPDATE scrape_pages SET notes=$2 WHERE id=$1")
         .bind(id)
-        .bind(&page.notes)
+        .bind(notes)
         .execute(connection)
         .await?;
     Ok(id)
@@ -30,10 +36,22 @@ async fn save_domain(
     target: &Target,
     page: &ParsedPage,
     url: &str,
+) -> Result<Vec<String>> {
+    save_profiles(connection, target, page, url).await?;
+    save_results(connection, target, page, url).await?;
+    results::review_revisions(connection, target.source, page).await
+}
+
+#[tracing::instrument(skip(connection, target, page))]
+async fn save_profiles(
+    connection: &mut PgConnection,
+    target: &Target,
+    page: &ParsedPage,
+    url: &str,
 ) -> Result<()> {
     schools::save_all(connection, target.source, &page.schools, url).await?;
-    identity::save_all(connection, target.source, &page.athletes).await?;
-    save_results(connection, target, page, url).await
+    identity::review_school_conflicts(connection, target.source, &page.schools).await?;
+    identity::save_all(connection, target.source, &page.athletes).await
 }
 
 #[tracing::instrument(skip(connection, target, page))]

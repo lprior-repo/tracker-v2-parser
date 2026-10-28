@@ -1,4 +1,14 @@
-use std::{collections::BTreeMap, path::Path, time::Duration};
+mod audit;
+mod exchange;
+mod interception;
+mod lifecycle;
+mod native;
+mod owned;
+
+#[cfg(test)]
+mod review_tests;
+
+use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use crate::{
     model::{Capture, Target},
@@ -14,68 +24,144 @@ use chromiumoxide::{
     cdp::browser_protocol::network::{
         self, EventLoadingFinished, EventResponseReceived, GetResponseBodyParams, ResourceType,
     },
-    handler::HandlerConfig,
+    cdp::browser_protocol::{browser::BrowserContextId, target::CreateBrowserContextParams},
 };
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::{task::JoinHandle, time::timeout};
+use tokio::{
+    net::TcpListener,
+    sync::{Mutex, oneshot},
+    task::{JoinHandle, JoinSet},
+    time::timeout,
+};
+use tracing::Instrument;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 
+fn handler_result(
+    result: std::result::Result<(), chromiumoxide::error::CdpError>,
+    shutdown_requested: bool,
+) -> Result<()> {
+    match result {
+        Ok(()) if shutdown_requested => Ok(()),
+        Ok(()) => Err(anyhow!("Chromium event handler ended without owned shutdown")),
+        Err(error) if shutdown_requested
+            && matches!(&error, chromiumoxide::error::CdpError::Ws(_)) => {
+                tracing::debug!(%error, "owned Chromium transport closed during requested shutdown");
+                Ok(())
+            }
+        Err(error) => Err(anyhow!(error).context("Chromium event handler failed")),
+    }
+}
+
 pub struct Browser {
-    chromium: Chromium,
+    chromium: Arc<owned::OwnedChromium>,
+    context: Option<BrowserContextId>,
+    native_sink: native::NativeSink,
+    fetches: Mutex<JoinSet<Result<()>>>,
     handler: JoinHandle<Result<()>>,
-    owned: bool,
+    #[cfg(test)]
+    local_origin: Option<url::Origin>,
+    #[cfg(test)]
+    page_deadline: Option<Duration>,
+    #[cfg(test)]
+    additional_origin: Option<url::Origin>,
+    #[cfg(test)]
+    fail_page_close: bool,
 }
 
 impl Browser {
     #[tracing::instrument(skip_all)]
     pub async fn start(driver_url: Option<&str>, profile: &Path, headless: bool) -> Result<Self> {
-        let (browser, handler, owned) = if let Some(endpoint) = driver_url {
-            let config = HandlerConfig {
-                ignore_https_errors: false,
-                request_timeout: COMMAND_TIMEOUT,
-                ..HandlerConfig::default()
-            };
-            let (browser, handler) = timeout(
-                COMMAND_TIMEOUT,
-                Chromium::connect_with_config(endpoint, config),
-            )
+        ensure!(
+            driver_url.is_none(),
+            "external CDP driver URLs are unsupported: protected acquisition requires locally owned Chromium"
+        );
+        let native_listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .context("connecting to Chromium timed out")??;
-            (browser, handler, false)
-        } else {
-            tokio::fs::create_dir_all(profile)
-                .await
-                .context("creating browser profile")?;
-            let mut config = BrowserConfig::builder()
-                .user_data_dir(profile)
-                .respect_https_errors()
-                .request_timeout(COMMAND_TIMEOUT)
-                .launch_timeout(COMMAND_TIMEOUT);
-            if !headless {
-                config = config.with_head();
-            }
-            let config = config
-                .build()
-                .map_err(|error| anyhow!("building browser configuration: {error}"))?;
-            let (browser, handler) = timeout(COMMAND_TIMEOUT, Chromium::launch(config))
-                .await
-                .context("launching Chromium timed out")??;
-            (browser, handler, true)
-        };
+            .context("binding browser native-transport sink")?;
+        let proxy = format!("http://{}", native_listener.local_addr()?);
+        tokio::fs::create_dir_all(profile)
+            .await
+            .context("creating browser profile")?;
+        let mut config = BrowserConfig::builder()
+            .user_data_dir(profile)
+            .respect_https_errors()
+            .request_timeout(COMMAND_TIMEOUT)
+            .launch_timeout(COMMAND_TIMEOUT)
+            .arg("--disable-quic")
+            .arg("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+        if !headless {
+            config = config.with_head();
+        }
+        let config = config
+            .build()
+            .map_err(|error| anyhow!("building browser configuration: {error}"))?;
+        let native_sink = native::NativeSink::start(native_listener)?;
+        let launched = timeout(COMMAND_TIMEOUT, Chromium::launch(config))
+            .await
+            .context("launching Chromium timed out")
+            .and_then(|result| result.map_err(Into::into));
+        let (browser, handler) =
+            match launched {
+                Ok(value) => value,
+                Err(error) => {
+                    return match native_sink.finish().await {
+                        Ok(()) => Err(error),
+                        Err(cleanup) => Err(error
+                            .context(format!("native sink startup cleanup failed: {cleanup:#}"))),
+                    };
+                }
+            };
+        let browser = Arc::new(owned::OwnedChromium::new(browser));
+        let shutdown = browser.shutdown_signal();
         let handler = tokio::spawn(async move {
-            let mut handler = handler;
-            while let Some(event) = handler.next().await {
-                event.context("Chromium event handler failed")?;
-            }
-            Ok(())
+            let result = handler
+                .try_for_each(|()| {
+                    futures::future::ready(Ok::<(), chromiumoxide::error::CdpError>(()))
+                })
+                .await;
+            handler_result(result, shutdown.load(std::sync::atomic::Ordering::Acquire))
         });
-        Ok(Self {
+        let mut browser = Self {
             chromium: browser,
+            context: None,
+            native_sink,
+            fetches: Mutex::new(JoinSet::new()),
             handler,
-            owned,
-        })
+            #[cfg(test)]
+            local_origin: None,
+            #[cfg(test)]
+            page_deadline: None,
+            #[cfg(test)]
+            additional_origin: None,
+            #[cfg(test)]
+            fail_page_close: false,
+        };
+        let params = CreateBrowserContextParams::builder()
+            .dispose_on_detach(true)
+            .proxy_server(proxy)
+            .proxy_bypass_list("<-loopback>")
+            .build();
+        let context = timeout(
+            COMMAND_TIMEOUT,
+            browser.chromium.create_browser_context(params),
+        )
+        .await
+        .context("creating failclosed browser context timed out")
+        .and_then(std::convert::identity);
+        match context {
+            Ok(context) => {
+                browser.context = Some(context);
+                Ok(browser)
+            }
+            Err(error) => match browser.close().await {
+                Ok(()) => Err(error),
+                Err(cleanup) => {
+                    Err(error.context(format!("browser startup cleanup failed: {cleanup:#}")))
+                }
+            },
+        }
     }
 
     #[tracing::instrument(skip_all)]
@@ -85,25 +171,51 @@ impl Browser {
         headers: &BTreeMap<String, String>,
         interval: Duration,
     ) -> Result<Capture> {
-        let page = timeout(COMMAND_TIMEOUT, self.chromium.new_page("about:blank"))
-            .await
-            .context("opening browser page timed out")??;
         let deadline = interval
             .checked_add(COMMAND_TIMEOUT.saturating_mul(2))
             .context("browser deadline overflow")?;
-        let result = timeout(deadline, self.fetch_page(&page, target, headers, interval))
+        #[cfg(test)]
+        let deadline = self.page_deadline.map_or(deadline, |value| value);
+        let acquisition = lifecycle::Acquisition {
+            chromium: Arc::clone(&self.chromium),
+            context: self
+                .context
+                .clone()
+                .context("browser acquisition context is unavailable")?,
+            target: target.clone(),
+            headers: headers.clone(),
+            interval,
+            deadline,
+            native_status: self.native_sink.status(),
+            #[cfg(test)]
+            local_origin: self.local_origin.clone(),
+            #[cfg(test)]
+            additional_origin: self.additional_origin.clone(),
+            #[cfg(test)]
+            fail_page_close: self.fail_page_close,
+        };
+        let (reply, received) = oneshot::channel();
+        {
+            let mut tasks = self.fetches.lock().await;
+            if let Some(previous) = tasks.try_join_next() {
+                previous.context("joining prior browser acquisition")??;
+            }
+            ensure!(tasks.is_empty(), "browser acquisition capacity exceeded");
+            tasks.spawn(
+                acquisition
+                    .run(reply)
+                    .instrument(tracing::info_span!("owned_browser_acquisition")),
+            );
+            drop(tasks);
+        }
+        let result = received
             .await
-            .context("browser request timed out")
-            .and_then(|result| result);
-        let cleanup = timeout(COMMAND_TIMEOUT, page.close())
-            .await
-            .context("closing browser page timed out")
-            .and_then(|result| result.map_err(Into::into));
+            .context("browser acquisition supervisor stopped")?;
+        let cleanup = lifecycle::drain(&mut *self.fetches.lock().await).await;
         finish_page_fetch(result, cleanup)
     }
 
     async fn fetch_page(
-        &self,
         page: &Page,
         target: &Target,
         headers: &BTreeMap<String, String>,
@@ -143,39 +255,60 @@ impl Browser {
 
     #[tracing::instrument(skip_all)]
     pub async fn close(mut self) -> Result<()> {
-        let close = if self.owned {
-            timeout(COMMAND_TIMEOUT, self.chromium.close())
-                .await
-                .context("closing Chromium timed out")
-                .and_then(|result| result.map(|_| ()).map_err(Into::into))
-        } else {
-            Ok(())
+        let acquired = lifecycle::drain(self.fetches.get_mut()).await;
+        let retained = self.chromium.release_retained().await;
+        let disposed = match self.context.take() {
+            Some(context) => timeout(
+                COMMAND_TIMEOUT,
+                self.chromium.dispose_browser_context(context),
+            )
+            .await
+            .context("disposing browser context timed out")
+            .and_then(std::convert::identity),
+            None => Ok(()),
         };
-        let waited = if self.owned && close.is_ok() {
-            timeout(COMMAND_TIMEOUT, self.chromium.wait())
+        self.chromium.request_shutdown();
+        let (mut chromium, retained_guard) = Arc::try_unwrap(self.chromium)
+            .map_err(|_| anyhow!("browser acquisition retained Chromium after drain"))?
+            .into_inner();
+        let close = timeout(COMMAND_TIMEOUT, chromium.close())
+            .await
+            .context("closing Chromium timed out")
+            .and_then(|result| result.map(|_| ()).map_err(Into::into));
+        let waited = if close.is_ok() {
+            timeout(COMMAND_TIMEOUT, chromium.wait())
                 .await
                 .context("waiting for Chromium timed out")
                 .and_then(|result| result.map(|_| ()).map_err(Into::into))
         } else {
             Ok(())
         };
-        let killed = if self.owned && (close.is_err() || waited.is_err()) {
-            self.chromium
+        let killed = if close.is_err() || waited.is_err() {
+            chromium
                 .kill()
                 .await
                 .map_or_else(|| Ok(()), |result| result.context("killing Chromium"))
         } else {
             Ok(())
         };
-        if !self.owned || close.is_err() || waited.is_err() {
+        if close.is_err() || waited.is_err() {
             self.handler.abort();
         }
-        let joined = match self.handler.await {
-            Ok(result) => result,
-            Err(error) if error.is_cancelled() => Ok(()),
-            Err(error) => Err(anyhow!(error).context("joining Chromium handler")),
+        let joined = lifecycle::join_handler(self.handler).await;
+        let retained_guard = match retained_guard {
+            Some(interceptor) => interceptor.finish(false).await,
+            None => Ok(()),
         };
-        close.and(waited).and(killed).and(joined)
+        let native = self.native_sink.finish().await;
+        acquired
+            .and(disposed)
+            .and(retained)
+            .and(retained_guard)
+            .and(close)
+            .and(waited)
+            .and(killed)
+            .and(joined)
+            .and(native)
     }
 }
 
@@ -537,7 +670,8 @@ mod tests {
             }
         });
         let profile = tempfile::tempdir()?;
-        let browser = Browser::start(None, profile.path(), true).await?;
+        let mut browser = Browser::start(None, profile.path(), true).await?;
+        browser.local_origin = Some(url::Url::parse(&origin)?.origin());
         let scenario = async {
             let mut target = Target::get(
                 Source::AthleticNet,
@@ -591,7 +725,7 @@ mod tests {
             let before = api_requests.load(Ordering::SeqCst);
             target.browser_origin = Some(format!("{origin}/redirect-subscribe"));
             let redirected = browser.fetch(&target, &headers, Duration::ZERO).await?;
-            assert!(redirected.url.ends_with("/subscribe"));
+            assert_eq!(redirected.status, 403);
             let failure = check_response(redirected).expect_err("subscription must stop");
             assert!(failure.blocked);
             assert_eq!(api_requests.load(Ordering::SeqCst), before);
@@ -602,7 +736,7 @@ mod tests {
             let redirected = browser
                 .fetch(&target, &BTreeMap::new(), Duration::ZERO)
                 .await?;
-            assert!(redirected.url.ends_with("/login"));
+            assert_eq!(redirected.status, 403);
             assert!(
                 check_response(redirected)
                     .expect_err("login must stop")
@@ -611,7 +745,7 @@ mod tests {
             target.browser_origin = Some(origin.clone());
             target.url = format!("{origin}/api-redirect");
             let redirected = browser.fetch(&target, &headers, Duration::ZERO).await?;
-            assert!(redirected.url.ends_with("/signin"));
+            assert_eq!(redirected.status, 403);
             assert!(
                 check_response(redirected)
                     .expect_err("signin must stop")

@@ -13,7 +13,8 @@ VALUES (
 ON CONFLICT (source_result_key) DO UPDATE SET
     athlete_source_id = EXCLUDED.athlete_source_id,
     athlete_id = EXCLUDED.athlete_id,
-    represented_school_id = COALESCE(EXCLUDED.represented_school_id, results.represented_school_id),
+    represented_school_id = CASE WHEN $26 THEN NULL
+        ELSE COALESCE(EXCLUDED.represented_school_id, results.represented_school_id) END,
     event = CASE WHEN btrim(EXCLUDED.event) <> '' THEN EXCLUDED.event ELSE results.event END,
     raw_mark = CASE WHEN btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.raw_mark ELSE results.raw_mark END,
     sport = EXCLUDED.sport,
@@ -24,9 +25,42 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     timing = CASE WHEN btrim(EXCLUDED.timing) <> '' THEN EXCLUDED.timing ELSE results.timing END,
     course = CASE WHEN btrim(EXCLUDED.course) <> '' THEN EXCLUDED.course ELSE results.course END,
     is_personal_record = EXCLUDED.is_personal_record, is_relay = EXCLUDED.is_relay,
-    raw = (CASE WHEN btrim(EXCLUDED.event) <> '' AND btrim(EXCLUDED.raw_mark) <> ''
-        THEN results.raw - 'reported_status' ELSE results.raw END) || COALESCE((
-        SELECT jsonb_object_agg(key, value)
+    raw = (results.raw
+        - CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+            THEN ARRAY['reported_status'] ELSE ARRAY[]::text[] END
+        - CASE WHEN $26 THEN ARRAY['school_id'] ELSE ARRAY[]::text[] END) || COALESCE((
+        SELECT jsonb_object_agg(key,
+            CASE WHEN key = 'source_values' AND jsonb_typeof(value) = 'object' THEN
+                (CASE WHEN jsonb_typeof(results.raw->'source_values') = 'object'
+                    THEN results.raw->'source_values' ELSE '{}'::jsonb END) || COALESCE((
+                    SELECT jsonb_object_agg(evidence.key, CASE
+                        WHEN evidence.key IN ('eventType', 'row', 'context')
+                         AND jsonb_typeof(evidence.value) = 'object' THEN
+                            (CASE WHEN jsonb_typeof(results.raw->'source_values'->evidence.key) = 'object'
+                                THEN results.raw->'source_values'->evidence.key ELSE '{}'::jsonb END) || COALESCE((
+                                SELECT jsonb_object_agg(nested.key, CASE
+                                    WHEN evidence.key = 'row' AND nested.key = 'attributes'
+                                     AND jsonb_typeof(nested.value) = 'object' THEN
+                                        (CASE WHEN jsonb_typeof(results.raw #> '{source_values,row,attributes}') = 'object'
+                                            THEN results.raw #> '{source_values,row,attributes}' ELSE '{}'::jsonb END) || COALESCE((
+                                            SELECT jsonb_object_agg(attribute.key, attribute.value)
+                                            FROM jsonb_each(nested.value) AS attribute(key, value)
+                                            WHERE attribute.value <> 'null'::jsonb
+                                              AND (jsonb_typeof(attribute.value) <> 'string' OR btrim(attribute.value #>> '{}') <> '')
+                                        ), '{}'::jsonb)
+                                    ELSE nested.value END)
+                                FROM jsonb_each(evidence.value) AS nested(key, value)
+                                WHERE nested.value <> 'null'::jsonb
+                                  AND (jsonb_typeof(nested.value) <> 'string' OR btrim(nested.value #>> '{}') <> '')
+                            ), '{}'::jsonb)
+                        ELSE evidence.value END)
+                    FROM jsonb_each(value) AS evidence(key, value)
+                    WHERE evidence.value <> 'null'::jsonb
+                      AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}') <> '')
+                ), '{}'::jsonb) || CASE WHEN $27::jsonb IS NOT NULL
+                    THEN $27::jsonb
+                    ELSE '{}'::jsonb END
+            ELSE value END)
         FROM jsonb_each(EXCLUDED.raw)
         WHERE value <> 'null'::jsonb
           AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}') <> '')
@@ -35,29 +69,9 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     season = COALESCE(EXCLUDED.season, results.season),
     grade = CASE WHEN btrim(EXCLUDED.grade) <> '' THEN EXCLUDED.grade ELSE results.grade END,
     gender = CASE WHEN btrim(EXCLUDED.gender) <> '' THEN EXCLUDED.gender ELSE results.gender END,
-    normalized_numeric = CASE
-        WHEN btrim(EXCLUDED.event) <> '' AND btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.normalized_numeric
-        WHEN (btrim(EXCLUDED.event) = '' OR EXCLUDED.event = results.event)
-         AND (btrim(EXCLUDED.raw_mark) = '' OR EXCLUDED.raw_mark = results.raw_mark)
-         AND EXCLUDED.is_relay = results.is_relay THEN results.normalized_numeric
-        ELSE NULL
-    END,
-    normalized_unit = CASE
-        WHEN btrim(EXCLUDED.event) <> '' AND btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.normalized_unit
-        WHEN (btrim(EXCLUDED.event) = '' OR EXCLUDED.event = results.event)
-         AND (btrim(EXCLUDED.raw_mark) = '' OR EXCLUDED.raw_mark = results.raw_mark)
-         AND EXCLUDED.is_relay = results.is_relay THEN results.normalized_unit
-        ELSE NULL
-    END,
-    specification = CASE WHEN btrim(EXCLUDED.event) = '' THEN results.specification ELSE EXCLUDED.specification END,
-    status = CASE
-        WHEN btrim(EXCLUDED.event) <> '' AND btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.status
-        WHEN (btrim(EXCLUDED.event) = '' OR EXCLUDED.event = results.event)
-         AND (btrim(EXCLUDED.raw_mark) = '' OR EXCLUDED.raw_mark = results.raw_mark)
-         AND EXCLUDED.is_relay = results.is_relay THEN results.status
-        WHEN btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.status
-        WHEN results.status = 'recorded' THEN 'unclassified'
-        ELSE results.status
-    END
+    normalized_numeric = EXCLUDED.normalized_numeric,
+    normalized_unit = EXCLUDED.normalized_unit,
+    specification = EXCLUDED.specification,
+    status = EXCLUDED.status
 WHERE results.athlete_source_id IS NULL OR results.athlete_source_id = EXCLUDED.athlete_source_id
 RETURNING id

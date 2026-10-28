@@ -1,4 +1,4 @@
-use crate::marks::{ComparableMark, comparison};
+use crate::marks::ComparableMark;
 use crate::model::{AthleteRecord, EvidencedPerformance};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,7 +25,6 @@ pub(super) const BASE_HEADERS: [&str; 17] = [
 pub(super) struct Prepared<'a> {
     pub bests: BTreeMap<String, (ComparableMark, &'a EvidencedPerformance)>,
     unmapped: usize,
-    notes: BTreeSet<String>,
 }
 
 pub(super) fn prepare(record: &AthleteRecord) -> Prepared<'_> {
@@ -33,26 +32,11 @@ pub(super) fn prepare(record: &AthleteRecord) -> Prepared<'_> {
         Prepared {
             bests: BTreeMap::new(),
             unmapped: 0,
-            notes: super::selection::contact_issues(record).collect(),
         },
         |mut row, evidence| {
-            let mark = match comparison(evidence) {
-                Ok(mark) => mark,
-                Err(reason) => {
-                    row.unmapped = row.unmapped.saturating_add(1);
-                    row.notes.insert(format!(
-                        "not comparable ({reason}): {} | {} | reported_status={} | {}",
-                        evidence.performance.event,
-                        evidence.performance.mark,
-                        evidence
-                            .performance
-                            .reported_status
-                            .as_deref()
-                            .map_or("", |value| value),
-                        evidence.url
-                    ));
-                    return row;
-                }
+            let Ok(mark) = super::selection::hs_comparison(evidence) else {
+                row.unmapped = row.unmapped.saturating_add(1);
+                return row;
             };
             let replace = row
                 .bests
@@ -134,12 +118,7 @@ pub(super) fn cells(
         ),
         caveat(record),
         row.unmapped.to_string(),
-        joined(
-            row.notes
-                .iter()
-                .map(String::as_str)
-                .chain(super::selection::issues(record)),
-        ),
+        review_summary(record, row),
         (super::selection::requires_review(record) || row.unmapped > 0).to_string(),
     ];
     base.into_iter()
@@ -156,6 +135,37 @@ pub(super) fn cells(
             )
         }))
         .collect()
+}
+
+fn review_summary(record: &AthleteRecord, row: &Prepared<'_>) -> String {
+    let issues = super::selection::issues(record);
+    let summary = issues.join("; ");
+    let summary = format!(
+        "{summary}; {} observations excluded from HS PR selection; complete observations and review notes: Issues and Observations",
+        row.unmapped
+    );
+    let omitted_note = "; additional contact notes omitted; see Issues for complete details";
+    let (mut summary, omitted) = super::selection::contact_issues(record).fold(
+        (summary, false),
+        |(mut summary, omitted), note| {
+            let units = summary
+                .encode_utf16()
+                .count()
+                .saturating_add(note.encode_utf16().count())
+                .saturating_add(omitted_note.encode_utf16().count())
+                .saturating_add(2);
+            if units > 1_024 {
+                return (summary, true);
+            }
+            summary.push_str("; ");
+            summary.push_str(&note);
+            (summary, omitted)
+        },
+    );
+    if omitted {
+        summary.push_str(omitted_note);
+    }
+    summary
 }
 
 fn optional(value: Option<&str>) -> String {

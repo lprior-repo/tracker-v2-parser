@@ -2,11 +2,11 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
 use regex::Regex;
-use scraper::{ElementRef, Html};
+use scraper::{ElementRef, Html, Selector};
 
 use crate::model::{School, Target};
 
-use super::{email, normalized, selector, text};
+use super::{email, normalized, selector, staff, text};
 
 pub(super) fn enrich(
     document: &Html,
@@ -37,7 +37,7 @@ pub(super) fn enrich(
 
 fn parse(document: &Html, school_name: &str) -> Result<Option<String>> {
     let blocks = selector("p, tr, li, dd, address, .contact-card, .office-contact")?;
-    let anchors = selector("a[href^='mailto:'], a[href^='MAILTO:']")?;
+    let anchors = selector("a[href^='mailto:' i]")?;
     let label = Regex::new(r"(?i)\b(?:school|main|athletics?|athletic department)\s+office\b")?;
     let excluded =
         Regex::new(r"(?i)\b(?:district|superintendent|teacher|parent|booster|coach|counselor)\b")?;
@@ -48,41 +48,26 @@ fn parse(document: &Html, school_name: &str) -> Result<Option<String>> {
     );
     let identity = normalized(school_name);
     let headings = selector("title, h1")?;
-    let identified = document
-        .select(&headings)
-        .any(|heading| normalized(&text(heading)).contains(&identity));
+    let identified = staff::school_local(document, &headings, school_name);
     let candidates = document
         .select(&blocks)
         .filter_map(|block| {
             let content = text(block);
-            if !identified && !normalized(&content).contains(&identity) {
-                return None;
-            }
+            let office = label.find(&content)?;
+            let prefix = normalized(content.get(..office.start())?);
+            let named = prefix == identity;
+            let generic = matches!(
+                prefix.as_str(),
+                "" | "contact" | "contactthe" | "email" | "emailthe" | "our" | "the"
+            );
             if content.len() > 4096
-                || !label.is_match(&content)
+                || !(named || identified && generic)
                 || excluded.is_match(&content)
-                || excluded_scope(block, &content, school_name)
+                || excluded_scope(block, named)
             {
                 return None;
             }
-            let linked = block.select(&anchors).filter_map(|anchor| {
-                let (_, address) = anchor.value().attr("href")?.split_once(':')?;
-                Some(
-                    address
-                        .split_once('?')
-                        .map_or(address, |(mailbox, _)| mailbox),
-                )
-            });
-            let visible = content.split_whitespace().filter(|word| word.contains('@'));
-            let mailboxes = linked
-                .chain(visible)
-                .filter_map(|value| email::normalize(value, &email_rule))
-                .collect::<BTreeSet<_>>();
-            if mailboxes.len() == 1 {
-                mailboxes.into_iter().next()
-            } else {
-                None
-            }
+            mailbox(block, &content, &anchors, &email_rule)
         })
         .collect::<BTreeSet<_>>();
     Ok(if candidates.len() == 1 {
@@ -92,15 +77,41 @@ fn parse(document: &Html, school_name: &str) -> Result<Option<String>> {
     })
 }
 
-fn excluded_scope(block: ElementRef<'_>, content: &str, school_name: &str) -> bool {
-    block
-        .ancestors()
-        .filter_map(ElementRef::wrap)
-        .any(|parent| {
-            matches!(parent.value().name(), "nav" | "header")
-                || parent.value().attr("hidden").is_some()
-                || parent.value().attr("aria-hidden") == Some("true")
-                || (parent.value().name() == "footer"
-                    && !normalized(content).contains(&normalized(school_name)))
-        })
+fn mailbox(
+    block: ElementRef<'_>,
+    content: &str,
+    anchors: &Selector,
+    email_rule: &Regex,
+) -> Option<String> {
+    let linked = block
+        .select(anchors)
+        .filter(|anchor| !email::hidden(*anchor))
+        .filter_map(|anchor| {
+            let (_, address) = anchor.value().attr("href")?.split_once(':')?;
+            Some(
+                address
+                    .split_once('?')
+                    .map_or(address, |(mailbox, _)| mailbox),
+            )
+        });
+    let visible = content.split_whitespace().filter(|word| word.contains('@'));
+    let mailboxes = linked
+        .chain(visible)
+        .filter_map(|value| email::normalize(value, email_rule))
+        .collect::<BTreeSet<_>>();
+    if mailboxes.len() == 1 {
+        mailboxes.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn excluded_scope(block: ElementRef<'_>, school_named: bool) -> bool {
+    email::hidden(block)
+        || std::iter::once(block)
+            .chain(block.ancestors().filter_map(ElementRef::wrap))
+            .any(|parent| {
+                matches!(parent.value().name(), "nav" | "header")
+                    || (parent.value().name() == "footer" && !school_named)
+            })
 }

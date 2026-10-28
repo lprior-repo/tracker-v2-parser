@@ -1,5 +1,8 @@
 mod details;
+mod history;
 mod results;
+
+pub use history::retained_identity as profile_history_identity;
 
 use anyhow::{Result, ensure};
 use scraper::{ElementRef, Html};
@@ -32,15 +35,25 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
             .as_deref()
             .and_then(|value| value.strip_prefix("Class of ")),
     )?;
-    let gender = progression_gender(root)?.or_else(|| {
-        person
-            .as_ref()
-            .and_then(|person| html::field(person, "gender"))
-            .as_deref()
-            .and_then(html::gender)
-    });
+    let progression_gender = details::progression_gender(root)?;
+    let schema_gender = person
+        .as_ref()
+        .and_then(|person| html::field(person, "gender"))
+        .as_deref()
+        .and_then(html::gender);
+    let needs_review = matches!(
+        (&schema_gender, &progression_gender),
+        (Some(schema), Some(progression)) if schema != progression
+    );
+    let source_values = details::values(
+        target,
+        document,
+        schema_gender.as_deref(),
+        progression_gender.as_deref(),
+    )?;
+    let gender = progression_gender.or(schema_gender);
     let same_as = same_as(person.as_ref(), &id)?;
-    let athlete = Athlete {
+    let mut athlete = Athlete {
         id,
         name,
         school_id: school
@@ -53,8 +66,8 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
         profile_url: Some(canonical),
         same_as,
         grade: None,
-        needs_review: false,
-        source_values: Some(details::values(target, document)?),
+        needs_review,
+        source_values: Some(source_values),
     };
     let mut page = ParsedPage {
         schools: school.into_iter().collect(),
@@ -63,7 +76,7 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
     if let Some(table) = root.select(&html::selector("#prTable")?).next() {
         page = table
             .select(&html::selector("tr[data-pr-mode]")?)
-            .try_fold(page, |page, row| record(&athlete, row, page))?;
+            .try_fold(page, |page, row| record(target, &athlete, row, page))?;
         page = table
             .select(&html::selector("tr[data-pr-mode='all']")?)
             .try_fold(page, headline)?;
@@ -75,7 +88,7 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
             "MileSplit profile has no recognized public profile section"
         );
     }
-    results::parse(target, &athlete, root, &mut page)?;
+    results::parse(target, &mut athlete, root, &mut page)?;
     details::enqueue(target, root, &mut page)?;
     if html::masked(root)? {
         page.notes.push("Incomplete public access: masked athlete historical results retained in capture; public PRs only, no zero marks or absence inferred".to_owned());
@@ -87,29 +100,6 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
     enqueue_school(target, root, &athlete, &mut page)?;
     page.athletes.push(athlete);
     Ok(page)
-}
-
-fn progression_gender(root: ElementRef<'_>) -> Result<Option<String>> {
-    Ok(root.select(&html::selector("script")?).find_map(|script| {
-        let body = script.inner_html();
-        if !body.contains("progressionTrackerData") {
-            return None;
-        }
-        body.lines().find_map(|line| {
-            let assignment = line.trim().strip_prefix("var gender")?;
-            let value = assignment.trim_start().strip_prefix('=')?.trim();
-            let value = value.trim_end_matches(';').trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_suffix('"'))
-                .or_else(|| {
-                    value
-                        .strip_prefix('\'')
-                        .and_then(|value| value.strip_suffix('\''))
-                })?;
-            html::gender(value)
-        })
-    }))
 }
 
 fn profile_school(
@@ -163,7 +153,12 @@ fn same_as(person: Option<&Value>, athlete_id: &str) -> Result<Vec<String>> {
     })
 }
 
-fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Result<ParsedPage> {
+fn record(
+    target: &Target,
+    athlete: &Athlete,
+    row: ElementRef<'_>,
+    mut page: ParsedPage,
+) -> Result<ParsedPage> {
     let mode = row
         .value()
         .attr("data-pr-mode")
@@ -222,6 +217,7 @@ fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Resul
     let meet_name = html::value(row, "a[href*='/meets/']")?;
     let result_id = Some(format!("pr:{}:{mode}:{level}:{event}", athlete.id));
     let is_relay = html::relay(&event);
+    let (school_id, school_evidence) = results::represented_school(target, row, &mut page)?;
     let performance = Performance {
         athlete_id: athlete.id.clone(),
         event,
@@ -229,12 +225,14 @@ fn record(athlete: &Athlete, row: ElementRef<'_>, mut page: ParsedPage) -> Resul
         mark,
         source_values: Some(serde_json::json!({
             "kind": "personal_record", "mode": mode, "level": level,
+            "school_attribution": if school_id.is_some() { "row_link" } else { "not_published" },
+            "school_evidence": school_evidence,
             "row": details::evidence(row)?
         })),
         sport,
         result_id,
         source_row: None,
-        school_id: athlete.school_id.clone(),
+        school_id,
         meet_id,
         meet_name,
         date,
@@ -270,12 +268,14 @@ fn enqueue_school(
     athlete: &Athlete,
     page: &mut ParsedPage,
 ) -> Result<()> {
-    let Some(school) = page.schools.first() else {
+    let Some(href) = html::attribute(root, ".athlete-info .current-school a[href]", "href")? else {
         return Ok(());
     };
-    let href = html::attribute(root, ".athlete-info .current-school a[href]", "href")?
-        .ok_or_else(|| anyhow::anyhow!("profile school link missing"))?;
     let url = targets::linked(&target.url, &href)?;
+    let school_id = targets::path_id(&url, "teams")?;
+    let Some(school) = page.schools.iter().find(|school| school.id == school_id) else {
+        return Ok(());
+    };
     let context = PageContext {
         school_id: Some(school.id.clone()),
         school_name: Some(school.name.clone()),

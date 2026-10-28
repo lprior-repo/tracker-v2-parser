@@ -6,6 +6,36 @@ use crate::model::{Athlete, Source};
 
 use super::{keys, schools};
 
+#[tracing::instrument(skip(connection, observed))]
+pub(super) async fn review_school_conflicts(
+    connection: &mut PgConnection,
+    source: Source,
+    observed: &[crate::model::School],
+) -> Result<()> {
+    if observed.is_empty() {
+        return Ok(());
+    }
+    let ids = observed
+        .iter()
+        .map(|school| school.id.as_str())
+        .collect::<Vec<_>>();
+    sqlx::query(
+        "UPDATE athletes a SET needs_review=TRUE WHERE EXISTS ( \
+         SELECT 1 FROM athlete_sources p JOIN schools s ON s.id=p.school_id \
+         JOIN athlete_sources other ON other.athlete_id=p.athlete_id AND other.id<>p.id \
+         JOIN schools other_school ON other_school.id=other.school_id \
+         WHERE p.athlete_id=a.id AND s.source=$1 AND s.source_id=ANY($2) \
+         AND NULLIF(lower(btrim(s.state)),'') IS NOT NULL \
+         AND NULLIF(lower(btrim(other_school.state)),'') IS NOT NULL \
+         AND lower(btrim(s.state))<>lower(btrim(other_school.state)))",
+    )
+    .bind(source.as_str())
+    .bind(ids)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 #[tracing::instrument(skip(connection, athletes))]
 pub(super) async fn save_all(
     connection: &mut PgConnection,
@@ -60,7 +90,8 @@ async fn separate_conflicting_profile(
          COALESCE(lower(btrim(other.state))<>lower(btrim($4)),FALSE) OR \
          COALESCE(lower(btrim(other.gender))<>lower(btrim($5)),FALSE) OR \
          COALESCE(other.graduation_year<>$6,FALSE) OR \
-         COALESCE(lower(btrim(other_school.name))<>lower(btrim(incoming_school.name)),FALSE)))",
+         COALESCE(lower(btrim(other_school.name))<>lower(btrim(incoming_school.name)),FALSE) OR \
+         COALESCE(NULLIF(lower(btrim(other_school.state)),'')<>NULLIF(lower(btrim(incoming_school.state)),''),FALSE)))",
     )
     .bind(profile)
     .bind(&athlete.name)
@@ -220,7 +251,8 @@ async fn save_links(
          OR COUNT(DISTINCT NULLIF(lower(btrim(p.name)),''))>1 \
          OR COUNT(DISTINCT NULLIF(lower(btrim(p.gender)),''))>1 \
          OR COUNT(DISTINCT NULLIF(lower(btrim(p.state)),''))>1 \
-         OR COUNT(DISTINCT NULLIF(lower(btrim(s.name)),''))>1) OR \
+         OR COUNT(DISTINCT NULLIF(lower(btrim(s.name)),''))>1 \
+         OR COUNT(DISTINCT NULLIF(lower(btrim(s.state)),''))>1) OR \
          EXISTS(SELECT 1 FROM athlete_sources p \
          LEFT JOIN schools s ON s.id=p.school_id \
          LEFT JOIN schools observed ON observed.source=p.source AND observed.source_id=p.details->>'school_id' \
@@ -230,7 +262,8 @@ async fn save_links(
          COALESCE(lower(btrim(p.state))<>lower(btrim(p.details->>'state')),FALSE) OR \
          COALESCE(lower(btrim(p.gender))<>lower(btrim(p.details->>'gender')),FALSE) OR \
          COALESCE(p.graduation_year::text<>p.details->>'graduation_year',FALSE) OR \
-         COALESCE(lower(btrim(s.name))<>lower(btrim(observed.name)),FALSE)))",
+         COALESCE(lower(btrim(s.name))<>lower(btrim(observed.name)),FALSE) OR \
+         COALESCE(NULLIF(lower(btrim(s.state)),'')<>NULLIF(lower(btrim(observed.state)),''),FALSE)))",
     )
     .bind(&profiles)
     .fetch_one(&mut *connection)

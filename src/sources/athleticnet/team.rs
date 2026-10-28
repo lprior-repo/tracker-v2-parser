@@ -50,6 +50,15 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
             context.season.context("team target lacks season")?,
         )?]
     };
+    let next = next
+        .into_iter()
+        .map(|mut next| {
+            next.context
+                .acquisition_state
+                .clone_from(&target.context.acquisition_state);
+            next
+        })
+        .collect();
     Ok(ParsedPage {
         schools: vec![school],
         next,
@@ -92,7 +101,10 @@ fn roster(target: &Target, body: &Value) -> Result<ParsedPage> {
             );
             return Ok(());
         };
-        let next = athlete_target(&id, target.context.state.as_deref(), sport)?;
+        let mut next = athlete_target(&id, target.context.state.as_deref(), sport)?;
+        next.context
+            .acquisition_state
+            .clone_from(&target.context.acquisition_state);
         let profile = if sport == crate::model::Sport::CrossCountry {
             "cross-country"
         } else {

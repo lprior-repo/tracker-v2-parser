@@ -177,62 +177,18 @@ fn parse_table(
     document: &Html,
     table: ElementRef<'_>,
 ) -> Result<ParsedPage> {
-    let identity = table_identity(target, document)?;
-    if manual::is_athleticrunmeet(table)? {
-        manual::parse_athleticrunmeet(target, context, table, &identity)
+    let file = html::published_file(target, document)?;
+    let mut page = if manual::is_athleticrunmeet(table)? {
+        manual::parse_athleticrunmeet(target, context, table, &file.identity)?
     } else if manual::is_spreadsheet(table)? {
-        manual::parse(target, context, table, &identity)
+        manual::parse(target, context, table, &file.identity)?
     } else {
-        table_results(target, context, table, &identity)
-    }
-}
-
-fn table_identity(target: &Target, document: &Html) -> Result<String> {
-    let Some(canonical) = html::attribute(document.root_element(), "link[rel=canonical]", "href")?
-    else {
-        return Ok(target.url.clone());
+        table_results(target, context, table, &file.identity)?
     };
-    let canonical = targets::public_url(&targets::linked(&target.url, &canonical)?)?;
-    let meet = targets::path_id(&target.url, "meets")?;
-    let file = targets::path_id(canonical.as_str(), "results");
-    if !canonical.path().ends_with("/raw")
-        || targets::path_id(canonical.as_str(), "meets")
-            .ok()
-            .as_deref()
-            != Some(meet.as_str())
-        || file.is_err()
-    {
-        return Ok(target.url.clone());
+    if let Some(note) = file.unresolved {
+        page.notes.push(note);
     }
-    let file = file?;
-    let requested = targets::path_id(&target.url, "results");
-    let matches_request = matches!(requested.as_deref(), Ok(value) if value == file);
-    let selected = html::attribute(
-        document.root_element(),
-        "#ddResultsPage option[selected][value]",
-        "value",
-    )?;
-    let matches_selected = if requested.is_err() {
-        if let Some(selected) = selected {
-            let selected = targets::public_url(&targets::linked(&target.url, &selected)?)?;
-            selected.host_str() == canonical.host_str()
-                && targets::path_id(selected.as_str(), "meets").ok().as_deref()
-                    == Some(meet.as_str())
-                && targets::path_id(selected.as_str(), "results")
-                    .ok()
-                    .as_deref()
-                    == Some(file.as_str())
-        } else {
-            false
-        }
-    } else {
-        false
-    };
-    if matches_request || matches_selected {
-        Ok(format!("milesplit-file:{meet}:{file}"))
-    } else {
-        Ok(target.url.clone())
-    }
+    Ok(page)
 }
 
 fn selected_inline_result(
@@ -404,7 +360,7 @@ pub(super) fn metadata(target: &Target, document: &Html) -> Result<PageContext> 
         );
     }
     let sport = html::field(&event, "sport")
-        .map(|sport| targets::sport(&sport))
+        .map(|sport| targets::meet_sport(&sport, target.context.sport))
         .transpose()?
         .or(target.context.sport);
     Ok(PageContext {

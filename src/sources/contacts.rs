@@ -1,9 +1,11 @@
+mod access;
 #[cfg(test)]
 mod claim_tests;
 mod email;
 mod links;
 mod office;
 mod postal;
+pub mod recovery;
 mod staff;
 #[cfg(test)]
 mod tests;
@@ -89,7 +91,7 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         "contacts response is not HTML"
     );
     let document = Html::parse_document(body);
-    check_access(&document, &target.url)?;
+    access::check(&document, &target.url)?;
     ensure!(
         document
             .select(&selector(
@@ -126,55 +128,6 @@ pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         notes,
         ..ParsedPage::default()
     })
-}
-
-fn check_access(document: &Html, url: &str) -> Result<()> {
-    let titles = selector("title")?;
-    let headings = selector("h1")?;
-    let primary = document.select(&headings).find(|heading| {
-        !heading
-            .ancestors()
-            .filter_map(ElementRef::wrap)
-            .any(|ancestor| {
-                let element = ancestor.value();
-                matches!(
-                    element.name(),
-                    "footer" | "aside" | "nav" | "dialog" | "form"
-                ) || element.attr("hidden").is_some()
-                    || element
-                        .attr("aria-hidden")
-                        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
-            })
-    });
-    let challenged = document
-        .select(&titles)
-        .take(1)
-        .chain(primary)
-        .any(|heading| {
-            let heading = normalized(&text(heading));
-            [
-                "accessdenied",
-                "justamoment",
-                "attentionrequired",
-                "verifyyouarehuman",
-                "verifythatyouarehuman",
-                "checkingyourbrowser",
-                "captchachallenge",
-                "signin",
-                "login",
-                "subscribe",
-            ]
-            .iter()
-            .any(|marker| heading.starts_with(marker))
-        });
-    let challenge_form = selector("#challenge-form, #cf-challenge-running")?;
-    if challenged
-        || crate::transport::denied_url(url)
-        || document.select(&challenge_form).next().is_some()
-    {
-        return Err(AccessDenied.into());
-    }
-    Ok(())
 }
 
 fn selector(css: &str) -> Result<Selector> {
@@ -244,25 +197,25 @@ fn public_url(value: &str) -> Result<Url> {
 }
 
 fn text(element: ElementRef<'_>) -> String {
-    text_content(element, false)
+    text_content(element, &[])
 }
 
 fn staff_text(element: ElementRef<'_>) -> String {
-    text_content(element, true)
+    text_content(element, &["footer", "header", "nav"])
 }
 
-fn text_content(element: ElementRef<'_>, exclude_chrome: bool) -> String {
+fn text_content(element: ElementRef<'_>, excluded: &[&str]) -> String {
     element
         .descendants()
         .filter_map(|node| {
             let value = node.value().as_text()?;
-            let hidden = node.ancestors().filter_map(ElementRef::wrap).any(|parent| {
-                matches!(parent.value().name(), "script" | "style" | "noscript")
-                    || (exclude_chrome
-                        && matches!(parent.value().name(), "footer" | "header" | "nav"))
-                    || parent.value().attr("hidden").is_some()
-                    || parent.value().attr("aria-hidden") == Some("true")
-            });
+            let parent = node.ancestors().find_map(ElementRef::wrap)?;
+            let hidden = email::hidden(parent)
+                || excluded.contains(&parent.value().name())
+                || parent
+                    .ancestors()
+                    .filter_map(ElementRef::wrap)
+                    .any(|ancestor| excluded.contains(&ancestor.value().name()));
             (!hidden).then_some(value.text.as_ref())
         })
         .flat_map(str::split_whitespace)

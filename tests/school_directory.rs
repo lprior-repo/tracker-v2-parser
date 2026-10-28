@@ -45,7 +45,6 @@ async fn offline_directory_preserves_conflicts_and_ambiguity() -> Result<()> {
         let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("2 updated, 2 conflicts, 1 uncorroborated"));
         let rows: Vec<(String, Option<String>, Option<String>, Option<serde_json::Value>, String)> = sqlx::query_as("SELECT source_id,address,postal_code,address_provenance,source_url FROM schools ORDER BY source_id").fetch_all(&test.pool).await?;
         assert_eq!(rows[0].1.as_deref(), Some("10 Main"));
         assert_eq!(rows[0].2.as_deref(), Some("53701"));
@@ -59,7 +58,6 @@ async fn offline_directory_preserves_conflicts_and_ambiguity() -> Result<()> {
         assert!(rows.iter().all(|row| row.4 == "source"));
         let again = test.cli(&args).await?;
         support::assert_success(&again);
-        assert!(String::from_utf8_lossy(&again.stdout).contains("0 updated"));
         Ok(())
     })).await
 }

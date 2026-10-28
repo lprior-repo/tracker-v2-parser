@@ -31,7 +31,7 @@
       "original_relative_path": "research/sources/athleticnet/samples/live-meetdata-634313.redacted.json",
       "url": "https://www.athletic.net/api/v1/Meet/GetMeetData?meetId=634313&sport=tf",
       "captured_at": "Exact capture date unavailable in retained metadata; retained in source report by 2026-09-22.",
-      "transformations": "Removed jwt/token/cookie/authorization keys recursively if present; otherwise byte-exact UTF-8 body."
+      "transformations": "Removed jwt/token/cookie/authorization keys recursively during original retention. Review sanitization additionally removed meet.OwnerID, meet.ContactUserID and the complete embedded-JSON meet.SetupState account-action/setup object, including operational IP addresses and account-action timestamps. Re-serialized JSON with indentation; published meet identity, dates, location, divisions, team scores, season and other athletic evidence remain unchanged."
     },
     {
       "fixture": "results-634313.json",

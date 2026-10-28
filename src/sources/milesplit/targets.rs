@@ -189,8 +189,24 @@ pub(super) fn sport(value: &str) -> Result<Sport> {
     if value.contains("indoor") {
         return Ok(Sport::Indoor);
     }
-    if value.contains("outdoor") || value.contains("track") {
+    if value.contains("outdoor") {
         return Ok(Sport::Outdoor);
     }
     bail!("unrecognized MileSplit sport {value:?}")
+}
+
+pub(super) fn meet_sport(value: &str, requested: Option<Sport>) -> Result<Sport> {
+    if let Ok(sport) = sport(value) {
+        return Ok(sport);
+    }
+    let generic = matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "track" | "trackandfield" | "track and field" | "track & field"
+    );
+    match (generic, requested) {
+        (true, Some(sport @ (Sport::Indoor | Sport::Outdoor))) => Ok(sport),
+        _ => bail!(
+            "unresolved MileSplit sport {value:?}; explicit indoor or outdoor context required"
+        ),
+    }
 }

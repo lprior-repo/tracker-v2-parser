@@ -99,7 +99,7 @@ pub(super) async fn next(
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND p.attempts < $2 \
          AND ($1::text IS NULL OR p.source=$1) \
-         AND (cardinality($4::text[]) = 0 OR p.cursor->'context'->>'state'=ANY($4) \
+         AND (cardinality($4::text[]) = 0 OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($4) \
            OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
              AND p.cursor->'context'->>'state' IS NULL \
              AND p.cursor->'context'->>'subject_id'=array_to_string($4,','))) \
@@ -204,8 +204,42 @@ pub(super) async fn fail(
             job.id
         );
     }
+    if !blocked && response.is_some_and(|capture| capture.status == 404) {
+        recover_contact_root(connection, job).await?;
+    }
     if blocked && job.target.kind == crate::model::PageKind::Contacts {
         note_contact_stops(connection).await?;
     }
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, job))]
+async fn recover_contact_root(connection: &mut PgConnection, job: &Job) -> Result<()> {
+    let Some(root) = crate::sources::contacts::recovery::after_not_found(&job.target)? else {
+        return Ok(());
+    };
+    let alias_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND cursor->>'kind'='contacts' \
+         AND cursor->'context'->>'school_id'=$2 AND url=$3)",
+    )
+    .bind(root.source.as_str())
+    .bind(root.context.school_id.as_deref())
+    .bind(root.url.trim_end_matches('/'))
+    .fetch_one(&mut *connection)
+    .await?;
+    if !alias_exists {
+        enqueue(connection, std::slice::from_ref(&root), false).await?;
+    }
+    let note = format!(
+        "Published contact URL returned HTTP 404; same-site root checkpoint: {}",
+        root.url
+    );
+    sqlx::query(
+        "UPDATE scrape_pages SET notes=array_append(notes,$2) WHERE id=$1 AND NOT $2=ANY(notes)",
+    )
+    .bind(job.id)
+    .bind(note)
+    .execute(connection)
+    .await?;
     Ok(())
 }

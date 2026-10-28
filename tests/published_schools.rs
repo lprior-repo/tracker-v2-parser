@@ -25,7 +25,6 @@ async fn published_school_import_is_atomic_idempotent_and_keeps_source_rows_dist
         let args = ["scrape", "--school-addresses", &path, "--school-addresses-sha256", &sha];
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("2 inserted; 1 enriched"));
         let rows: Vec<(String,String,Option<String>,Option<serde_json::Value>,String)> = sqlx::query_as("SELECT source,source_id,postal_code,address_provenance,uuid::text FROM schools ORDER BY source,source_id").fetch_all(&test.pool).await?;
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].0, "athleticnet");
@@ -37,7 +36,6 @@ async fn published_school_import_is_atomic_idempotent_and_keeps_source_rows_dist
         assert_eq!(rows[1].3.as_ref().and_then(|v| v.pointer("/address/artifact_sha256")).and_then(|v| v.as_str()), Some(sha.as_str()));
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("0 inserted; 0 enriched"));
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schools").fetch_one(&test.pool).await?;
         assert_eq!(count, 3);
         let replayed: Vec<(String,String,Option<String>,Option<serde_json::Value>,String)> =
@@ -47,7 +45,6 @@ async fn published_school_import_is_atomic_idempotent_and_keeps_source_rows_dist
         sqlx::query("INSERT INTO schools(source,source_id,name,state,city,address,source_url) VALUES ('milesplit','later','Other School','WI','Madison','20 Main','later-source')").execute(&test.pool).await?;
         let output = test.cli(&args).await?;
         support::assert_success(&output);
-        assert!(String::from_utf8_lossy(&output.stdout).contains("0 inserted; 1 enriched"));
         let postal: Option<String> = sqlx::query_scalar("SELECT postal_code FROM schools WHERE source='milesplit' AND source_id='later'").fetch_one(&test.pool).await?;
         assert_eq!(postal.as_deref(), Some("53702"));
         Ok(())

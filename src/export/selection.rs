@@ -99,7 +99,7 @@ pub(super) fn issues(record: &AthleteRecord) -> Vec<&'static str> {
         .iter()
         .any(|evidence| crate::marks::comparable(evidence).is_none())
     {
-        issues.push("non-comparable observed results; see raw records and review_notes");
+        issues.push("non-comparable observed results; see Issues and Observations");
     }
     issues
 }
@@ -119,6 +119,51 @@ pub(super) fn contact_issues(record: &AthleteRecord) -> impl Iterator<Item = Str
             )
         })
     })
+}
+
+pub(super) fn hs_comparison(
+    evidence: &crate::model::EvidencedPerformance,
+) -> Result<crate::marks::ComparableMark, &'static str> {
+    if evidence
+        .performance
+        .source_values
+        .as_ref()
+        .and_then(|values| values.get("revision_status"))
+        .and_then(serde_json::Value::as_str)
+        == Some("unverified_prior_revision")
+    {
+        return Err(
+            "unverified prior revision; not reconfirmed in the latest observed source file",
+        );
+    }
+    let level = evidence
+        .performance
+        .source_values
+        .as_ref()
+        .and_then(|values| values.get("level"))
+        .and_then(serde_json::Value::as_str);
+    if !level.is_some_and(is_hs) {
+        return Err("not explicitly published as high school");
+    }
+    let attributes = evidence
+        .performance
+        .source_values
+        .as_ref()
+        .and_then(|values| values.pointer("/row/attributes"));
+    if ["data-level", "data-pr-level"].into_iter().any(|key| {
+        attributes
+            .and_then(|values| values.get(key))
+            .is_some_and(|value| !value.as_str().is_some_and(is_hs))
+    }) {
+        return Err("conflicting published competition levels");
+    }
+    crate::marks::comparison(evidence)
+}
+
+fn is_hs(level: &str) -> bool {
+    ["hs", "high school", "high_school", "highschool"]
+        .into_iter()
+        .any(|candidate| level.trim().eq_ignore_ascii_case(candidate))
 }
 
 fn missing_coach_name(record: &AthleteRecord) -> bool {

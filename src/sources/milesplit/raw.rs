@@ -25,6 +25,7 @@ struct Reader {
 struct RowScope<'a> {
     target: &'a Target,
     context: &'a PageContext,
+    file: &'a html::PublishedFile,
     ordinal: usize,
     event: &'a str,
     round: Option<&'a str>,
@@ -42,17 +43,21 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
         .select(&html::selector("#meetResultsBody pre, pre")?)
         .next()
         .ok_or_else(|| anyhow::anyhow!("MileSplit result page missing public <pre> block"))?;
+    let file = html::published_file(target, document)?;
     let block = pre.inner_html();
     let mut reader = block
         .lines()
         .enumerate()
         .try_fold(Reader::default(), |reader, (line, raw)| {
-            read_line(target, &context, line, raw, reader)
+            read_line(target, &context, &file, line, raw, reader)
         })?;
     ensure!(
         reader.qualified && reader.rows > 0,
         "unqualified MileSplit raw result document or no readable result rows"
     );
+    if let Some(note) = file.unresolved {
+        reader.page.notes.push(note);
+    }
     if reader.unidentified > 0 {
         reader.page.notes.push(format!("{} published result rows have no actual athlete profile ID; retained as lossless unassigned results, not name-matched or fabricated", reader.unidentified));
     }
@@ -66,6 +71,7 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
 fn read_line(
     target: &Target,
     context: &PageContext,
+    file: &html::PublishedFile,
     ordinal: usize,
     raw: &str,
     mut reader: Reader,
@@ -106,6 +112,7 @@ fn read_line(
     let scope = RowScope {
         target,
         context,
+        file,
         ordinal,
         event,
         round: reader.round.as_deref(),
@@ -293,7 +300,7 @@ fn identified_row(
         event: event.to_owned(),
         mark: row.mark.to_owned(),
         reported_status: None,
-        source_values: None,
+        source_values: Some(retained::evidence(scope, Some(row))),
         sport,
         result_id,
         source_row: None,

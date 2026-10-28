@@ -1,11 +1,11 @@
 use anyhow::{Result, ensure};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::model::UnassignedResult;
 
 use super::{RowScope, columns};
-use crate::sources::milesplit::{html, targets};
+use crate::sources::milesplit::html;
 
 pub(super) fn result_id(scope: &RowScope<'_>) -> Result<String> {
     let meet = scope
@@ -13,15 +13,9 @@ pub(super) fn result_id(scope: &RowScope<'_>) -> Result<String> {
         .subject_id
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("raw row has no meet identity"))?;
-    let url = targets::public_url(&scope.target.url)?;
-    let file = if url.path().trim_end_matches('/').ends_with("/results") {
-        "inline".to_owned()
-    } else {
-        targets::path_id(&scope.target.url, "results")?
-    };
     let coordinates = (
         meet,
-        file,
+        &scope.file.identity,
         scope.event,
         scope.round,
         scope.ordinal.saturating_add(1),
@@ -30,17 +24,11 @@ pub(super) fn result_id(scope: &RowScope<'_>) -> Result<String> {
     Ok(format!("raw:{}", serde_json::to_string(&coordinates)?))
 }
 
-pub(super) fn unassigned(
-    scope: &RowScope<'_>,
-    row: Option<&columns::Row<'_>>,
-    school: Option<&str>,
-) -> Result<UnassignedResult> {
-    let sport = scope
-        .context
-        .sport
-        .ok_or_else(|| anyhow::anyhow!("raw row has no sport"))?;
-    let raw = json!({
+pub(super) fn evidence(scope: &RowScope<'_>, row: Option<&columns::Row<'_>>) -> Value {
+    json!({
+        "kind": "raw_result",
         "source_url": scope.target.url,
+        "published_file_identity": scope.file.unresolved.is_none().then_some(scope.file.identity.as_str()),
         "line_ordinal": scope.ordinal.saturating_add(1),
         "published_html": scope.raw,
         "published_text": scope.line,
@@ -52,7 +40,19 @@ pub(super) fn unassigned(
         "round": scope.round,
         "meet_name": scope.context.meet_name,
         "column_layout_readable": row.is_some(),
-    });
+    })
+}
+
+pub(super) fn unassigned(
+    scope: &RowScope<'_>,
+    row: Option<&columns::Row<'_>>,
+    school: Option<&str>,
+) -> Result<UnassignedResult> {
+    let sport = scope
+        .context
+        .sport
+        .ok_or_else(|| anyhow::anyhow!("raw row has no sport"))?;
+    let raw = evidence(scope, row);
     ensure!(
         !scope.line.trim().is_empty(),
         "cannot retain an empty result line"

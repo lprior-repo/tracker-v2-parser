@@ -10,6 +10,7 @@ use crate::model::{AthleteRecord, Capture, Counts, ParsedPage, Source, Target};
 
 mod contact_discovery;
 mod contacts;
+mod export_snapshot;
 mod identity;
 mod keys;
 mod queue;
@@ -21,6 +22,12 @@ mod unassigned;
 
 #[cfg(test)]
 mod tests;
+
+pub use export_snapshot::{
+    EXPORT_BATCH_BYTES, EXPORT_BATCH_ROWS, EXPORT_COLLECTION_BYTES, EXPORT_COLLECTION_ROWS,
+    EXPORT_COMPONENT_BYTES, EXPORT_MAX_OBSERVATIONS, ExportLimitExceeded, ExportSnapshot,
+    ExportSnapshotInvalidated,
+};
 
 #[derive(Debug)]
 pub struct Database {
@@ -55,19 +62,21 @@ impl JobClass {
 impl Database {
     #[tracing::instrument(skip(url))]
     pub async fn connect(url: &str) -> Result<Self> {
-        if !url.starts_with("postgres://") && !url.starts_with("postgresql://") {
-            bail!("DATABASE_URL must use postgres:// or postgresql://");
-        }
-        let options = PgConnectOptions::from_str(url).context("parsing PostgreSQL DATABASE_URL")?;
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .acquire_timeout(Duration::from_secs(10))
-            .connect_with(options)
-            .await
-            .context("connecting to PostgreSQL")?;
+        let pool = connect_pool(url).await?;
         if let Err(error) = sqlx::migrate!("./migrations").run(&pool).await {
             pool.close().await;
             return Err(error).context("applying PostgreSQL scraper migrations");
+        }
+        Ok(Self { pool })
+    }
+
+    #[tracing::instrument(skip(url))]
+    pub async fn connect_for_export(url: &str) -> Result<Self> {
+        let pool = connect_pool(url).await?;
+        if let Err(error) = export_snapshot::validate_schema(&pool).await {
+            pool.close().await;
+            return Err(error)
+                .context("export requires a compatible schema; run mutating setup separately");
         }
         Ok(Self { pool })
     }
@@ -179,45 +188,50 @@ impl Database {
         report::athlete_records(&self.pool, states, years).await
     }
 
+    #[tracing::instrument(skip(self, states, years))]
     pub async fn export_snapshot(
         &self,
         states: &[String],
         years: &[i32],
     ) -> Result<(Vec<AthleteRecord>, Vec<crate::export::ExportIssue>)> {
-        let mut transaction = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            .execute(&mut *transaction)
-            .await?;
-        let records: Vec<serde_json::Value> =
-            sqlx::query_scalar(include_str!("database/athlete_records.sql"))
-                .bind(states)
-                .bind(years)
-                .fetch_all(&mut *transaction)
-                .await
-                .context("loading selected canonical athletes with source records")?;
-        let records = records
-            .into_iter()
-            .map(|record| {
-                serde_json::from_value(record).context("decoding canonical athlete report")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let rows: Vec<(String, String, String)> =
-            sqlx::query_as(include_str!("database/export_issues.sql"))
-                .bind(states)
-                .fetch_all(&mut *transaction)
-                .await
-                .context("loading page coverage and unassigned result issues")?;
-        transaction.commit().await?;
-        let issues = rows
-            .into_iter()
-            .map(|(source, url, detail)| crate::export::ExportIssue {
-                source,
-                url,
-                detail,
-            })
-            .collect();
-        Ok((records, issues))
+        let snapshot = self.begin_export_snapshot(states, years).await?;
+        export_snapshot::collect(snapshot).await
     }
+
+    #[tracing::instrument(skip(self, states, years))]
+    pub async fn begin_export_snapshot(
+        &self,
+        states: &[String],
+        years: &[i32],
+    ) -> Result<ExportSnapshot<'_>> {
+        ExportSnapshot::begin(&self.pool, states, years).await
+    }
+
+    #[tracing::instrument(skip(self, options))]
+    pub async fn write_export(
+        &self,
+        output: &std::path::Path,
+        options: &crate::export::ExportOptions,
+    ) -> Result<Vec<std::path::PathBuf>> {
+        let snapshot = self
+            .begin_export_snapshot(&options.states, &options.graduation_years)
+            .await?;
+        export_snapshot::write(snapshot, output, options).await
+    }
+}
+
+#[tracing::instrument(skip(url))]
+async fn connect_pool(url: &str) -> Result<PgPool> {
+    if !url.starts_with("postgres://") && !url.starts_with("postgresql://") {
+        bail!("DATABASE_URL must use postgres:// or postgresql://");
+    }
+    let options = PgConnectOptions::from_str(url).context("parsing PostgreSQL DATABASE_URL")?;
+    PgPoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect_with(options)
+        .await
+        .context("connecting to PostgreSQL")
 }
 
 #[tracing::instrument(skip(transaction, result))]

@@ -1,15 +1,23 @@
-use scraper::{ElementRef, Html};
+use scraper::{ElementRef, Html, Selector};
 
 use super::{Rules, chrome, text};
-use crate::sources::contacts::normalized;
+use crate::sources::contacts::{email, normalized, text as visible_text};
 
 pub(super) fn page_local(document: &Html, rules: &Rules, school_name: &str) -> bool {
+    school_local(document, &rules.school_headings, school_name)
+}
+
+pub(in crate::sources::contacts) fn school_local(
+    document: &Html,
+    headings: &Selector,
+    school_name: &str,
+) -> bool {
     let identity = normalized(school_name);
     let (matched, unambiguous) = document
-        .select(&rules.school_headings)
-        .filter(|heading| !chrome(*heading))
+        .select(headings)
+        .filter(|heading| page_heading(*heading))
         .fold((false, true), |(matched, unambiguous), heading| {
-            let heading = normalized(&text(heading));
+            let heading = normalized(&visible_text(heading));
             let matching = heading
                 .strip_prefix(identity.as_str())
                 .is_some_and(|suffix| {
@@ -29,6 +37,22 @@ pub(super) fn page_local(document: &Html, rules: &Rules, school_name: &str) -> b
             (matched || matching, unambiguous && (matching || neutral))
         });
     matched && unambiguous
+}
+
+fn page_heading(heading: ElementRef<'_>) -> bool {
+    !email::hidden(heading)
+        && std::iter::once(heading)
+            .chain(heading.ancestors().filter_map(ElementRef::wrap))
+            .all(|element| {
+                !matches!(
+                    element.value().name(),
+                    "footer" | "nav" | "aside" | "form" | "dialog"
+                ) && !element.value().attr("role").is_some_and(|role| {
+                    ["dialog", "complementary", "navigation"]
+                        .iter()
+                        .any(|excluded| role.eq_ignore_ascii_case(excluded))
+                })
+            })
 }
 
 pub(super) fn review_notes(

@@ -222,7 +222,7 @@ impl Runner {
     pub async fn export(&self, config: &Config, output: &Path, database_url: &str) -> Result<()> {
         let mut config = config.clone();
         config.validate()?;
-        let database = Database::connect(database_url).await?;
+        let database = Database::connect_for_export(database_url).await?;
         let result = export_records(&database, &config, output).await;
         database.close().await;
         result
@@ -331,7 +331,7 @@ async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
     for source in config.enabled_sources() {
         let exhausted: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2 \
-             AND (cardinality($3::text[]) = 0 OR p.cursor->'context'->>'state'=ANY($3) \
+             AND (cardinality($3::text[]) = 0 OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($3) \
                OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
                  AND p.cursor->'context'->>'state' IS NULL \
                  AND p.cursor->'context'->>'subject_id'=array_to_string($3,','))))",
@@ -550,20 +550,17 @@ async fn read_replay(input: &Path) -> Result<Vec<u8>> {
 }
 
 async fn export_records(database: &Database, config: &Config, output: &Path) -> Result<()> {
-    let (records, issues) = database
-        .export_snapshot(&config.states, &config.graduation_years)
+    database
+        .write_export(
+            output,
+            &crate::export::ExportOptions {
+                states: config.states.clone(),
+                graduation_years: config.graduation_years.clone(),
+                rows_per_file: config.export.rows_per_file,
+                per_athlete_sheets: config.export.per_athlete_sheets,
+            },
+        )
         .await?;
-    crate::export::write_spreadsheets_with_issues(
-        output,
-        &records,
-        &issues,
-        &crate::export::ExportOptions {
-            states: config.states.clone(),
-            graduation_years: config.graduation_years.clone(),
-            rows_per_file: config.export.rows_per_file,
-            per_athlete_sheets: config.export.per_athlete_sheets,
-        },
-    )?;
     Ok(())
 }
 

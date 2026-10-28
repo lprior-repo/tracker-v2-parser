@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::{
@@ -178,6 +178,7 @@ impl Cli {
                     });
                     let context = PageContext {
                         state: args.state,
+                        acquisition_state: None,
                         school_id: args.school_id,
                         school_name: args.school_name,
                         athlete_id: args.athlete_id,
@@ -222,10 +223,14 @@ async fn import_private_schools(path: PathBuf, expected: String, database_url: &
     database.close().await;
     let report = result?;
     println!(
-        "private schools: {} inserted; {} enriched, {} conflicts, {} uncorroborated",
+        "private schools: {} inserted; {} updated; {} enriched, {} conflicts, {} uncorroborated",
         report.inserted,
+        report.updated,
         report.enrichment.updated,
-        report.enrichment.conflicts,
+        report
+            .conflicts
+            .checked_add(report.enrichment.conflicts)
+            .context("school conflict count overflow")?,
         report.enrichment.uncorroborated
     );
     Ok(())
@@ -246,10 +251,14 @@ async fn import_published_schools(
     database.close().await;
     let report = result?;
     println!(
-        "published schools: {} inserted; {} enriched, {} conflicts, {} uncorroborated",
+        "published schools: {} inserted; {} updated; {} enriched, {} conflicts, {} uncorroborated",
         report.inserted,
+        report.updated,
         report.enrichment.updated,
-        report.enrichment.conflicts,
+        report
+            .conflicts
+            .checked_add(report.enrichment.conflicts)
+            .context("school conflict count overflow")?,
         report.enrichment.uncorroborated
     );
     Ok(())

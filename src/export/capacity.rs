@@ -1,69 +1,91 @@
 use anyhow::{Context, Result};
-use calamine::{Reader, Xlsx, open_workbook};
+use calamine::{Data, Reader, Xlsx, open_workbook};
 use rust_xlsxwriter::{Color, Format, Url, Workbook, Worksheet};
 use std::path::Path;
 
 const MAX_DATA_ROWS: u32 = 1_048_575;
 const MAX_HYPERLINKS: usize = 65_530;
 const MAX_WORKSHEETS: usize = 65_530;
+pub(super) const MAX_CELL_UNITS: usize = 32_767;
+pub(super) const MAX_PR_KEYS: usize = 5_455;
+
+struct CellDetail {
+    worksheet: String,
+    row: u32,
+    column: u16,
+    field: String,
+    value: String,
+}
 
 pub(super) struct SheetCount {
     name: String,
     rows: u32,
     hyperlinks: usize,
+    details: Vec<CellDetail>,
 }
 
 struct Sheet {
     worksheet: Worksheet,
     rows: u32,
     hyperlinks: usize,
+    details: Vec<CellDetail>,
 }
 
 pub(super) fn write(
     workbook: &mut Workbook,
     base: &str,
     headers: &[String],
-    mut rows: impl Iterator<Item = Vec<String>>,
+    rows: impl Iterator<Item = Vec<String>>,
     autofilter: bool,
     expected: &mut Vec<SheetCount>,
 ) -> Result<()> {
-    let (_, sheet) = rows.try_fold(
-        (1_u32, new_sheet(base, 1, headers)?),
-        |(part, sheet), cells| {
-            anyhow::ensure!(
-                cells.len() == headers.len(),
-                "worksheet row/header column count mismatch"
-            );
-            let hyperlinks = cells
-                .iter()
-                .zip(headers)
-                .filter(|(text, header)| is_hyperlink(header, text))
-                .count();
-            anyhow::ensure!(
-                hyperlinks <= MAX_HYPERLINKS,
-                "row exceeds hyperlink capacity"
-            );
-            let combined = sheet
-                .hyperlinks
-                .checked_add(hyperlinks)
-                .context("hyperlink count overflow")?;
-            let (part, mut sheet) = if sheet.rows == MAX_DATA_ROWS || combined > MAX_HYPERLINKS {
-                finish(workbook, sheet, headers.len(), autofilter, expected)?;
-                let part = part
-                    .checked_add(1)
-                    .context("worksheet part number overflow")?;
-                (part, new_sheet(base, part, headers)?)
-            } else {
-                (part, sheet)
-            };
-            write_row(&mut sheet, headers, &cells, hyperlinks)?;
-            Ok::<_, anyhow::Error>((part, sheet))
-        },
-    )?;
+    write_fallible(workbook, base, headers, rows.map(Ok), autofilter, expected)
+}
+
+pub(super) fn write_fallible(
+    workbook: &mut Workbook,
+    base: &str,
+    headers: &[String],
+    mut rows: impl Iterator<Item = Result<Vec<String>>>,
+    autofilter: bool,
+    expected: &mut Vec<SheetCount>,
+) -> Result<()> {
+    let first = new_sheet(workbook, base, 1, headers)?;
+    let (_, sheet) = rows.try_fold((1_u32, first), |(part, sheet), cells| {
+        let cells = cells?;
+        anyhow::ensure!(
+            cells.len() == headers.len(),
+            "worksheet row/header column count mismatch"
+        );
+        let hyperlinks = cells
+            .iter()
+            .zip(headers)
+            .filter(|(text, header)| is_hyperlink(header, text))
+            .count();
+        anyhow::ensure!(
+            hyperlinks <= MAX_HYPERLINKS,
+            "row exceeds hyperlink capacity"
+        );
+        let combined = sheet
+            .hyperlinks
+            .checked_add(hyperlinks)
+            .context("hyperlink count overflow")?;
+        let (part, mut sheet) = if sheet.rows == MAX_DATA_ROWS || combined > MAX_HYPERLINKS {
+            finish(workbook, sheet, headers.len(), autofilter, expected)?;
+            let part = part
+                .checked_add(1)
+                .context("worksheet part number overflow")?;
+            (part, new_sheet(workbook, base, part, headers)?)
+        } else {
+            (part, sheet)
+        };
+        write_row(&mut sheet, headers, cells, hyperlinks)?;
+        Ok::<_, anyhow::Error>((part, sheet))
+    })?;
     finish(workbook, sheet, headers.len(), autofilter, expected)
 }
 
-fn new_sheet(base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
+fn new_sheet(workbook: &mut Workbook, base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
     anyhow::ensure!(
         headers.len() <= 16_384,
         "too many comparable event columns for Excel"
@@ -82,7 +104,7 @@ fn new_sheet(base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
             name
         }
     };
-    let mut worksheet = Worksheet::new();
+    let mut worksheet = workbook.new_worksheet_with_constant_memory()?;
     worksheet.set_name(name)?;
     let format = Format::new()
         .set_bold()
@@ -90,6 +112,10 @@ fn new_sheet(base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
         .set_font_color(Color::White)
         .set_text_wrap();
     headers.iter().enumerate().try_for_each(|(column, text)| {
+        anyhow::ensure!(
+            text.encode_utf16().count() <= MAX_CELL_UNITS,
+            "worksheet header exceeds Excel character capacity"
+        );
         worksheet.write_string_with_format(0, u16::try_from(column)?, text, &format)?;
         Ok::<(), anyhow::Error>(())
     })?;
@@ -102,6 +128,7 @@ fn new_sheet(base: &str, part: u32, headers: &[String]) -> Result<Sheet> {
         worksheet,
         rows: 0,
         hyperlinks: 0,
+        details: Vec::new(),
     })
 }
 
@@ -110,12 +137,13 @@ fn is_hyperlink(header: &str, text: &str) -> bool {
         || header.ends_with("::source_url"))
         && (text.starts_with("https://") || text.starts_with("http://"))
         && !text.contains("; ")
+        && text.encode_utf16().count() <= 2_080
 }
 
 fn write_row(
     sheet: &mut Sheet,
     headers: &[String],
-    cells: &[String],
+    cells: Vec<String>,
     hyperlinks: usize,
 ) -> Result<()> {
     let row = sheet
@@ -123,17 +151,35 @@ fn write_row(
         .checked_add(1)
         .context("worksheet row overflow")?;
     cells
-        .iter()
+        .into_iter()
         .zip(headers)
         .enumerate()
         .try_for_each(|(column, (text, header))| {
             let column = u16::try_from(column)?;
-            if is_hyperlink(header, text) {
+            if text.encode_utf16().count() > MAX_CELL_UNITS {
+                sheet.worksheet.write_string(
+                    row,
+                    column,
+                    format!(
+                        "Complete text: Cell_details; worksheet={} row={} column={}",
+                        sheet.worksheet.name(),
+                        row.saturating_add(1),
+                        u32::from(column).saturating_add(1)
+                    ),
+                )?;
+                sheet.details.push(CellDetail {
+                    worksheet: sheet.worksheet.name(),
+                    row,
+                    column,
+                    field: header.clone(),
+                    value: text,
+                });
+            } else if is_hyperlink(header, &text) {
                 sheet
                     .worksheet
                     .write_url(row, column, Url::new(text.as_str()))?;
             } else {
-                sheet.worksheet.write_string(row, column, text)?;
+                sheet.worksheet.write_string(row, column, &text)?;
             }
             Ok::<(), anyhow::Error>(())
         })?;
@@ -165,9 +211,50 @@ fn finish(
         name: sheet.worksheet.name(),
         rows: sheet.rows,
         hyperlinks: sheet.hyperlinks,
+        details: sheet.details,
     });
     workbook.push_worksheet(sheet.worksheet);
     Ok(())
+}
+
+pub(super) fn write_details(workbook: &mut Workbook, expected: &mut Vec<SheetCount>) -> Result<()> {
+    let details = expected
+        .iter_mut()
+        .flat_map(|sheet| std::mem::take(&mut sheet.details))
+        .collect::<Vec<_>>();
+    if details.is_empty() {
+        return Ok(());
+    }
+    let headers = ["worksheet", "row", "column", "field", "part", "text"].map(str::to_owned);
+    let rows = details.into_iter().flat_map(|detail| {
+        chunks(&detail.value)
+            .enumerate()
+            .map(|(part, text)| {
+                vec![
+                    detail.worksheet.clone(),
+                    detail.row.saturating_add(1).to_string(),
+                    u32::from(detail.column).saturating_add(1).to_string(),
+                    detail.field.clone(),
+                    part.saturating_add(1).to_string(),
+                    text.to_owned(),
+                ]
+            })
+            .collect::<Vec<_>>()
+    });
+    write(workbook, "Cell_details", &headers, rows, false, expected)
+}
+
+pub(super) fn chunks(value: &str) -> impl Iterator<Item = &str> {
+    let mut remaining = value;
+    std::iter::from_fn(move || {
+        if remaining.is_empty() {
+            return None;
+        }
+        let boundary = remaining.floor_char_boundary(8_000);
+        let (chunk, rest) = remaining.split_at(boundary);
+        remaining = rest;
+        Some(chunk)
+    })
 }
 
 pub(super) fn verify(path: &Path, expected: &[SheetCount]) -> Result<()> {
@@ -187,6 +274,14 @@ pub(super) fn verify(path: &Path, expected: &[SheetCount]) -> Result<()> {
         anyhow::ensure!(
             range.height() == rows,
             "XLSX {} row count mismatch",
+            sheet.name
+        );
+        anyhow::ensure!(
+            range.rows().flatten().all(|cell| match cell {
+                Data::String(value) => value.encode_utf16().count() <= MAX_CELL_UNITS,
+                _ => true,
+            }),
+            "XLSX {} contains overlong cell text",
             sheet.name
         );
         let hyperlinks = workbook.hyperlinks_by_sheet_name(&sheet.name)?;

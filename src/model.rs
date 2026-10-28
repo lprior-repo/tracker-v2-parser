@@ -53,6 +53,8 @@ pub enum PageKind {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PageContext {
     pub state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acquisition_state: Option<String>,
     pub school_id: Option<String>,
     pub school_name: Option<String>,
     pub athlete_id: Option<String>,

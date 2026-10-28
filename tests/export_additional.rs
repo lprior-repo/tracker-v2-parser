@@ -82,8 +82,10 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
             let first = records::target(Source::AthleticNet, "11");
             let second = records::target(Source::MileSplit, "21");
             let mut slow = records::performance("11.20");
+            slow.source_values = Some(serde_json::json!({"level": "hs"}));
             slow.result_id = Some("an-slow".to_owned());
             let mut fast = records::performance("10.90");
+            fast.source_values = Some(serde_json::json!({"level": "hs"}));
             fast.result_id = Some("an-fast".to_owned());
             records::persist(
                 &database,
@@ -101,6 +103,7 @@ async fn mixed_source_snapshot_exports_linked_bests_and_excludes_other_states_an
                 ..records::athlete("21")
             };
             let mut mile_mark = records::performance("11.05");
+            mile_mark.source_values = Some(serde_json::json!({"level": "hs"}));
             mile_mark.athlete_id = "21".to_owned();
             mile_mark.result_id = Some("ms-result".to_owned());
             records::persist(

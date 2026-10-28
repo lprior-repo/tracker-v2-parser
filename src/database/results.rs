@@ -9,6 +9,18 @@ use crate::{
 
 use super::{identity, keys, schools};
 
+mod legacy_history;
+mod raw_revisions;
+mod school_evidence;
+
+pub(super) use raw_revisions::review as review_revisions;
+pub(super) struct Normalized {
+    pub value: Option<i64>,
+    pub unit: Option<&'static str>,
+    pub specification: Option<String>,
+    pub status: &'static str,
+}
+
 struct ResultRow<'a> {
     source: Source,
     performance: &'a Performance,
@@ -24,6 +36,7 @@ pub(super) async fn save_all(
     performances: &[Performance],
     url: &str,
 ) -> Result<()> {
+    legacy_history::reconcile(connection, source, performances, url).await?;
     stream::iter(performances.iter().enumerate().map(Ok::<_, anyhow::Error>))
         .try_fold(connection, |connection, (index, performance)| async move {
             save(connection, source, performance, (url, index)).await?;
@@ -70,18 +83,19 @@ async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64
         .reported_status
         .as_deref()
         .and_then(marks::failure_status);
-    let (value, unit, specification) = normalization(
+    let key = keys::performance(row.source, performance, row.location.0, row.location.1)?;
+    let normalized = normalize_effective(
+        connection,
+        &key,
         &performance.event,
         &performance.mark,
-        performance.is_relay || reported_status.is_some(),
-    );
+        performance.is_relay,
+        reported_status,
+    )
+    .await?;
+    let school_replay = school_evidence::resolve(connection, row.source, performance, &key).await?;
     sqlx::query_scalar(include_str!("result_upsert.sql"))
-        .bind(keys::performance(
-            row.source,
-            performance,
-            row.location.0,
-            row.location.1,
-        )?)
+        .bind(key)
         .bind(row.profile)
         .bind(row.school)
         .bind(row.source.as_str())
@@ -102,18 +116,66 @@ async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64
         .bind(performance.season)
         .bind(&performance.grade)
         .bind(&performance.gender)
-        .bind(value)
-        .bind(unit)
-        .bind(specification)
-        .bind(reported_status.map_or_else(
-            || status(&performance.mark, value.is_some()),
-            |status| status,
-        ))
+        .bind(normalized.value)
+        .bind(normalized.unit)
+        .bind(normalized.specification)
+        .bind(normalized.status)
+        .bind(school_replay.clear)
+        .bind(school_replay.evidence)
         .fetch_optional(connection)
         .await?
         .context(
             "source result ID belongs to a different athlete; refusing to overwrite its identity",
         )
+}
+
+#[tracing::instrument(skip(connection))]
+pub(super) async fn normalize_effective(
+    connection: &mut PgConnection,
+    key: &str,
+    event: &str,
+    mark: &str,
+    relay: bool,
+    reported_status: Option<&'static str>,
+) -> Result<Normalized> {
+    let previous: Option<(String, String, String)> =
+        if event.trim().is_empty() || mark.trim().is_empty() {
+            sqlx::query_as(
+                "SELECT event,raw_mark,status FROM results WHERE source_result_key=$1 FOR UPDATE",
+            )
+            .bind(key)
+            .fetch_optional(connection)
+            .await?
+        } else {
+            None
+        };
+    let event = if event.trim().is_empty() {
+        previous.as_ref().map_or(event, |row| row.0.as_str())
+    } else {
+        event
+    };
+    let effective_mark = if mark.trim().is_empty() {
+        previous.as_ref().map_or(mark, |row| row.1.as_str())
+    } else {
+        mark
+    };
+    let failure = reported_status.or_else(|| {
+        if mark.trim().is_empty() {
+            previous
+                .as_ref()
+                .and_then(|row| marks::failure_status(&row.2))
+        } else {
+            None
+        }
+    });
+    let (value, unit, specification) =
+        normalization(event, effective_mark, relay || failure.is_some());
+    Ok(Normalized {
+        value,
+        unit,
+        specification,
+        status: failure.map_or_else(|| status(effective_mark, value.is_some()), |status| status),
+    })
 }
 
 pub(super) fn normalization(

@@ -8,7 +8,18 @@ use crate::model::{
     UnassignedResult,
 };
 
-use super::{API, api_target, athlete_target, scope, values as v};
+use super::{API, api_target, athlete_target, event_types, scope, values as v};
+
+struct ResultsContext<'a> {
+    target: &'a Target,
+    body: &'a Value,
+    legs: BTreeMap<u64, Vec<&'a Value>>,
+}
+
+struct MeetEntities {
+    athletes: BTreeMap<String, Athlete>,
+    schools: BTreeMap<String, School>,
+}
 
 pub(super) fn metadata(target: &Target, body: &Value) -> Result<ParsedPage> {
     v::object(body, "meet")?;
@@ -57,36 +68,45 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
         .context
         .sport
         .context("results target has no sport")?;
-    let legs = relay_index(body);
+    let context = ResultsContext {
+        target,
+        body,
+        legs: relay_index(body),
+    };
     let mut page = ParsedPage::default();
-    let mut schools = BTreeMap::new();
-    for team in teams {
-        retain_school(team, "IDSchool", &mut schools);
-    }
-    let mut athletes = BTreeMap::new();
+    let mut entities = MeetEntities {
+        athletes: BTreeMap::new(),
+        schools: teams.iter().fold(BTreeMap::new(), |mut schools, team| {
+            retain_school(team, "IDSchool", &mut schools);
+            schools
+        }),
+    };
     blocks.iter().enumerate().try_for_each(|(ordinal, block)| {
-        retain_block(
-            target,
-            &legs,
-            block,
-            ordinal,
-            &mut athletes,
-            &mut schools,
-            &mut page,
-        )
+        retain_block(&context, block, ordinal, &mut entities, &mut page)
     })?;
-    page.schools = schools.into_values().collect();
-    page.athletes = athletes.into_values().collect();
+    page.schools = entities.schools.into_values().collect();
+    page.athletes = entities.athletes.into_values().collect();
     page.athletes
         .iter()
-        .map(|a| athlete_target(&a.id, a.state.as_deref(), sport))
+        .map(|athlete| {
+            athlete_target(&athlete.id, athlete.state.as_deref(), sport).map(|mut next| {
+                next.context.acquisition_state = target
+                    .context
+                    .acquisition_state
+                    .clone()
+                    .or_else(|| target.context.state.clone());
+                next
+            })
+        })
         .try_for_each(|next| {
             page.next.push(next?);
             Ok::<(), anyhow::Error>(())
         })?;
     if target.context.meet_date.is_none() {
-        page.notes
-            .push("Meet date absent from results context; dates were not manufactured".to_owned());
+        page.notes.push(
+            "Meet date absent from results context; only published row dates were retained"
+                .to_owned(),
+        );
     }
     Ok(page)
 }
@@ -114,14 +134,13 @@ fn retain_school(row: &Value, key: &str, schools: &mut BTreeMap<String, School>)
 }
 
 fn retain_block(
-    target: &Target,
-    legs: &BTreeMap<u64, Vec<&Value>>,
+    context: &ResultsContext<'_>,
     block: &Value,
     block_ordinal: usize,
-    athletes: &mut BTreeMap<String, Athlete>,
-    schools: &mut BTreeMap<String, School>,
+    entities: &mut MeetEntities,
     page: &mut ParsedPage,
 ) -> Result<()> {
+    let ResultsContext { target, body, legs } = context;
     let label =
         v::text(block, "Event").context("Athletic.net schema mismatch: flatEvents.Event")?;
     v::array(block, "results")?
@@ -130,14 +149,24 @@ fn retain_block(
         .for_each(|(ordinal, row)| {
             let performances = page.performances.len();
             let unassigned = page.unassigned_results.len();
-            retain_school(row, "TeamID", schools);
+            let definition = event_types::definition(body, block, row);
+            let event = event_types::label(&label, definition);
+            retain_school(row, "TeamID", &mut entities.schools);
             let relay = label.to_ascii_lowercase().contains("relay")
                 || block.get("isPersonal").and_then(Value::as_bool) == Some(false)
                 || row.get("PersonalEvent").and_then(Value::as_bool) == Some(false);
             if relay {
-                retain_relay(target, legs, block, row, &label, athletes, page);
+                retain_relay(
+                    target,
+                    legs,
+                    block,
+                    row,
+                    &event,
+                    &mut entities.athletes,
+                    page,
+                );
             } else {
-                retain_individual(target, block, row, &label, athletes, page);
+                retain_individual(target, block, row, &event, &mut entities.athletes, page);
             }
             let source_row = v::source_row(
                 row,
@@ -146,11 +175,17 @@ fn retain_block(
             if page.performances.len() > performances {
                 if let Some(result) = page.performances.last_mut() {
                     result.source_row = Some(source_row);
+                    result.source_values = Some(event_types::evidence(block, row, definition));
                 }
             } else if page.unassigned_results.len() > unassigned
                 && let Some(result) = page.unassigned_results.last_mut()
             {
                 result.source_row = Some(source_row);
+                if let Some(definition) = definition
+                    && let Some(raw) = result.raw.as_object_mut()
+                {
+                    raw.insert("eventType".to_owned(), definition.clone());
+                }
             }
         });
     Ok(())
@@ -199,7 +234,9 @@ fn retain_individual(
 fn contextualize(target: &Target, athlete: &Athlete, mut result: Performance) -> Performance {
     result.meet_id.clone_from(&target.context.subject_id);
     result.meet_name.clone_from(&target.context.meet_name);
-    result.date.clone_from(&target.context.meet_date);
+    if result.date.is_none() {
+        result.date.clone_from(&target.context.meet_date);
+    }
     result.season = target.context.season;
     result.grade.clone_from(&athlete.grade);
     result.gender.clone_from(&athlete.gender);
@@ -267,6 +304,8 @@ fn unassigned(
 ) -> UnassignedResult {
     let mut result = v::unassigned(row, label.to_owned(), sport, is_relay);
     result.meet_id.clone_from(&target.context.subject_id);
-    result.date.clone_from(&target.context.meet_date);
+    if result.date.is_none() {
+        result.date.clone_from(&target.context.meet_date);
+    }
     result
 }

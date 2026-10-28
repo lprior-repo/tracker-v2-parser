@@ -1,5 +1,6 @@
 mod capacity;
 mod profiles;
+mod publication;
 mod rows;
 mod selection;
 mod workbook;
@@ -50,25 +51,7 @@ fn write_parts(
     issues: &[ExportIssue],
     options: &ExportOptions,
 ) -> Result<Vec<PathBuf>> {
-    anyhow::ensure!(
-        !options.states.is_empty() && !options.graduation_years.is_empty(),
-        "export requires explicit states and graduation years"
-    );
-    anyhow::ensure!(
-        (1..=1_048_575).contains(&options.rows_per_file),
-        "rows_per_file must be 1..=1048575"
-    );
-    anyhow::ensure!(
-        path.extension()
-            .and_then(std::ffi::OsStr::to_str)
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx")),
-        "export path must end in .xlsx"
-    );
-    anyhow::ensure!(
-        !path.try_exists()?,
-        "output already exists: {}",
-        path.display()
-    );
+    validate(path, options)?;
     let selected: Vec<_> = records
         .iter()
         .filter(|record| selection::in_scope(record, options))
@@ -102,7 +85,9 @@ fn write_parts(
                 stage(destination, chunk, issues, options, &mut staged)
             })
     };
-    let result = staging.and_then(|()| publish_parts(&staged, &destinations));
+    let manifest = split.then(|| publication::manifest_path(path));
+    let result =
+        staging.and_then(|()| publication::publish(&staged, &destinations, manifest.as_deref()));
     let cleanup = cleanup_staged(&staged);
     match (result, cleanup) {
         (Ok(()), Ok(())) => Ok(destinations),
@@ -152,27 +137,105 @@ fn stage(
     file.sync_all().context("syncing verified workbook")
 }
 
-fn publish_parts(staged: &[PathBuf], destinations: &[PathBuf]) -> Result<()> {
-    let mut published: Vec<&Path> = Vec::with_capacity(destinations.len());
-    staged
-        .iter()
-        .zip(destinations)
-        .try_for_each(|(temporary, path)| {
-            fs::hard_link(temporary, path).with_context(|| {
-            let published = published
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "publishing {} without overwrite failed; previously published parts remain: [{}]",
-                path.display(),
-                published
-            )
-        })?;
-            published.push(path.as_path());
-            Ok::<(), anyhow::Error>(())
+fn validate(path: &Path, options: &ExportOptions) -> Result<()> {
+    anyhow::ensure!(
+        !options.states.is_empty() && !options.graduation_years.is_empty(),
+        "export requires explicit states and graduation years"
+    );
+    anyhow::ensure!(
+        (1..=1_048_575).contains(&options.rows_per_file),
+        "rows_per_file must be 1..=1048575"
+    );
+    anyhow::ensure!(
+        path.extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xlsx")),
+        "export path must end in .xlsx"
+    );
+    anyhow::ensure!(
+        !path.try_exists()?,
+        "output already exists: {}",
+        path.display()
+    );
+    let manifest = publication::manifest_path(path);
+    anyhow::ensure!(
+        !manifest.try_exists()?,
+        "completion manifest already exists: {}",
+        manifest.display()
+    );
+    Ok(())
+}
+
+pub struct StagedExport {
+    path: PathBuf,
+    options: ExportOptions,
+    staged: Vec<PathBuf>,
+    destinations: Vec<PathBuf>,
+}
+
+impl StagedExport {
+    pub fn new(path: &Path, options: &ExportOptions) -> Result<Self> {
+        validate(path, options)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            options: options.clone(),
+            staged: Vec::new(),
+            destinations: Vec::new(),
         })
+    }
+
+    pub fn stage_part(&mut self, records: &[AthleteRecord], issues: &[ExportIssue]) -> Result<()> {
+        anyhow::ensure!(
+            self.staged.len() == self.destinations.len(),
+            "cannot continue a failed staged export"
+        );
+        anyhow::ensure!(
+            self.destinations.len() < 10_000,
+            "export exceeds 10000 workbook parts; select a narrower scope"
+        );
+        anyhow::ensure!(
+            records.len() <= self.options.rows_per_file.min(1_000),
+            "staged export batch exceeds configured/1000 athlete limit"
+        );
+        anyhow::ensure!(
+            issues.len() <= 1_000,
+            "staged export batch exceeds 1000 issue limit"
+        );
+        let path = destination(&self.path, self.destinations.len(), true)?;
+        let records = records
+            .iter()
+            .filter(|record| selection::in_scope(record, &self.options))
+            .collect::<Vec<_>>();
+        stage(&path, &records, issues, &self.options, &mut self.staged)?;
+        self.destinations.push(path);
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Vec<PathBuf>> {
+        if self.destinations.is_empty() {
+            self.stage_part(&[], &[])?;
+        }
+        if self.destinations.len() == 1 {
+            let destination = self
+                .destinations
+                .first_mut()
+                .context("missing staged destination")?;
+            destination.clone_from(&self.path);
+        }
+        let manifest = publication::manifest_path(&self.path);
+        publication::publish(&self.staged, &self.destinations, Some(&manifest))?;
+        cleanup_staged(&self.staged)?;
+        self.staged.clear();
+        Ok(std::mem::take(&mut self.destinations))
+    }
+}
+
+impl Drop for StagedExport {
+    fn drop(&mut self) {
+        if let Err(error) = cleanup_staged(&self.staged) {
+            tracing::error!(error = %error, "cleaning abandoned staged export");
+        }
+    }
 }
 
 fn cleanup_staged(staged: &[PathBuf]) -> Result<()> {
@@ -181,6 +244,7 @@ fn cleanup_staged(staged: &[PathBuf]) -> Result<()> {
         .filter_map(|path| {
             fs::remove_file(path)
                 .err()
+                .filter(|error| error.kind() != std::io::ErrorKind::NotFound)
                 .map(|error| format!("{}: {error}", path.display()))
         })
         .collect::<Vec<_>>();
@@ -197,12 +261,12 @@ mod tests;
 
 #[cfg(test)]
 mod publication_tests {
-    use super::{cleanup_staged, publish_parts};
+    use super::{cleanup_staged, publication};
     use anyhow::Result;
     use std::fs;
 
     #[test]
-    fn concurrent_destination_preserves_other_file_and_reports_published_part() -> Result<()> {
+    fn concurrent_destination_preserves_other_file_and_removes_own_published_links() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let staged = [
             directory.path().join("stage-1"),
@@ -216,18 +280,14 @@ mod publication_tests {
         fs::write(&staged[1], b"second workbook")?;
         fs::write(&destinations[1], b"other user's file")?;
 
-        let error = publish_parts(&staged, &destinations)
+        let error = publication::publish(&staged, &destinations, None)
             .err()
             .ok_or_else(|| anyhow::anyhow!("publication unexpectedly succeeded"))?;
-        assert!(
-            error
-                .to_string()
-                .contains(&destinations[0].display().to_string())
-        );
-        assert_eq!(fs::read(&destinations[0])?, b"first workbook");
+        assert!(error.to_string().contains("publication incomplete"));
+        assert!(!destinations[0].exists());
         assert_eq!(fs::read(&destinations[1])?, b"other user's file");
         cleanup_staged(&staged)?;
-        assert_eq!(fs::read_dir(directory.path())?.count(), 2);
+        assert_eq!(fs::read_dir(directory.path())?.count(), 1);
         Ok(())
     }
 }

@@ -55,7 +55,7 @@ pub fn check_url_secrets(url: &Url) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn public_addresses(url: &Url) -> Result<Vec<SocketAddr>> {
+pub async fn public_addresses(url: &Url) -> Result<Vec<SocketAddr>> {
     let host = url.host_str().context("source URL has no host")?;
     let port = url
         .port_or_known_default()

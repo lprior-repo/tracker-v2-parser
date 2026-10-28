@@ -15,6 +15,7 @@ use scraper::Html;
 
 use crate::model::{PageKind, ParsedPage, Source, Target};
 
+pub(crate) use profile::profile_history_identity;
 pub use targets::{athlete_target, meet_target, seeds, team_target};
 
 pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {

@@ -86,6 +86,10 @@ fn project(body: &Value, key: &str, row: &Value, athlete: &Athlete) -> Option<Pe
     };
     let event = event_label(body, key, row)?;
     let mut result = v::performance(row, athlete.id.clone(), event, sport)?;
+    result.source_values = Some(serde_json::json!({
+        "row": row,
+        "eventType": event_definition(body, row)
+    }));
     result.is_relay = is_relay(body, row, &result.event);
     result.gender.clone_from(&athlete.gender);
     result.grade = grade_for(body, school_id.as_deref(), season);
@@ -108,13 +112,21 @@ fn event_label(body: &Value, key: &str, row: &Value) -> Option<String> {
         let distance = row.get("Distance")?.as_i64().filter(|n| *n > 0)?;
         return Some(format!("Cross Country {distance}m"));
     }
-    let event_id = v::id(row, "EventID")?;
-    let definition = body
-        .get("eventsTF")?
-        .as_array()?
-        .iter()
-        .find(|e| v::id(e, "IDEvent").as_deref() == Some(&event_id))?;
-    v::text(definition, "Event")
+    let definition = event_definition(body, row)?;
+    let label = v::text(definition, "Event")?;
+    Some(super::super::event_types::label(&label, Some(definition)))
+}
+
+fn event_definition<'a>(body: &'a Value, row: &Value) -> Option<&'a Value> {
+    let event_id = row.get("EventID")?;
+    body.get("eventsTF")?.as_array()?.iter().find(|definition| {
+        definition.get("IDEvent") == Some(event_id)
+            && row.get("EventTypeID").is_none_or(|kind| {
+                definition
+                    .get("IDEventType")
+                    .is_none_or(|defined| defined == kind)
+            })
+    })
 }
 
 fn unassigned(body: &Value, key: &str, row: &Value, requested: Sport) -> UnassignedResult {

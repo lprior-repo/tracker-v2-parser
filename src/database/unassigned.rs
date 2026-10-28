@@ -42,11 +42,15 @@ async fn save(
         .get("statusCode")
         .and_then(serde_json::Value::as_str)
         .and_then(crate::marks::failure_status);
-    let (value, unit, specification) = results::normalization(
+    let normalized = results::normalize_effective(
+        connection,
+        &key,
         &row.event,
         &row.mark,
-        row.is_relay || reported_status.is_some(),
-    );
+        row.is_relay,
+        reported_status,
+    )
+    .await?;
     sqlx::query(include_str!("unassigned_upsert.sql"))
         .bind(key)
         .bind(school)
@@ -57,16 +61,13 @@ async fn save(
         .bind(row.sport.as_str())
         .bind(&row.meet_id)
         .bind(&row.date)
-        .bind(reported_status.map_or_else(
-            || results::status(&row.mark, value.is_some()),
-            |status| status,
-        ))
+        .bind(normalized.status)
         .bind(row.is_relay)
         .bind(location.0)
         .bind(serde_json::to_value(row)?)
-        .bind(value)
-        .bind(unit)
-        .bind(specification)
+        .bind(normalized.value)
+        .bind(normalized.unit)
+        .bind(normalized.specification)
         .execute(connection)
         .await?;
     Ok(())

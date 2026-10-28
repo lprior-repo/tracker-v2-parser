@@ -554,3 +554,41 @@ fn given_jwt_bearing_derived_urls_when_parsing_public_contacts_then_safe_records
     }
     Ok(())
 }
+
+#[test]
+fn given_rendered_verification_text_without_special_headings_when_parsed_then_access_is_blocked()
+-> Result<()> {
+    for content in [
+        "<main>captcha challenge</main>",
+        "<main><p>Verify you are human</p></main>",
+        "<div>Checking your browser</div>",
+        "<main><span>Verify that you</span><span>are human</span></main>",
+    ] {
+        let body = format!("<html><head><title>School</title></head><body>{content}</body></html>");
+        let error = parse(&target("School", "https://school.example.edu/staff"), &body)
+            .expect_err("verification text is an access stop");
+        assert!(error.is::<super::AccessDenied>());
+    }
+    Ok(())
+}
+
+#[test]
+fn given_challenge_words_only_in_widgets_when_parsed_then_public_school_mailbox_survives()
+-> Result<()> {
+    let body = format!(
+        "<header>captcha challenge</header><aside>Verify you are human</aside>\
+         <form><p>captcha challenge</p></form><dialog>Checking your browser</dialog>\
+         <div hidden>captcha challenge</div>{SCOPED}"
+    );
+    let page = parse(
+        &target("Example High School", "https://school.example.edu/staff"),
+        &body,
+    )?;
+    assert!(
+        page.schools
+            .iter()
+            .any(|school| school.public_email.as_deref() == Some("office@school.example.edu"))
+    );
+    assert!(page.coaches.iter().any(|coach| coach.email.is_some()));
+    Ok(())
+}

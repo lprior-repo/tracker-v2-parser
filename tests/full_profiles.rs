@@ -154,6 +154,7 @@ async fn given_real_profile_when_replayed_through_postgres_then_snapshot_exports
             for (event_column, expected_mark) in [
                 ("::outdoor::1600m::", "4:12.69"),
                 ("::outdoor::3200m::", "8:56.36"),
+                ("::indoor::800m::", "2:11.88"),
                 ("::xc::5000m::", "14:49.06"),
             ] {
                 let columns = header

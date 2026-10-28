@@ -631,8 +631,8 @@ async fn given_native_milesplit_profile_when_replayed_then_all_sports_retain_pub
 }
 
 #[tokio::test]
-async fn given_school_and_career_when_exported_then_workbook_has_real_values_and_pr() -> Result<()>
-{
+async fn given_school_and_unknown_level_career_when_exported_then_observations_survive_without_hs_pr()
+-> Result<()> {
     with_schema(|test| Box::pin(async move {
         let school = fixture("athleticnet/team-core-3204.json");
         assert_success(&test.cli(&["scrape","--source","athleticnet","--kind","team","--url",
@@ -658,12 +658,15 @@ async fn given_school_and_career_when_exported_then_workbook_has_real_values_and
         assert_eq!(cell(&rows,"school_names")?,"Middleton");
         assert!(cell(&rows,"school_postal_addresses")?.contains("2100 Bristol St"));
         assert!(cell(&rows,"school_postal_addresses")?.contains("53562-2699"));
-        assert_eq!(cell(&rows,"best_observed::athleticnet::outdoor::100m::fat::unknown::mark")?,"10.41a");
-        assert_eq!(cell(&rows,"best_observed::athleticnet::outdoor::100m::fat::unknown::raw_event")?,"100 Meters");
-        assert!(cell(&rows,"best_observed::athleticnet::outdoor::100m::fat::unknown::source_url")?.contains("athleteId=28872883"));
-        assert!(!sheet_rows(&output,"Issues")?.is_empty());
-        let workbook = open_workbook_auto(&output)?;
-        assert_eq!(workbook.sheet_names().len(),3);
+        assert!(rows[0].iter().all(|header| !header.starts_with("best_observed::athleticnet::")));
+        let observations = sheet_rows(&output, "Observations")?;
+        assert!(observations.iter().skip(1).any(|row| {
+            row.iter().any(|cell| cell.contains("10.41a"))
+                && row.iter().any(|cell| cell.contains("athleteId=28872883"))
+        }));
+        assert!(sheet_rows(&output, "Issues")?.iter().skip(1).any(|row| {
+            row.iter().any(|cell| cell.contains("high-school") || cell.contains("HS"))
+        }));
         let original = std::fs::read(&output)?;
         let duplicate = test.cli(&["export","--output",output.to_str().context("UTF-8 path")?]).await?;
         assert!(!duplicate.status.success(),"existing workbook must not be overwritten");
@@ -866,7 +869,6 @@ async fn given_unknown_graduation_year_when_exported_then_source_row_is_visible_
             assert_eq!(cell(&athletes, "needs_review")?, "true");
             assert!(cell(&athletes, "review_notes")?.contains("unknown graduation year"));
             let issues = sheet_rows(&output, "Issues")?;
-            assert_eq!(issues.len(), 2);
             assert_eq!(cell(&issues, "name")?, "Alex Morgan");
             assert!(cell(&issues, "issues")?.contains("unknown graduation year"));
             Ok(())

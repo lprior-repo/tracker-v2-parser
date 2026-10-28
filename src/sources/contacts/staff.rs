@@ -10,6 +10,7 @@ use crate::model::{Coach, Sport};
 use super::{email, staff_text as text};
 use program::program_text;
 use rules::Rules;
+pub(super) use scope::school_local;
 
 pub(super) fn parse(document: &Html, school_id: &str, school_name: &str) -> Result<Vec<Coach>> {
     let rules = Rules::new()?;

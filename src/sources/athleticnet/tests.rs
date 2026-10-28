@@ -25,7 +25,7 @@ fn given_public_career_when_parsed_then_all_marks_and_evidence_are_retained() ->
     assert_eq!(page.athletes[0].grade.as_deref(), Some("11"));
     assert_eq!(page.athletes[0].graduation_year, None);
     assert_eq!(page.schools[0].name, "Middleton");
-    assert_eq!(page.schools[0].state.as_deref(), Some("WI"));
+    assert!(page.schools[0].state.is_none());
     assert_eq!(page.performances.len(), 41);
     assert!(page.performances.iter().all(|p| !p.is_relay));
     assert_eq!(page.unassigned_results.len(), 12);

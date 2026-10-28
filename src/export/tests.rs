@@ -1,8 +1,14 @@
 use super::{ExportOptions, write_spreadsheets};
-use crate::marks::tests::evidence;
+use crate::marks::tests::evidence as numeric_evidence;
 use crate::model::{AthleteRecord, Coach, School};
 use calamine::{Data, Reader, Xlsx, open_workbook};
 use std::collections::BTreeMap;
+
+fn evidence(event: &str, mark: &str) -> crate::model::EvidencedPerformance {
+    let mut evidence = numeric_evidence(event, mark);
+    evidence.performance.source_values = Some(serde_json::json!({"level": "hs"}));
+    evidence
+}
 
 fn athlete() -> AthleteRecord {
     AthleteRecord {
@@ -115,7 +121,18 @@ fn given_many_events_when_exporting_then_one_literal_string_row_contains_bests_a
         "6.30m"
     );
     assert_eq!(values["unmapped_count"], "1");
-    assert_eq!(range(&destination, "Issues")?.height(), 2);
+    assert_eq!(range(&destination, "Issues")?.height(), 3);
+    let mut workbook: Xlsx<_> = open_workbook(&destination)?;
+    let profiles = workbook.hyperlinks_by_sheet_name("Profile_details")?;
+    let targets = profiles
+        .into_iter()
+        .filter_map(|link| link.target)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(targets, athlete().profiles.into_iter().collect());
+    assert_eq!(
+        values["source_profiles"],
+        "https://www.athletic.net/athlete/123; https://www.milesplit.com/athletes/456"
+    );
     std::fs::remove_file(destination)?;
     Ok(())
 }
@@ -174,7 +191,7 @@ fn given_uncertain_year_state_or_identity_when_exporting_then_source_rows_remain
             .all(|fields| fields.values().any(|value| value == "10.4a"))
     );
     let issues = range(&destination, "Issues")?;
-    assert_eq!(issues.height(), 4);
+    assert_eq!(issues.height(), 7);
     assert!(
         issues
             .rows()
@@ -256,8 +273,14 @@ fn given_numeric_disqualified_result_when_exported_then_published_status_and_mar
         main["best_observed::athleticnet::outdoor::100m::fat::unknown::mark"],
         "10.4a"
     );
-    assert!(main["review_notes"].contains("9.99a"));
-    assert!(main["review_notes"].contains("DQ"));
+    assert!(main["review_notes"].contains("Issues"));
+    let issues = range(&destination, "Issues")?;
+    assert!(
+        issues
+            .rows()
+            .flatten()
+            .any(|cell| cell.to_string().contains("9.99a") && cell.to_string().contains("DQ"))
+    );
     assert_eq!(main["needs_review"], "true");
     let detail = range(&destination, "Athlete_42")?;
     let mut rows = detail.rows();
@@ -293,22 +316,40 @@ fn given_complete_contact_when_review_annotations_exported_then_identity_is_pres
         "Affiliation is uncertain".into(),
         "Current tenure is not confirmed".into(),
     ];
+    let long_note = "published contact note ".repeat(2_000);
+    record.coaches[0].review_notes.push(long_note.clone());
     assert!(super::selection::requires_review(&record));
     write_spreadsheets(&destination, &[record], &options())?;
     let values = row(&range(&destination, "Athletes")?)?;
     assert_eq!(values["coach_names"], "Ada Runner");
     assert_eq!(values["coach_emails"], "ada@school.test");
     assert_eq!(values["needs_review"], "true");
-    assert!(values["review_notes"].contains("Affiliation is uncertain"));
-    assert!(values["review_notes"].contains("Current tenure is not confirmed"));
+    assert!(values["review_notes"].encode_utf16().count() <= 1_024);
     assert!(
-        values["review_notes"].contains("Ada Runner <ada@school.test> | school_id=school1 | Head")
+        values["review_notes"]
+            .contains("additional contact notes omitted; see Issues for complete details")
     );
     let issues = range(&destination, "Issues")?;
     assert!(issues.rows().skip(1).any(|row| {
         row.iter()
             .any(|cell| cell.to_string().contains("Affiliation is uncertain"))
     }));
+    assert!(
+        issues
+            .rows()
+            .flatten()
+            .any(|cell| cell.to_string().contains("Current tenure is not confirmed"))
+    );
+    assert!(issues.rows().flatten().any(|cell| {
+        cell.to_string()
+            .contains("Ada Runner <ada@school.test> | school_id=school1 | Head")
+    }));
+    let complete_notes = issues
+        .rows()
+        .skip(1)
+        .map(|row| row[3].to_string())
+        .collect::<String>();
+    assert!(complete_notes.contains(&long_note));
     std::fs::remove_file(destination)?;
     Ok(())
 }

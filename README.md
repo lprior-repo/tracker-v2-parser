@@ -7,18 +7,19 @@ orchestration.
 
 ## Prerequisites
 
-- PostgreSQL and a database URL with permission to apply the SQLx migrations.
+- PostgreSQL and a database URL with migration permission for scraping/imports.
+  Export requires SELECT access to a compatible schema and `_sqlx_migrations`;
+  it does not apply migrations or repair the database.
 - The Rust toolchain pinned in `rust-toolchain.toml`.
 - Moon 2.2.4 for the project tasks.
-- For database integration tests, `TEST_DATABASE_URL` pointing to a disposable
-  PostgreSQL database where the test user may create and drop schemas.
-- Chromium or Chrome installed and discoverable on `PATH` for browser transport.
-  Chromiumoxide launches a dedicated headless profile by default. Browser pages
-  execute their JavaScript; normal certificate verification remains enabled.
-  An optional transport `driver_url` is a Chromium DevTools HTTP or WebSocket
-  endpoint, not a WebDriver endpoint; externally managed browsers retain their
-  own profile and are not shut down by the scraper.
-  Captured source fixtures retain their original third-party HTML and scripts.
+- For integration tests, `TEST_DATABASE_URL` pointing to a disposable PostgreSQL
+  database where the test user may create and drop schemas.
+- Chromium or Chrome installed and discoverable on `PATH`. Chromiumoxide launches
+  locally owned Chromium and an isolated acquisition context. Documents execute
+  their JavaScript; certificate verification remains enabled. External
+  `driver_url` endpoints are rejected because their network and cleanup ownership
+  cannot be established. Other browser contexts are not used.
+  Fixture provenance records representative third-party markup and sanitization.
 
 ## Configuration and commands
 
@@ -44,24 +45,33 @@ Provider-wide access stops still require human review.
 
 
 Scraping uses bounded attempts and checkpoints; access challenges require human
-handling. Export reads database records without scraping, writes new XLSX files,
-and does not overwrite an existing output. The Issues worksheet identifies
-unresolved or incomplete data. See [the scraper contract](docs/contract.md) for
-identity, comparison, and checkpoint requirements.
-Large worksheets continue as `Athletes_2`, `Issues_2`, or
-`Athlete_<id>_2` before exceeding Excel row or hyperlink limits. Source URLs
-remain clickable; every continuation sheet is reopened and checked before
-publication. The configured athlete-row file splitting still applies.
+handling. Export reads one repeatable-read, read-only snapshot without scraping
+or migrating. It stages and reopens new XLSX files before non-overwriting
+publication. A completion manifest is published last, listing every part, byte
+length and SHA-256. An absent manifest or mismatched part is not a completed set.
+Ordinary publication errors remove only this invocation's own links; abrupt
+process death can leave unmanifested partial files, which are not automatically
+deleted. Choose a new output name rather than overwriting another file.
 
-The `Athletes` sheet has exactly one row per canonical athlete ID returned for
-the requested cohort/state scope. Each comparable event/category gets PR columns
-on that row; indoor, outdoor and XC marks are not collapsed together. Uncertain
-identity, graduation year or school state does not hide the source row:
-`needs_review` and `review_notes` identify the uncertainty on `Athletes`, with
-details also in `Issues`. Unknown values remain blank. These rows are review
-candidates, not accepted members of the requested cohort/state; known
-out-of-scope records remain excluded. Non-comparable marks retain their reported
-status and rejection reason instead of silently disappearing from the export.
+The main sheet has one row per selected canonical athlete ID. Only explicitly
+published high-school observations compete for PRs. All-level, middle-school,
+college, unknown-level and unconfirmed prior-revision observations remain in
+`Observations` and `Issues`, but cannot win. Graduation year, grade and school
+membership never manufacture HS eligibility. Indoor, outdoor, XC, timing, wind,
+implement and competition-category distinctions remain separate.
+
+Current source-profile school claims supply the main school's address and
+contacts; historical represented schools stay attached to results. Unknown
+current affiliation remains blank and flagged. Unknown cohorts or school states
+remain visible review candidates, not accepted scope membership; known
+out-of-scope records remain excluded.
+
+Main rows use at most 5,455 stable PR keys; further keys and overlong comparison
+keys remain in `PR_overflow`. Review summaries are limited to 1,024 UTF-16 units
+with explicit continuation notices. Complete issues use continuation rows;
+other oversized cells use `Cell_details`. Worksheets split before Excel row,
+column, cell or hyperlink limits. `Observations` is always present, independently
+of the optional per-athlete worksheets.
 
 Published coach names appear in `coach_names`, independently of `coach_emails`.
 A named track/XC coach remains visible when no mailbox is published; an
@@ -78,13 +88,13 @@ completed contact capture does not consume another automatic attempt, and an
 existing access stop for that contact authority still prevents replay.
 
 
-MileSplit profiles retain all public sport/competition-level PRs, visible career
-results, biography/identity sections, JSON-LD, published progression values,
-links and media metadata. `Profile_details` contains the exact retained JSON in
-ordered UTF-8-safe chunks, without multiplying rows in `Athletes`. Masked results
-and subscription examples are not invented career performances.
-Only explicit provenance-link columns become hyperlinks. Opaque JSON chunks
-remain literal text even when a chunk begins with a URL.
+MileSplit profiles retain public sport/competition-level PRs, visible career
+results, biography/identity sections, JSON-LD, progression values, links and media
+metadata. `Profile_details` contains sanitized public JSON in ordered chunks and
+one supporting source URL per profile, without multiplying athlete rows.
+Conflicting schema/progression category claims are retained and flagged on the
+first parse. Masked cells and subscription examples never become performances.
+Only explicit provenance-link columns become hyperlinks; JSON remains literal.
 
 
 Before parsing a MileSplit athlete response, the CLI retains its
@@ -94,6 +104,11 @@ directory is `${XDG_DATA_HOME:-$HOME/.local/share}/track-scrapper-v2/evidence`;
 metadata records the artifact, hash, byte length, effective URL, status and
 retention time. Replay reuses identical bytes and refuses to overwrite corrupt
 evidence. An evidence-write failure leaves the page failed, not successful.
+Unsupported sensitive JavaScript expressions cause their entire script body to
+be removed before retention, followed by another complete redaction pass.
+Public DOM and separate athletic JSON remain available; unsupported sensitive
+syntax outside safely located scripts fails the capture instead of retaining
+partial secrets. Retained evidence is sanitized, not an archival original.
 
 
 Import the published CSV from
@@ -123,10 +138,11 @@ Downloaded records retain the pinned GitHub URL as `source_url`; local imports
 use the supplied filesystem path there, and both record the local artifact path.
 Address type is unspecified by the CSV, not assumed physical or mailing.
 Despite the file names the dataset contains schools of multiple grade levels.
-Existing NCES rows are not overwritten on reimport. Existing athletic-provider
-schools can only be enriched using the conservative corroborated match described
-below; no athlete or school identity is joined by name. Import and enrichment
-commit together in one transaction. No Python runtime is required.
+Same-ID NCES corrections update only fields whose recorded import owner and exact
+prior value still match. Sparse reimports preserve known values; manual and
+unverifiable legacy conflicts remain unchanged and are reported. Stable IDs and
+UUIDs survive replay. Import and enrichment commit in one transaction, without
+name-only identity joins or a Python runtime.
 
 The retained NCES PSS 2023–24 public-use CSV can also be imported offline:
 
@@ -140,9 +156,9 @@ leading zeros without colliding with public-school IDs. The published
 `PADDRS`/`PCITY`/`PSTABB`/`PZIP`/`PZIP4` tuple is explicitly **mailing** data.
 Physical-location columns never fill missing mailing components. Raw phone,
 grade range, enrollment, coordinates, source hash and school year remain in
-provenance. Existing rows and UUIDs remain unchanged on replay. All grade levels
-are retained; school-directory membership alone does not establish an athlete's
-school affiliation.
+provenance. UUIDs remain stable; corrected import-owned facts follow the same
+guarded update policy. All grade levels are retained; directory membership alone
+does not establish an athlete's school affiliation.
 
 Every existing and new school receives a unique, persistent PostgreSQL UUID.
 Existing numeric foreign keys stay intact. The spreadsheet includes canonical
@@ -161,14 +177,14 @@ cargo run -- scrape --school-directory /path/to/school_directory.csv \
 This mode does not start a crawl or require a scraper configuration. It checks
 the CSV's SHA-256 and byte length against the supplied manifest before opening
 the database. The manifest is not an independently authenticated signature;
-choose trusted inputs. It matches only unique normalized name, state and city
-tuples on both sides, corroborated by an exact existing street address or a
-matching website unique across both datasets. Missing, ambiguous or
-uncorroborated identities are not linked. Conflicting existing addresses or
-postal codes are preserved and counted in the command output. Nonempty facts
-are never overwritten. The update runs in one transaction, and provenance for
-each filled field records the directory row key, row sources, artifact and
-manifest hashes, generation and manifest input lane hashes in `schools`.
+choose trusted inputs. Initial enrichment requires unique normalized name,
+state and city plus a corroborating street address or unique matching website.
+Later corrections can follow the saved import identity even when its name/city
+changes, but only still-owned fields may change. Manual or ambiguous conflicts
+remain intact and counted. Each imported field records its source identity,
+exact saved value, artifact/hash and address kind. CSV input is limited to
+128 MiB and 250,000 rows; a directory manifest is limited to 1 MiB. Accepted
+imports still retain parsed rows and indexes in memory.
 The flattened directory does not identify whether an address is physical or
 mailing, so the stored provenance explicitly records its type as unspecified;
 it must not be interpreted as a verified physical address. A later source
@@ -176,13 +192,14 @@ observation replacing an imported field removes that field's provenance.
 The input artifact may itself combine physical and mailing addresses; no
 components are borrowed from another directory row.
 
-Browser mode uses a fresh tab per target and reuses the browser profile for
-session cookies. When a target supplies a browser origin, it opens that page
-before issuing the GET or POST in its browser context. Source requests are paced
-at no more than one per second, including the origin navigation; page-initiated
-subresources and JavaScript requests are not individually rate-limited. Browser
-responses are limited to 16 MiB, requests have timeouts, and access challenges
-stop acquisition for human handling rather than being bypassed.
+Browser acquisition uses fresh tabs in one owned context, retaining cookies
+within the running session. HTTP requests are paused and fulfilled through
+validated, public-DNS-pinned connections before redirects or subresources reach
+their destinations. Native transports have a nonforwarding local sink; auxiliary
+frames, workers, sockets and popups are restricted and attempted use is reported
+as incomplete. Caller credentials remain origin-bound. Page requests, bodies,
+queued work, concurrency and cleanup have finite limits. Challenges are not
+bypassed, and failed/cancelled acquisition does not establish complete coverage.
 
 The crawl reports an error if `limits.max_pages` is exhausted while checkpoints
 remain pending. Increase the limit if needed and run the scrape again to resume
@@ -217,6 +234,16 @@ official-school contacts and one to bulk pages; empty classes fall back to
 available work. This prevents roster/bulk backlogs from starving profiles or
 contact discovery.
 
+Export staging reads at most 1,000 athletes and 1,000 coverage issues per batch,
+with 8 MiB serialized budgets per category. An athlete may have at most 10,000
+observations; constituent rows and a 32 MiB constituent budget are checked before
+aggregation. A single oversized record fails explicitly rather than disappearing
+from the output. The collecting API also has a 32 MiB/10,000-item total cap; the
+CLI streams batches. These are application admission limits, not a PostgreSQL
+peak-memory guarantee: PostgreSQL can materialize one stored JSONB/varlena value
+before measuring it. At most 10,000 workbook parts can be staged.
+
+
 Scraping backfills contact checkpoints from existing in-scope athletic-provider
 school websites and discovers them when new school pages are parsed. Plain
 published DNS hostnames/paths are requested with HTTPS while the original
@@ -229,6 +256,12 @@ changing checkpoint identity or broadening the school-site crawl authority.
 Contact HTML is parsed in memory rather than retained as a raw capture;
 recognized credential-bearing derived URLs are omitted before storage or
 queueing, without discarding other published contact or postal records.
+An initial GET contact URL returning HTTP 404 can discover its same-site root in
+the same failure transaction; this does not reset the old page's consumed
+attempts or override access stops. A previously completed root is not retried.
+Office mailboxes require unambiguous matching school headings and visible
+evidence; hidden links and stale hidden text do not create ambiguity.
+
 Published role text and sport scope stay attached to each contact claim; names
 are never inferred from mailbox spelling. Contacts are source claims, not
 canonical people or assertions of current tenure. Their source URLs remain
@@ -317,6 +350,15 @@ moon ci --force
 Integration tests require `TEST_DATABASE_URL`; they create isolated PostgreSQL
 schemas and remove them afterward. Do not point tests or smoke checks at a
 production database.
+The read-only export scenario requires either permission to create a temporary
+test role or a preprovisioned NOLOGIN role named by `TEST_EXPORT_READONLY_ROLE`.
+Grant the test user membership in that role, not `CREATEROLE`; each scenario
+grants/revokes SELECT access only to its disposable schema. On this workstation:
+
+```sh
+TEST_EXPORT_READONLY_ROLE=track_scrapper_export_readonly moon ci --force
+```
+
 
 ## Issue tracking
 

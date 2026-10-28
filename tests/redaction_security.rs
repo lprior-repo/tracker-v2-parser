@@ -72,20 +72,46 @@ fn captured_milesplit_page_retains_results_and_removes_script_secrets() -> Resul
 }
 
 #[test]
-fn staff_page_preserves_contact_data_and_redacts_cookie_assignments() -> Result<()> {
+fn staff_page_with_dynamic_cookie_assignment_retains_only_safe_public_coaching_claims() -> Result<()>
+{
+    use track_scrapper_v2::model::{PageContext, PageKind, Source, Target};
     let source = include_bytes!("../fixtures/contacts/miramonte-staff.html");
-    let captured = redact_capture(capture(source))?;
-    let text = std::str::from_utf8(&captured.body)?;
-    assert!(text.contains("auhsdschools.org"));
-    assert!(text.contains("Men&#39;s Water Polo"));
-    assert!(text.contains("CookieDate = \"[REDACTED]\";"));
-    assert!(text.contains("document.cookie = \"[REDACTED]\""));
+    let retained = redact_capture(capture(source))?;
+    let target = Target::get(
+        Source::AthleticNet,
+        PageKind::Contacts,
+        "https://gomats.org/staff-directory".into(),
+        PageContext {
+            school_id: Some("school-123".into()),
+            school_name: Some("Miramonte High School".into()),
+            state: Some("CA".into()),
+            season: Some(2026),
+            ..PageContext::default()
+        },
+    );
+    let page = track_scrapper_v2::sources::parse(&target, std::str::from_utf8(&retained.body)?)?;
+    assert_eq!(page.coaches.len(), 3);
+    assert!(
+        page.coaches
+            .iter()
+            .any(|coach| coach.name.as_deref() == Some("Brian Henderson")
+                && coach.email.as_deref() == Some("bhenderson@auhsdschools.org")
+                && coach.role == "Head Coach — Cross Country")
+    );
     Ok(())
 }
 
 #[test]
 fn ordinary_html_is_preserved() -> Result<()> {
     let source = b"<table><tr><td>Athlete</td><td>44.88</td></tr></table>";
+    assert_eq!(redact_capture(capture(source))?.body, source);
+    Ok(())
+}
+
+#[test]
+fn given_harmless_sdk_computed_reads_and_public_json_when_retained_then_source_is_preserved()
+-> Result<()> {
+    let source = br#"<main><p>Public Athlete 44.88</p><a href="mailto:coach@example.org">Public Coach</a></main><script>sdk[(index)] = handler; sdk[(handlers[index])](event); const name = sdk[(`event`)]; const flags = [`enabled`]; const grouped = sdk[(("event"))] === "ready";</script><script type="application/ld+json">{"name":"Public Athlete","Result":"44.88","coach":"Public Coach"}</script>"#;
     assert_eq!(redact_capture(capture(source))?.body, source);
     Ok(())
 }

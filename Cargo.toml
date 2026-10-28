@@ -16,15 +16,16 @@ clap = { version = "4", features = ["derive", "env"] }
 csv = "1"
 dotenvy = "0.15"
 futures = "0.3"
+lol_html = "3.0"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "query", "gzip"] }
-rust_xlsxwriter = "0.101"
+rust_xlsxwriter = { version = "0.101", features = ["constant_memory"] }
 scraper = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "json", "chrono", "migrate", "macros"] }
-tokio = { version = "1", features = ["macros", "rt", "time", "fs", "process", "net", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time", "fs", "process", "net", "io-util"] }
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }

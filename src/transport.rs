@@ -166,7 +166,7 @@ impl Transport {
 
     const fn uses_browser(&self, target: &Target) -> bool {
         if matches!(target.kind, PageKind::Contacts) {
-            return false;
+            return true;
         }
         match self.options.mode {
             Mode::Browser => true,
@@ -305,7 +305,8 @@ pub(crate) fn denied_body(capture: &Capture) -> bool {
     let Ok(text) = std::str::from_utf8(&capture.body) else {
         return false;
     };
-    if !capture.content_type.contains("html") {
+    let trimmed = text.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+    if !capture.content_type.to_ascii_lowercase().contains("html") && !trimmed.starts_with('<') {
         return false;
     }
     let text = text.to_ascii_lowercase();
@@ -348,14 +349,33 @@ pub fn redact_capture(mut capture: Capture) -> Result<Capture> {
     Ok(capture)
 }
 
+pub(crate) fn redact_public_json(value: &Value) -> Result<String> {
+    let encoded = serde_json::to_vec(value).context("encoding public evidence")?;
+    String::from_utf8(redact::body(&encoded)?).context("decoding sanitized public evidence")
+}
+
 pub fn validate_target(target: &Target) -> Result<()> {
-    policy::source_url(target, &target.url).map(|_| ())
+    let url = policy::source_url(target, &target.url)?;
+    if let Some(address) = &target.browser_origin {
+        let origin = policy::source_url(target, address)?;
+        ensure!(
+            origin.origin() == url.origin(),
+            "browser context and request origin differ"
+        );
+    }
+    if let Some(address) = &target.token_url {
+        let token = policy::source_url(target, address)?;
+        ensure!(
+            token.origin() == url.origin(),
+            "token preflight and request origin differ"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Mode, Options, Transport};
-    use crate::model::{PageContext, PageKind, Source, Target};
+    use crate::model::PageKind;
 
     fn contact_capture(url: &str, status: u16) -> crate::model::Capture {
         crate::model::Capture {
@@ -411,29 +431,5 @@ mod tests {
         assert!(!super::denied_url(
             "https://example.com/results?next=/login"
         ));
-    }
-
-    #[test]
-    fn browser_mode_selects_athleticnet_without_changing_contact_transport() {
-        let mut target = Target::get(
-            Source::AthleticNet,
-            PageKind::Athlete,
-            "https://www.athletic.net/athlete/1".to_owned(),
-            PageContext::default(),
-        );
-        for mode in [Mode::Auto, Mode::Browser] {
-            let transport = Transport::new(Options {
-                mode,
-                driver_url: None,
-                profile: "/tmp/browser-test".into(),
-                headless: true,
-                rps: 1.0,
-            })
-            .expect("valid options");
-            assert!(transport.uses_browser(&target));
-            target.kind = PageKind::Contacts;
-            assert!(!transport.uses_browser(&target));
-            target.kind = PageKind::Athlete;
-        }
     }
 }

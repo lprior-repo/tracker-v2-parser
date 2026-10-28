@@ -185,12 +185,8 @@ pub(super) fn access(document: &Html) -> Result<()> {
 }
 
 pub(super) fn masked(root: ElementRef<'_>) -> Result<bool> {
-    Ok(root
-        .select(&selector(
-            ".mask, .redact, .record--locked, .paywall, [aria-label='Locked']",
-        )?)
-        .next()
-        .is_some())
+    let mask = selector(".mask, .redact, .record--locked, .paywall, [aria-label='Locked']")?;
+    Ok(mask.matches(&root) || root.select(&mask).next().is_some())
 }
 
 pub(super) fn gender(value: &str) -> Option<String> {
@@ -209,4 +205,101 @@ pub(super) fn date(value: &str) -> String {
             || value.to_owned(),
             |date| date.format("%Y-%m-%d").to_string(),
         )
+}
+
+pub(super) struct PublishedFile {
+    pub identity: String,
+    pub unresolved: Option<String>,
+}
+
+pub(super) fn published_file(
+    target: &crate::model::Target,
+    document: &Html,
+) -> Result<PublishedFile> {
+    let canonical = attribute(document.root_element(), "link[rel=canonical]", "href")?;
+    let selected = attribute(
+        document.root_element(),
+        "#ddResultsPage option[selected][value]",
+        "value",
+    )?;
+    match resolve_published_file(target, canonical.as_deref(), selected.as_deref()) {
+        Ok(identity) => Ok(PublishedFile {
+            identity,
+            unresolved: None,
+        }),
+        Err(error) => Ok(PublishedFile {
+            identity: format!("milesplit-unresolved:{}", target.url),
+            unresolved: Some(format!(
+                "Unresolved published-file identity: {error}; rows remain scoped to the captured source URL without alias deduplication"
+            )),
+        }),
+    }
+}
+
+fn resolve_published_file(
+    target: &crate::model::Target,
+    canonical: Option<&str>,
+    selected: Option<&str>,
+) -> Result<String> {
+    use super::targets;
+    let requested = targets::public_url(&target.url)?;
+    let meet = targets::path_id(&target.url, "meets")?;
+    let requested_file = result_file(&requested)?;
+    let canonical = canonical
+        .map(|href| targets::linked(&target.url, href))
+        .transpose()?
+        .map(|href| targets::public_url(&href))
+        .transpose()?;
+    let file = if let Some(canonical) = canonical.as_ref() {
+        anyhow::ensure!(
+            same_result_site(canonical, &requested)
+                && targets::path_id(canonical.as_str(), "meets")? == meet,
+            "canonical result does not belong to the requested meet and site"
+        );
+        let file = result_file(canonical)?
+            .ok_or_else(|| anyhow::anyhow!("canonical result has no numbered file"))?;
+        anyhow::ensure!(
+            requested_file.is_none_or(|requested| requested == file),
+            "requested and canonical result files conflict"
+        );
+        file
+    } else {
+        requested_file.ok_or_else(|| anyhow::anyhow!("no published numbered file evidence"))?
+    };
+    if let Some(selected) = selected {
+        let selected = targets::public_url(&targets::linked(&target.url, selected)?)?;
+        anyhow::ensure!(
+            same_result_site(&selected, &requested)
+                && targets::path_id(selected.as_str(), "meets")? == meet
+                && result_file(&selected)?.is_none_or(|selected| selected == file),
+            "selected and published result files conflict"
+        );
+    }
+    Ok(format!("milesplit-file:{meet}:{file}"))
+}
+
+fn same_result_site(left: &url::Url, right: &url::Url) -> bool {
+    left.host_str() == right.host_str()
+        || left.host_str() == Some("www.milesplit.com")
+        || right.host_str() == Some("www.milesplit.com")
+}
+
+fn result_file(url: &url::Url) -> Result<Option<&str>> {
+    let mut parts = url.path().trim_end_matches('/').split('/');
+    anyhow::ensure!(
+        parts.next() == Some("")
+            && parts.next() == Some("meets")
+            && parts.next().is_some()
+            && parts.next() == Some("results"),
+        "not a meet result URL"
+    );
+    let Some(file) = parts.next() else {
+        return Ok(None);
+    };
+    super::targets::id(file)?;
+    anyhow::ensure!(
+        matches!(parts.next(), None | Some("raw" | "formatted")) && parts.next().is_none(),
+        "unrecognized published result file path"
+    );
+    Ok(Some(file))
 }

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::Measure;
 
 pub(super) struct Event {
@@ -27,9 +29,11 @@ pub(super) fn resolve(raw: &str) -> Option<Event> {
             specification: None,
         });
     }
-    let stripped = strip_qualifiers(label);
+    let classified = without_categories(label);
+    let stripped = strip_qualifiers(&classified);
     let (canonical, measure) = direct(stripped).or_else(|| specified_field(stripped))?;
-    let specification = (direct(stripped).is_none()).then(|| raw.trim().to_owned());
+    let specification =
+        (direct(stripped).is_none() || classified != label).then(|| raw.trim().to_owned());
     let wind_sensitive = matches!(
         canonical.as_str(),
         "100m" | "200m" | "100mh" | "110mh" | "long_jump" | "triple_jump"
@@ -77,19 +81,43 @@ pub(super) fn has_comparable_specification(raw: &str, canonical: &str) -> bool {
         _ => return true,
     };
     let normalized = normalize(raw);
-    let label = strip_qualifiers(&normalized);
+    let classified = without_categories(&normalized);
+    let label = strip_qualifiers(&classified);
     prefixes.iter().any(|prefix| {
         label.strip_prefix(prefix).is_some_and(|suffix| {
             let specification = suffix.trim_matches(['(', ')']);
             units.iter().any(|unit| {
-                specification.strip_suffix(unit).is_some_and(|number| {
-                    !number.is_empty()
-                        && number.chars().all(|character| character.is_ascii_digit())
-                        && number.chars().any(|character| character != '0')
-                })
+                specification
+                    .strip_suffix(unit)
+                    .is_some_and(positive_decimal)
             })
         })
     })
+}
+
+fn without_categories(label: &str) -> Cow<'_, str> {
+    if !label.contains("wheelchair") && !label.contains("seated") {
+        return Cow::Borrowed(label);
+    }
+    Cow::Owned(
+        label
+            .replace("wheelchair", "")
+            .replace("seated", "")
+            .replace("()", ""),
+    )
+}
+
+fn positive_decimal(number: &str) -> bool {
+    let mut parts = number.split('.');
+    let whole = parts.next().map_or("", |part| part);
+    let fraction = parts.next();
+    !whole.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && fraction.is_none_or(|value| {
+            !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && parts.next().is_none()
+        && number.bytes().any(|byte| matches!(byte, b'1'..=b'9'))
 }
 
 fn normalize(raw: &str) -> String {
@@ -99,9 +127,7 @@ fn normalize(raw: &str) -> String {
         .replace("metre", "m")
         .replace("meter", "m")
         .chars()
-        .filter(|character| {
-            !character.is_whitespace() && !matches!(character, '-' | '_' | ',' | '.')
-        })
+        .filter(|character| !character.is_whitespace() && !matches!(character, '-' | '_' | ','))
         .collect()
 }
 

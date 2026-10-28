@@ -70,7 +70,7 @@ pub(super) fn name(row: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map_or("", str::trim);
     let name = format!("{first} {last}").trim().to_owned();
-    (!name.is_empty() && !name.contains('<') && !name.contains('*')).then_some(name)
+    (!name.is_empty() && !name.contains(['<', '*', '•'])).then_some(name)
 }
 
 pub(super) fn grade(row: &Value, key: &str) -> Option<String> {
