@@ -67,7 +67,14 @@ fn decoded_path(path: &str) -> Result<String> {
     )?;
     anyhow::ensure!(matches!(state, Escape::Plain), "truncated path escape");
     anyhow::ensure!(!bytes.contains(&b'%'), "nested path escape");
-    String::from_utf8(bytes).context("non-UTF8 policy path")
+    let decoded = String::from_utf8(bytes).context("non-UTF8 policy path")?;
+    anyhow::ensure!(
+        !decoded.contains('\\')
+            && !decoded.chars().any(char::is_control)
+            && !decoded.split('/').any(|part| matches!(part, "." | "..")),
+        "ambiguous decoded path normalization"
+    );
+    Ok(decoded)
 }
 
 fn hex(byte: u8) -> Result<u8> {

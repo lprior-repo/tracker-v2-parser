@@ -104,6 +104,9 @@ async fn given_encoded_or_ambiguous_disallowed_routes_when_acquired_then_no_poli
         "/virtual-meets",
         "/contact",
         "/%GG",
+        "/safe%2f..%2fapi/v1/test",
+        "/%5capi/v1/test",
+        "/%00api/v1/test",
     ] {
         let mut target = generated_api()?;
         target.url = format!("https://www.milesplit.com{path}");
