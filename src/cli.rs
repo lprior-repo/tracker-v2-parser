@@ -54,6 +54,14 @@ enum SportArg {
 struct ScrapeArgs {
     #[arg(long, default_value = "config.toml")]
     config: PathBuf,
+    #[arg(long, requires = "athlete_identity_sha256", conflicts_with_all = ["input", "refresh", "wiaa_directory", "wiaa_coop_manifest", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"], help = "Apply an explicit user-reviewed same-person profile identity manifest")]
+    athlete_identity_manifest: Option<PathBuf>,
+    #[arg(
+        long,
+        requires = "athlete_identity_manifest",
+        help = "Expected SHA-256 of the user-reviewed identity manifest"
+    )]
+    athlete_identity_sha256: Option<String>,
     #[arg(long, conflicts_with_all = ["input", "refresh", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"])]
     wiaa_directory: bool,
     #[arg(long, conflicts_with_all = ["input", "refresh", "wiaa_directory", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"], help = "Import cooperative coach associations from hash-verified public WIAA captures")]
@@ -122,6 +130,9 @@ impl Cli {
         let database_url = resolve_database_url(self.database_url)?;
         match self.command {
             Command::Scrape(args) => {
+                if args.athlete_identity_manifest.is_some() {
+                    return import_reviewed_identity(&args, &database_url).await;
+                }
                 if let Some(path) = args.wiaa_coop_manifest {
                     return import_wiaa_coops(&args.config, &path, &database_url).await;
                 }
@@ -135,19 +146,13 @@ impl Cli {
                     return import_private_schools(path, expected, &database_url).await;
                 }
                 if args.school_addresses.is_some() || args.download_school_addresses.is_some() {
-                    let expected = args.school_addresses_sha256.ok_or_else(|| {
-                        anyhow!("school address import requires --school-addresses-sha256")
-                    })?;
-                    let (path, origin) =
-                        match (args.school_addresses, args.download_school_addresses) {
-                            (Some(path), None) => (path, None),
-                            (None, Some(path)) => {
-                                crate::school_address_download::download(&expected, &path).await?;
-                                (path, Some(crate::school_address_download::SOURCE))
-                            }
-                            _ => return Err(anyhow!("select one school address input")),
-                        };
-                    return import_published_schools(path, expected, origin, &database_url).await;
+                    return import_school_addresses(
+                        args.school_addresses,
+                        args.download_school_addresses,
+                        args.school_addresses_sha256,
+                        &database_url,
+                    )
+                    .await;
                 }
                 if args.school_addresses_sha256.is_some() {
                     return Err(anyhow!(
@@ -261,6 +266,40 @@ async fn enrich_wiaa(path: &std::path::Path, database_url: &str) -> Result<()> {
         report.ambiguous
     );
     Ok(())
+}
+
+async fn import_reviewed_identity(args: &ScrapeArgs, database_url: &str) -> Result<()> {
+    let path = args
+        .athlete_identity_manifest
+        .as_deref()
+        .context("identity manifest path is required")?;
+    let expected = args
+        .athlete_identity_sha256
+        .as_deref()
+        .context("identity manifest requires --athlete-identity-sha256")?;
+    Config::load(&args.config)?;
+    let report = crate::athlete_identity_import::import(database_url, path, expected).await?;
+    println!("{}", serde_json::to_string(&report)?);
+    Ok(())
+}
+
+async fn import_school_addresses(
+    local: Option<PathBuf>,
+    downloaded: Option<PathBuf>,
+    expected: Option<String>,
+    database_url: &str,
+) -> Result<()> {
+    let expected = expected
+        .ok_or_else(|| anyhow!("school address import requires --school-addresses-sha256"))?;
+    let (path, origin) = match (local, downloaded) {
+        (Some(path), None) => (path, None),
+        (None, Some(path)) => {
+            crate::school_address_download::download(&expected, &path).await?;
+            (path, Some(crate::school_address_download::SOURCE))
+        }
+        _ => return Err(anyhow!("select one school address input")),
+    };
+    import_published_schools(path, expected, origin, database_url).await
 }
 
 async fn import_private_schools(path: PathBuf, expected: String, database_url: &str) -> Result<()> {

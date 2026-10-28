@@ -18,6 +18,20 @@ use crate::model::{PageKind, ParsedPage, Source, Target};
 pub(crate) use profile::profile_history_identity;
 pub use targets::{athlete_target, meet_target, seeds, team_target};
 
+pub(crate) fn profile_identity(value: &str) -> Result<String> {
+    let url = targets::public_url(value)?;
+    ensure!(
+        url.query().is_none()
+            && url.fragment().is_none()
+            && url
+                .path_segments()
+                .is_some_and(|parts| parts.filter(|part| !part.is_empty()).count() == 2)
+            && url.path().starts_with("/athletes/"),
+        "reviewed profile URL must identify an athlete base page"
+    );
+    targets::path_id(value, "athletes")
+}
+
 pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
     ensure!(target.source == Source::MileSplit, "not a MileSplit target");
     ensure!(

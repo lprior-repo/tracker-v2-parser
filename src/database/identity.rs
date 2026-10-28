@@ -4,7 +4,7 @@ use sqlx::PgConnection;
 
 use crate::model::{Athlete, Source};
 
-use super::{keys, schools};
+use super::{keys, reviewed_identity, schools};
 
 #[tracing::instrument(skip(connection, observed))]
 pub(super) async fn review_school_conflicts(
@@ -67,8 +67,17 @@ async fn save(connection: &mut PgConnection, source: Source, athlete: &Athlete) 
         athlete.profile_url.as_deref(),
     )
     .await?;
-    let separated = separate_conflicting_profile(connection, profile, source, athlete).await?;
-    update(connection, profile, source, athlete).await?;
+    let reviewed_name = reviewed_identity::accepts_name(connection, profile, &athlete.name).await?;
+    let separated =
+        separate_conflicting_profile(connection, profile, source, athlete, reviewed_name).await?;
+    update(
+        connection,
+        profile,
+        source,
+        athlete,
+        reviewed_name && !separated,
+    )
+    .await?;
     save_links(connection, profile, &athlete.same_as, separated).await
 }
 
@@ -78,6 +87,7 @@ async fn separate_conflicting_profile(
     profile: i64,
     source: Source,
     athlete: &Athlete,
+    reviewed_name: bool,
 ) -> Result<bool> {
     let school = schools::find(connection, source, athlete.school_id.as_deref()).await?;
     let conflict: bool = sqlx::query_scalar(
@@ -86,7 +96,7 @@ async fn separate_conflicting_profile(
          LEFT JOIN schools incoming_school ON incoming_school.id=$3 \
          LEFT JOIN schools other_school ON other_school.id=other.school_id \
          WHERE p.id=$1 AND ( \
-         COALESCE(lower(btrim(other.name))<>lower(btrim($2)),FALSE) OR \
+         (NOT $7 AND COALESCE(lower(btrim(other.name))<>lower(btrim($2)),FALSE)) OR \
          COALESCE(lower(btrim(other.state))<>lower(btrim($4)),FALSE) OR \
          COALESCE(lower(btrim(other.gender))<>lower(btrim($5)),FALSE) OR \
          COALESCE(other.graduation_year<>$6,FALSE) OR \
@@ -99,9 +109,14 @@ async fn separate_conflicting_profile(
     .bind(&athlete.state)
     .bind(&athlete.gender)
     .bind(athlete.graduation_year)
+    .bind(reviewed_name)
     .fetch_one(&mut *connection)
     .await?;
     if !conflict {
+        return Ok(false);
+    }
+    if reviewed_name {
+        reviewed_identity::flag_fact_conflict(connection, profile, athlete).await?;
         return Ok(false);
     }
     let previous: i64 = sqlx::query_scalar("SELECT athlete_id FROM athlete_sources WHERE id=$1")
@@ -143,6 +158,7 @@ async fn update(
     profile: i64,
     source: Source,
     athlete: &Athlete,
+    reviewed_name: bool,
 ) -> Result<()> {
     let school = schools::find(connection, source, athlete.school_id.as_deref()).await?;
     let current_affiliation = source == Source::MileSplit
@@ -155,12 +171,12 @@ async fn update(
     sqlx::query(
         "UPDATE athletes a SET \
          needs_review=a.needs_review OR $8 \
-         OR COALESCE(lower(btrim(p.name)) <> lower(btrim($2)), FALSE) \
+         OR (NOT $10 AND COALESCE(lower(btrim(p.name)) <> lower(btrim($2)), FALSE)) \
          OR COALESCE(p.school_id <> $3, FALSE) \
          OR COALESCE(lower(btrim(p.state)) <> lower(btrim($4)), FALSE) \
          OR COALESCE(lower(btrim(p.gender)) <> lower(btrim($5)), FALSE) \
          OR COALESCE(p.graduation_year <> $7, FALSE) \
-         OR COALESCE(lower(btrim(a.name)) <> lower(btrim($2)), FALSE) \
+         OR (NOT $10 AND COALESCE(lower(btrim(a.name)) <> lower(btrim($2)), FALSE)) \
          OR COALESCE(lower(btrim(a.state)) <> lower(btrim($4)), FALSE) \
          OR COALESCE(lower(btrim(a.gender)) <> lower(btrim($5)), FALSE) \
          OR COALESCE(a.graduation_year <> $7, FALSE), \
@@ -179,6 +195,7 @@ async fn update(
     .bind(athlete.graduation_year)
     .bind(athlete.needs_review)
     .bind(current_affiliation)
+    .bind(reviewed_name)
     .execute(&mut *connection)
     .await?;
     sqlx::query(
@@ -193,7 +210,7 @@ async fn update(
          COALESCE($9::jsonb->'source_values'->'pages','{}'::jsonb))) ELSE '{}'::jsonb END || \
          jsonb_build_object('needs_review', COALESCE((details->>'needs_review')::boolean,FALSE) OR $10, \
          '_identity_conflict', COALESCE((details->>'_identity_conflict')::boolean,FALSE) OR \
-         COALESCE(lower(btrim(name))<>lower(btrim($2)),FALSE) OR \
+         (NOT $12 AND COALESCE(lower(btrim(name))<>lower(btrim($2)),FALSE)) OR \
          COALESCE(school_id<>$3,FALSE) OR COALESCE(lower(btrim(state))<>lower(btrim($4)),FALSE) OR \
          COALESCE(lower(btrim(gender))<>lower(btrim($5)),FALSE) OR \
          COALESCE(graduation_year<>$7,FALSE), \
@@ -213,6 +230,7 @@ async fn update(
     .bind(details)
     .bind(athlete.needs_review)
     .bind(current_affiliation)
+    .bind(reviewed_name)
     .execute(connection)
     .await?;
     Ok(())
@@ -314,6 +332,9 @@ async fn save_links(
     separated: bool,
 ) -> Result<()> {
     let (connection, profiles) = reserve_links(connection, profile, links).await?;
+    if !separated && reviewed_identity::same_group(connection, &profiles).await? {
+        return Ok(());
+    }
     let conflict: bool = separated || sqlx::query_scalar(
         "WITH candidates AS (SELECT athlete_id FROM athlete_sources WHERE id=ANY($1)) \
          SELECT EXISTS(SELECT source FROM athlete_sources WHERE athlete_id IN \

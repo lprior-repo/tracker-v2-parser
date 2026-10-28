@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod acquisition;
+mod athlete_identity_import;
 mod browser;
 pub mod cli;
 pub mod config;

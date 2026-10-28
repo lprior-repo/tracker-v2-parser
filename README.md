@@ -150,6 +150,51 @@ Conflicting schema/progression category claims are retained and flagged on the
 first parse. Masked cells and subscription examples never become performances.
 Only explicit provenance-link columns become hyperlinks; JSON remains literal.
 
+An explicit user-reviewed same-person decision can link two existing profiles
+from one provider. Their source IDs and original observed names remain separate
+source facts; the canonical `Athlete ID` supplies one spreadsheet row. For example:
+
+```json
+{
+  "schema_revision": 1,
+  "canonical_athlete_id": 1250,
+  "preferred_name": "Truman Lefevre",
+  "accepted_names": ["Truman LeFerve", "Truman Lefevre"],
+  "reviewed_by": "user",
+  "reason": "Truman LeFerve / Truman Lefevre: that is same person",
+  "profiles": [
+    {"source": "milesplit", "source_id": "14441466", "expected_athlete_id": 1250},
+    {"source": "milesplit", "source_id": "17866032", "expected_athlete_id": 1251}
+  ]
+}
+```
+
+Use the IDs from the target database and the exact SHA-256 of the reviewed file:
+
+```sh
+track-scrapper-v2 scrape --config config.toml \
+  --athlete-identity-manifest reviewed-identity.json \
+  --athlete-identity-sha256 EXPECTED_SHA256
+```
+
+This offline action requires the crawler's acquisition lock, so run it between
+batches. It validates the digest, both existing profile URLs/IDs, expected owners,
+explicit names and retained school/state/gender/cohort compatibility, then commits
+one transaction. The smallest expected canonical ID survives; both source-profile
+rows, URLs and all result rows/keys remain intact. Protected profile metadata
+records the original identities, retired canonical ID, human reason and manifest
+hash. Reapplying the same manifest is idempotent. Checkpoints, attempt counters and
+access stops are not edited. The digest verifies file integrity, not reviewer
+authentication; only supply a decision the user actually confirmed.
+
+Only the two reviewed profiles and explicitly accepted names receive this
+permission. It does not extend to a third profile or to similar names. Existing
+source contradictions remain audited and `needs_review` stays set. Later hard
+fact conflicts on the approved person are flagged without discarding the user's
+identity decision or preferred name; an unaccepted name retains the ordinary
+conflict/separation behavior. Published `sameAs` links retain the existing
+automatic identity safeguards.
+
 
 Before parsing a MileSplit athlete response, the CLI retains its
 transport-sanitized bytes under their SHA-256 content address. The default

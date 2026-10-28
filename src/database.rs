@@ -20,6 +20,7 @@ mod queue;
 mod records;
 mod report;
 mod results;
+pub(crate) mod reviewed_identity;
 mod schools;
 mod unassigned;
 

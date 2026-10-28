@@ -1,0 +1,37 @@
+{
+  "purpose": "Public parsed identity and PR-table excerpts for deterministic reviewed-profile replay; no network performed",
+  "captures": [
+    {
+      "fixture": "truman-14441466-base.html",
+      "fixture_sha256": "f1498a2a727752fda07388871f8ec4f3648ca9d82106964a6cef40519a18a545",
+      "source_url": "https://wi.milesplit.com/athletes/14441466-truman-leferve",
+      "source_capture_sha256": "f662f59480b6165f509734cac2ce93348f97b715e3eb4411242e2fb61894a1b3",
+      "captured_at": "2026-10-28T20:01:51.608625Z",
+      "selection": "canonical link, published JSON-LD, athlete heading/info, PR table, progression DOM/script; generated empty recognized navigation container"
+    },
+    {
+      "fixture": "truman-14441466-progression.html",
+      "fixture_sha256": "921ef7ed02944132d52265209f5e0d16c461cecd7e1c2a125a58213396beea2d",
+      "source_url": "https://wi.milesplit.com/athletes/14441466-truman-leferve/progression",
+      "source_capture_sha256": "21a6ef6bce1c44ecd21953faad984fd84a843bfde710c42749c274c8646bd4b4",
+      "captured_at": "2026-10-28T20:01:53.581317Z",
+      "selection": "canonical link, published JSON-LD, athlete heading/info, PR table, progression DOM/script; generated empty recognized navigation container"
+    },
+    {
+      "fixture": "truman-17866032-base.html",
+      "fixture_sha256": "f198310e7326ba4f0521be47f47fcc726fe4c597d841df779d3693f6944e50d0",
+      "source_url": "https://wi.milesplit.com/athletes/17866032-truman-lefevre",
+      "source_capture_sha256": "2b1e1c1b31392bde3d48df4aebc34d1fef74dc213a3c7ad15578c47d5225fabd",
+      "captured_at": "2026-10-28T20:01:54.642446Z",
+      "selection": "canonical link, published JSON-LD, athlete heading/info, PR table, progression DOM/script; generated empty recognized navigation container"
+    },
+    {
+      "fixture": "truman-17866032-progression.html",
+      "fixture_sha256": "2fe2a79c9f5f617007424fdda79947ef0c8428d83c5c5e282f1bb1224f153520",
+      "source_url": "https://wi.milesplit.com/athletes/17866032-truman-lefevre/progression",
+      "source_capture_sha256": "a4b7788e69575fcd927625009248c4ca2d182039a7541e6c71bdb5c4f524549f",
+      "captured_at": "2026-10-28T20:01:56.597777Z",
+      "selection": "canonical link, published JSON-LD, athlete heading/info, PR table, progression DOM/script; generated empty recognized navigation container"
+    }
+  ]
+}

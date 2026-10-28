@@ -1,0 +1,2 @@
+ALTER TABLE athlete_sources DROP CONSTRAINT athlete_sources_athlete_id_source_key;
+CREATE INDEX athlete_sources_athlete_idx ON athlete_sources(athlete_id,id);
