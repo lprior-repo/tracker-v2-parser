@@ -88,6 +88,7 @@ fn project(body: &Value, key: &str, row: &Value, athlete: &Athlete) -> Option<Pe
     let mut result = v::performance(row, athlete.id.clone(), event, sport)?;
     result.source_values = Some(serde_json::json!({
         "row": row,
+        "level": (super::super::competition::level(row) == Some(true)).then_some("high school"),
         "eventType": event_definition(body, row)
     }));
     result.is_relay = is_relay(body, row, &result.event);
@@ -119,14 +120,25 @@ fn event_label(body: &Value, key: &str, row: &Value) -> Option<String> {
 
 fn event_definition<'a>(body: &'a Value, row: &Value) -> Option<&'a Value> {
     let event_id = row.get("EventID")?;
-    body.get("eventsTF")?.as_array()?.iter().find(|definition| {
-        definition.get("IDEvent") == Some(event_id)
-            && row.get("EventTypeID").is_none_or(|kind| {
-                definition
-                    .get("IDEventType")
-                    .is_none_or(|defined| defined == kind)
-            })
-    })
+    body.get("eventsTF")?
+        .as_array()?
+        .iter()
+        .filter(|definition| {
+            definition.get("IDEvent") == Some(event_id)
+                && row
+                    .get("EventTypeID")
+                    .filter(|kind| !kind.is_null())
+                    .is_none_or(|kind| definition.get("IDEventType") == Some(kind))
+        })
+        .try_fold(None, |matched, definition| {
+            if matched.is_some() {
+                Err(())
+            } else {
+                Ok(Some(definition))
+            }
+        })
+        .ok()
+        .flatten()
 }
 
 fn unassigned(body: &Value, key: &str, row: &Value, requested: Sport) -> UnassignedResult {

@@ -31,6 +31,52 @@ pub(crate) fn evidence(event: &str, mark: &str) -> EvidencedPerformance {
 }
 
 #[test]
+fn given_rounded_hurdle_alternatives_when_compared_then_literal_specifications_stay_distinct() {
+    for (inches, metric) in [(39, "0.991"), (36, "0.914"), (33, "0.838"), (30, "0.762")] {
+        let label = format!("110m Hurdles ({inches}\" / {metric}m)");
+        let dual = comparable(&evidence(&label, "15.00a")).expect("published dual units");
+        assert_eq!(dual.value, 15_000_000_000);
+        assert!(dual.column.ends_with(&format!("::spec={label}")));
+        assert_ne!(
+            Some(dual.clone()),
+            comparable(&evidence(&format!("110m Hurdles {inches}in"), "15.00a"))
+        );
+        assert_ne!(
+            Some(dual),
+            comparable(&evidence(&format!("110m Hurdles {metric}m"), "15.00a"))
+        );
+    }
+    for label in [
+        "110m Hurdles (39\" / unknown)",
+        "110m Hurdles (39\" / 0m)",
+        "110m Hurdles (39\" / 1.2m)",
+        "110m Hurdles (39\" / 0.991m / 42\")",
+        "110m Hurdles (39\" / 42\")",
+        "Shot Put (12lb / 4kg)",
+    ] {
+        assert!(comparable(&evidence(label, "15.00a")).is_none(), "{label}");
+    }
+}
+
+#[test]
+fn given_exact_four_kilometre_xc_when_compared_then_distance_and_course_remain_distinct() {
+    let key = |event: &str, course: &str| {
+        let mut item = evidence(event, "15:00");
+        item.performance.sport = Sport::CrossCountry;
+        item.performance.course = Some(course.to_owned());
+        comparable(&item)
+    };
+    let four_k = key("Cross Country 4000m", "Course A").expect("exact 4000m");
+    assert_eq!(four_k.value, 900_000_000_000);
+    assert_eq!(Some(four_k.clone()), key("4k", "Course A"));
+    assert_ne!(Some(four_k.clone()), key("5k", "Course A"));
+    assert_ne!(Some(four_k), key("4k", "Course B"));
+    for unknown in ["4001m", "4.1k", "about 4k", "4k short course"] {
+        assert!(key(unknown, "Course A").is_none(), "{unknown}");
+    }
+}
+
+#[test]
 fn given_measure_types_when_comparing_then_time_minimizes_and_field_maximizes() {
     assert!(Measure::Time.better(10_400_000_000, 10_500_000_000));
     assert!(Measure::Distance.better(6_100_000, 6_000_000));

@@ -30,7 +30,10 @@ pub(super) fn evidence(block: &Value, row: &Value, definition: Option<&Value>) -
         "event": {
             "Event": block.get("Event"),
             "EventId": block.get("EventId"),
-            "IDEventType": block.get("IDEventType")
+            "IDEventType": block.get("IDEventType"),
+            "DivId": block.get("DivId"),
+            "Level": block.get("Level"),
+            "LevelMask": block.get("LevelMask")
         },
         "eventType": definition
     })
