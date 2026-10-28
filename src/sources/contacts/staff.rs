@@ -142,13 +142,10 @@ fn published_names(block: ElementRef<'_>, rules: &Rules) -> Vec<String> {
 }
 
 fn chrome(block: ElementRef<'_>) -> bool {
-    std::iter::once(block)
-        .chain(block.ancestors().filter_map(ElementRef::wrap))
-        .any(|parent| {
-            matches!(parent.value().name(), "nav" | "footer" | "header")
-                || parent.value().attr("hidden").is_some()
-                || parent.value().attr("aria-hidden") == Some("true")
-        })
+    email::hidden_publication(block)
+        || std::iter::once(block)
+            .chain(block.ancestors().filter_map(ElementRef::wrap))
+            .any(|parent| matches!(parent.value().name(), "nav" | "footer" | "header"))
 }
 
 fn sports(program: &str, track: bool, cross: bool) -> Vec<Option<Sport>> {

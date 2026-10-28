@@ -3,13 +3,20 @@ use regex::Regex;
 use scraper::ElementRef;
 
 pub(super) fn hidden(element: ElementRef<'_>) -> bool {
+    hidden_including_script(element, true)
+}
+
+pub(super) fn hidden_publication(element: ElementRef<'_>) -> bool {
+    hidden_including_script(element, false)
+}
+
+fn hidden_including_script(element: ElementRef<'_>, exclude_script: bool) -> bool {
     std::iter::once(element)
         .chain(element.ancestors().filter_map(ElementRef::wrap))
         .any(|parent| {
-            matches!(
-                parent.value().name(),
-                "script" | "style" | "noscript" | "template"
-            ) || parent.value().attr("hidden").is_some()
+            matches!(parent.value().name(), "style" | "noscript" | "template")
+                || (exclude_script && parent.value().name() == "script")
+                || parent.value().attr("hidden").is_some()
                 || parent
                     .value()
                     .attr("aria-hidden")

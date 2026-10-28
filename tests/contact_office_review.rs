@@ -193,3 +193,32 @@ fn given_multiple_visible_office_mailboxes_when_parsed_then_email_remains_unknow
     assert_office_unknown(&when);
     Ok(())
 }
+
+#[test]
+fn given_visible_coach_with_hidden_mailboxes_when_parsed_then_email_remains_unknown() -> Result<()>
+{
+    let token = "660c0d0807160b0f0a0a03142607040409121500091402480d575448110f481315";
+    for hidden in [
+        "style='display: none !important'",
+        "style='visibility: COLLAPSE'",
+        "aria-hidden=' TRUE '",
+        "hidden",
+    ] {
+        for mailbox in [
+            "<a href='mailto:stale@school.edu'>Email</a>".to_owned(),
+            format!("<span data-cfemail='{token}'>Email</span>"),
+            format!("<a href='/cdn-cgi/l/email-protection#{token}'>Email</a>"),
+            "<span headers='col-staff_email'><script>var firstHalf = 'stale'; var secondHalf = 'school.edu';</script></span>".to_owned(),
+        ] {
+            let body = format!("<title>Example High School</title><main><article class='staff-card'><h3 class='staff-name'>Ada Runner</h3><p class='staff-title'>Head Outdoor Track Coach</p><span {hidden}>{mailbox}</span></article></main>");
+            let page = parse(&body)?;
+            assert_eq!(page.coaches.len(), 1, "{body}");
+            assert_eq!(page.coaches[0].name.as_deref(), Some("Ada Runner"));
+            assert_eq!(page.coaches[0].email, None, "{body}");
+            let visible = parse(&body.replace(hidden, ""))?;
+            assert_eq!(visible.coaches.len(), 1);
+            assert!(visible.coaches[0].email.is_some(), "{mailbox}");
+        }
+    }
+    Ok(())
+}

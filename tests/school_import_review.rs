@@ -1,6 +1,9 @@
+#[path = "support/records.rs"]
+mod records;
 mod support;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use calamine::{Reader, open_workbook_auto};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use track_scrapper_v2::{
@@ -164,7 +167,11 @@ async fn original_sparse_corrected_repeat(test: &support::Scenario, feed: Feed) 
     assert_eq!((conflict.0, conflict.1, conflict.2), (0, 1, 1));
     let manual = row(test, feed.id()).await?;
     assert_eq!(manual["address"], "Manual address");
-    assert_eq!(manual["postal_code"], "00789");
+    assert_eq!(manual["postal_code"], "00456");
+    assert_eq!(
+        manual.pointer("/address_provenance/postal_conflict/incoming/postal_code"),
+        Some(&Value::String("00789".into()))
+    );
     assert_eq!(manual["website"], "https://manual.example");
     assert_eq!(manual["public_email"], "office@manual.example");
     assert_eq!(
@@ -203,17 +210,64 @@ async fn enriched_correction(test: &support::Scenario, feed: Feed) -> Result<()>
         .fetch_one(&test.pool).await?;
     assert_eq!(
         (&*school.0, &*school.1, &*school.2, &*school.3),
-        ("Example School", "10 Main", "00456", "source")
+        ("Example School", "10 Main", "00123", "source")
     );
     assert_eq!(
-        school.4.pointer("/postal_code/directory/artifact_sha256"),
+        school
+            .4
+            .pointer("/postal_conflict/source/directory/artifact_sha256"),
         Some(&Value::String(corrected.5))
     );
+    let repeated = import(test, feed, 2).await?;
+    assert_eq!((repeated.3, repeated.4), (0, 1));
+    let database = Database::connect(&test.url).await?;
+    let mut athlete = records::athlete("postal-review");
+    athlete.school_id = Some("manual".into());
+    let target = records::target(
+        track_scrapper_v2::model::Source::AthleticNet,
+        "postal-review",
+    );
+    records::persist(
+        &database,
+        &target,
+        &track_scrapper_v2::model::ParsedPage {
+            athletes: vec![athlete],
+            ..Default::default()
+        },
+    )
+    .await?;
+    database.close().await;
+    let output = test.directory().join("postal.xlsx");
+    support::assert_success(
+        &test
+            .cli(&[
+                "export",
+                "--output",
+                output.to_str().context("UTF-8 output")?,
+            ])
+            .await?,
+    );
+    let mut workbook = open_workbook_auto(&output)?;
+    let sheet = workbook.worksheet_range("Athletes")?;
+    let mut rows = sheet.rows();
+    let headers = rows.next().context("headers")?;
+    let values = rows.next().context("athlete row")?;
+    let address = headers
+        .iter()
+        .zip(values)
+        .find(|(header, _)| header.to_string() == "school_postal_addresses")
+        .context("postal column")?
+        .1
+        .to_string();
+    assert!(address.contains("10 Main"));
+    assert!(address.contains("Madison"));
+    assert!(address.contains("00123"));
+    assert!(!address.contains("00456"));
     sqlx::query("UPDATE schools SET postal_code='manual zip' WHERE source='athleticnet'")
         .execute(&test.pool)
         .await?;
     let manual = import(test, feed, 3).await?;
-    assert_eq!((manual.3, manual.4), (0, 1));
+    assert_eq!((manual.3, manual.4), (1, 1));
     let postal: String =
         sqlx::query_scalar("SELECT postal_code FROM schools WHERE source='athleticnet'")
             .fetch_one(&test.pool)
@@ -293,8 +347,18 @@ async fn unverifiable_legacy(test: &support::Scenario, feed: Feed) -> Result<()>
         .execute(&test.pool).await?;
     let before = row(test, feed.id()).await?;
     let corrected = import(test, feed, 2).await?;
-    assert_eq!((corrected.0, corrected.1, corrected.2), (0, 0, 1));
-    assert_eq!(row(test, feed.id()).await?, before);
+    assert_eq!((corrected.0, corrected.1, corrected.2), (0, 1, 1));
+    let after = row(test, feed.id()).await?;
+    for field in ["name", "state", "city", "address", "postal_code"] {
+        assert_eq!(after[field], before[field]);
+    }
+    assert_eq!(
+        after.pointer("/address_provenance/postal_conflict/incoming/postal_code"),
+        Some(&Value::String("00456".into()))
+    );
+    let repeated = import(test, feed, 2).await?;
+    assert_eq!((repeated.0, repeated.1, repeated.2), (0, 0, 1));
+    assert_eq!(row(test, feed.id()).await?, after);
     Ok(())
 }
 
