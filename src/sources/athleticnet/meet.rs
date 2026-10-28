@@ -4,16 +4,17 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 
 use crate::model::{
-    Athlete, PageContext, PageKind, ParsedPage, Performance, School, Sport, Target,
-    UnassignedResult,
+    Athlete, CompetitionEvidence, PageContext, PageKind, ParsedPage, Performance, School, Sport,
+    Target, UnassignedResult,
 };
 
-use super::{API, api_target, athlete_target, event_types, scope, values as v};
+use super::{API, api_target, athlete_target, competition, event_types, scope, values as v};
 
 struct ResultsContext<'a> {
     target: &'a Target,
     body: &'a Value,
     legs: BTreeMap<u64, Vec<&'a Value>>,
+    competition: Option<&'a CompetitionEvidence>,
 }
 
 struct MeetEntities {
@@ -55,6 +56,7 @@ pub(super) fn metadata(target: &Target, body: &Value) -> Result<ParsedPage> {
         context,
     );
     results.token_url = Some(target.url.clone());
+    results.competition_evidence = Some(competition::capture(&results, body)?);
     Ok(ParsedPage {
         next: vec![results],
         ..ParsedPage::default()
@@ -72,6 +74,7 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
         target,
         body,
         legs: relay_index(body),
+        competition: competition::validated(target),
     };
     let mut page = ParsedPage::default();
     let mut entities = MeetEntities {
@@ -140,7 +143,12 @@ fn retain_block(
     entities: &mut MeetEntities,
     page: &mut ParsedPage,
 ) -> Result<()> {
-    let ResultsContext { target, body, legs } = context;
+    let ResultsContext {
+        target,
+        body,
+        legs,
+        competition,
+    } = context;
     let label =
         v::text(block, "Event").context("Athletic.net schema mismatch: flatEvents.Event")?;
     v::array(block, "results")?
@@ -175,7 +183,15 @@ fn retain_block(
             if page.performances.len() > performances {
                 if let Some(result) = page.performances.last_mut() {
                     result.source_row = Some(source_row);
-                    result.source_values = Some(event_types::evidence(block, row, definition));
+                    let mut values = event_types::evidence(block, row, definition);
+                    if let Some(values) = values.as_object_mut() {
+                        values.insert(
+                            "level".to_owned(),
+                            serde_json::json!(competition::result_level(*competition, block, row)),
+                        );
+                        values.insert("competition".to_owned(), serde_json::json!(competition));
+                    }
+                    result.source_values = Some(values);
                 }
             } else if page.unassigned_results.len() > unassigned
                 && let Some(result) = page.unassigned_results.last_mut()

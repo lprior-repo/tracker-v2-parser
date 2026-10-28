@@ -90,9 +90,26 @@ pub(super) fn has_comparable_specification(raw: &str, canonical: &str) -> bool {
                 specification
                     .strip_suffix(unit)
                     .is_some_and(positive_decimal)
-            })
+            }) || (canonical.ends_with("mh") && rounded_hurdle_units(specification).is_some())
         })
     })
+}
+
+fn rounded_hurdle_units(specification: &str) -> Option<()> {
+    let (imperial, metric) = specification.split_once('/')?;
+    let inches = ["inches", "inch", "in", "\"", "″"]
+        .into_iter()
+        .find_map(|unit| imperial.strip_suffix(unit))?;
+    let metres = metric.strip_suffix('m')?;
+    if !positive_decimal(inches)
+        || !positive_decimal(metres)
+        || metres.split_once('.')?.1.len() != 3
+    {
+        return None;
+    }
+    let imperial = super::parse_mark(imperial, Measure::Distance)?;
+    let metric = super::parse_mark(metric, Measure::Distance)?;
+    (imperial.checked_add(500)?.checked_div(1_000)? == metric.checked_div(1_000)?).then_some(())
 }
 
 fn without_categories(label: &str) -> Cow<'_, str> {
@@ -164,10 +181,11 @@ fn strip_qualifiers(label: &str) -> &str {
 fn direct(label: &str) -> Option<(String, Measure)> {
     let canonical = match label {
         "55m" | "60m" | "100m" | "200m" | "300m" | "400m" | "500m" | "600m" | "800m" | "1000m"
-        | "1500m" | "1600m" | "2000m" | "3000m" | "3200m" | "5000m" | "10000m" => label,
+        | "1500m" | "1600m" | "2000m" | "3000m" | "3200m" | "4000m" | "5000m" | "10000m" => label,
         "1k" => "1000m",
         "2k" => "2000m",
         "3k" => "3000m",
+        "4k" => "4000m",
         "5k" => "5000m",
         "10k" => "10000m",
         "mile" | "1mile" | "1mi" => "mile",

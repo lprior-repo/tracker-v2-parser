@@ -68,6 +68,15 @@ pub struct PageContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompetitionEvidence {
+    pub source: Source,
+    pub meet_id: String,
+    pub sport: Sport,
+    pub meet: serde_json::Value,
+    pub divisions: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Target {
     pub source: Source,
     pub kind: PageKind,
@@ -82,6 +91,8 @@ pub struct Target {
     pub browser_origin: Option<String>,
     #[serde(default)]
     pub token_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub competition_evidence: Option<CompetitionEvidence>,
 }
 
 impl Target {
@@ -96,6 +107,7 @@ impl Target {
             body: None,
             browser_origin: None,
             token_url: None,
+            competition_evidence: None,
         }
     }
 }
