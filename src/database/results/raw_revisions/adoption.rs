@@ -96,6 +96,10 @@ pub(super) async fn reconcile(connection: &mut PgConnection, page: &ParsedPage) 
     let rows = sqlx::query_as::<_, (i64, String, String, Value)>(
         "SELECT id,source_result_id,source_url,raw FROM results WHERE source='milesplit' \
          AND meet_id=ANY($1) AND (source_result_id LIKE 'raw:%' OR source_result_id LIKE 'table:%') \
+         AND NOT COALESCE((raw#>>'{source_values,kind}'='raw_result' \
+           AND raw#>>'{source_values,published_file_identity}' ~ '^milesplit-file:[0-9]+:[0-9]+$') \
+           OR (raw#>>'{raw,kind}'='raw_result' \
+           AND raw#>>'{raw,published_file_identity}' ~ '^milesplit-file:[0-9]+:[0-9]+$'),FALSE) \
          ORDER BY id LIMIT 10001 FOR UPDATE",
     ).bind(meets).fetch_all(&mut *connection).await?;
     ensure!(

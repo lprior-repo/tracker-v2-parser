@@ -233,6 +233,37 @@ fn old_raw_page(target: &Target, file: bool) -> Result<ParsedPage> {
     Ok(page)
 }
 
+#[tokio::test]
+async fn given_large_meet_with_current_file_rows_when_another_file_replays_then_legacy_budget_is_unchanged()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        let target = raw_target(true)?;
+        let page = sources::parse(&target, RAW)?;
+        persist(&database, &target, RAW, &page).await?;
+        sqlx::query(
+            "INSERT INTO results(source_result_key,source_result_id,source,event,raw_mark,sport,status,is_personal_record,is_relay,meet_id,source_url,raw) \
+             SELECT encode(sha256(convert_to('large-meet-' || n::text,'UTF8')),'hex'), \
+             'raw:' || json_build_array('770621','milesplit-file:770621:9999999','100m','final',n,'published')::text, \
+             'milesplit','100m','12.00','xc','recorded',FALSE,FALSE,'770621', \
+             'https://oh.milesplit.com/meets/770621/results/9999999/raw', \
+             jsonb_build_object('raw',jsonb_build_object('kind','raw_result','published_file_identity','milesplit-file:770621:9999999')) \
+             FROM generate_series(1,10001) AS n",
+        ).execute(&test.pool).await?;
+        persist(&database, &target, RAW, &page).await?;
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE source_url=$1),count(*) FILTER (WHERE raw#>>'{raw,published_file_identity}'='milesplit-file:770621:9999999') FROM results",
+        ).bind(&target.url).fetch_one(&test.pool).await?;
+        assert_eq!(counts, (80, 10001));
+        let changed: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM results WHERE raw#>>'{raw,revision_status}' IS NOT NULL",
+        ).fetch_one(&test.pool).await?;
+        assert_eq!(changed, 0);
+        database.close().await;
+        Ok(())
+    })).await
+}
+
 fn row_html(body: &str, selector: &str) -> Result<String> {
     let document = scraper::Html::parse_document(body);
     let selector = scraper::Selector::parse(selector).unwrap();

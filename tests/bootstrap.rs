@@ -154,3 +154,45 @@ async fn given_out_of_contract_configuration_when_scrape_starts_then_limits_and_
         Ok(())
     })).await
 }
+
+#[tokio::test]
+async fn given_restored_carriage_return_path_when_replayed_then_evidence_uses_generated_dotenv()
+-> Result<()> {
+    with_schema(|test| Box::pin(async move {
+        let directory = test.directory().join("restored\rdata");
+        std::fs::create_dir(&directory)?;
+        let evidence = directory.join("evidence");
+        let scripts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/migration");
+        let generated = tokio::process::Command::new("python3")
+            .args(["-c", "import sys; sys.path.insert(0, sys.argv[1]); from restore import dotenv_value; print('TRACK_SCRAPPER_EVIDENCE_DIR=' + dotenv_value(sys.argv[2]))"])
+            .arg(scripts).arg(&evidence)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .output().await?;
+        assert_success(&generated);
+        std::fs::write(directory.join(".env"), generated.stdout)?;
+        let config = directory.join("config.toml");
+        support::write_config(&config)?;
+        let input = support::fixture("milesplit/athlete-oh-15005189-current.html");
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_track-scrapper-v2"));
+        let output = command
+            .current_dir(&directory)
+            .env_remove("DATABASE_URL").env_remove("TRACK_SCRAPPER_EVIDENCE_DIR")
+            .args(["--database-url", &test.url, "scrape", "--config"])
+            .arg(&config).arg("--input").arg(&input)
+            .args(["--source", "milesplit", "--kind", "athlete", "--url",
+                "https://oh.milesplit.com/athletes/15005189-brice-fuller",
+                "--athlete-id", "15005189", "--state", "OH", "--sport", "outdoor"])
+            .kill_on_drop(true).output();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(30), output).await??;
+        assert_success(&output);
+        let artifact: String = sqlx::query_scalar(
+            "SELECT details#>>'{source_values,_capture,artifact_path}' FROM athlete_sources WHERE source='milesplit'",
+        ).fetch_one(&test.pool).await?;
+        assert_eq!(std::path::Path::new(&artifact).parent(), Some(evidence.as_path()));
+        assert!(std::path::Path::new(&artifact).is_file());
+        let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results")
+            .fetch_one(&test.pool).await?;
+        assert_eq!(results, 28);
+        Ok(())
+    })).await
+}
