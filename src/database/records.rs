@@ -13,6 +13,7 @@ pub(super) async fn persist(
     response: &Capture,
     page: &ParsedPage,
 ) -> Result<i64> {
+    results::prepare_replay(connection, target, response, page).await?;
     let revision_notes = save_domain(connection, target, page, &response.url).await?;
     queue::enqueue(connection, &page.next, false).await?;
     let id = queue::succeed(connection, job_id, target).await?;
