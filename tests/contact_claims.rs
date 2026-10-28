@@ -692,11 +692,11 @@ async fn given_office_claim_when_reparse_cannot_confirm_then_history_survives_wi
         persist_contact_html(&database, &target, visible).await?;
         let confirmed = export_row(test, "confirmed-office.xlsx").await?;
         assert_eq!(confirmed["school_public_emails"], "office@school.edu");
-        for rejected in [
+        for (index, rejected) in [
             visible.replace("<a href", "<a style='display:none' href"),
             visible.replace("Example High School", "Example High School East"),
             "<main><h1>Example High School</h1><p>Contact information unavailable</p></main>".into(),
-        ] {
+        ].into_iter().enumerate() {
             for _ in 0..2 {
                 persist_contact_html(&database, &target, &rejected).await?;
             }
@@ -706,9 +706,9 @@ async fn given_office_claim_when_reparse_cannot_confirm_then_history_survives_wi
             assert_eq!(history.len(), 1);
             assert_eq!(history[0].0, "office@school.edu");
             assert_eq!(history[0].1["review_notes"], serde_json::json!(["Earlier contact source claim; not confirmed by latest parse"]));
-            assert_eq!(export_row(test, "unconfirmed-office.xlsx").await?["school_public_emails"], "");
+            assert_eq!(export_row(test, &format!("unconfirmed-office-{index}.xlsx")).await?["school_public_emails"], "");
             persist_contact_html(&database, &target, visible).await?;
-            assert_eq!(export_row(test, "reconfirmed-office.xlsx").await?["school_public_emails"], "office@school.edu");
+            assert_eq!(export_row(test, &format!("reconfirmed-office-{index}.xlsx")).await?["school_public_emails"], "office@school.edu");
         }
         sqlx::query("UPDATE schools SET public_email='manual@school.edu' WHERE source_id='school-1'").execute(&test.pool).await?;
         persist_contact_html(&database, &target, "<main><h1>Example High School</h1></main>").await?;
@@ -734,10 +734,9 @@ async fn given_office_redirect_changes_when_reparsed_then_original_checkpoint_re
         };
         database.persist(None, &target, &capture, &parsed).await?;
         let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(c)-'last_checked' FROM contacts c WHERE kind='school_office'").fetch_one(&test.pool).await?;
-        assert_eq!(before["raw"]["checkpoint_url"], target.url);
-        assert_eq!(before["source_url"], capture.url);
-        sqlx::query("INSERT INTO contacts(school_id,kind,role,email,source_url,raw,source_key) SELECT school_id,kind,role,'legacy@school.edu','https://school.example.edu/legacy',raw-'checkpoint_url','legacy-office' FROM contacts WHERE kind='school_office'").execute(&test.pool).await?;
-        let legacy: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(c)-'last_checked' FROM contacts c WHERE source_key='legacy-office'").fetch_one(&test.pool).await?;
+
+        sqlx::query("INSERT INTO contacts(school_id,kind,role,email,source_url,raw,source_key) SELECT school_id,kind,role,'legacy@school.edu','https://school.example.edu/legacy',raw-'checkpoint_url',repeat('a',64) FROM contacts WHERE kind='school_office'").execute(&test.pool).await?;
+        let legacy: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(c)-'last_checked' FROM contacts c WHERE source_key=repeat('a',64)").fetch_one(&test.pool).await?;
         let empty = "<main><h1>Example High School</h1><p>Office contacts unavailable</p></main>";
         let reparse = track_scrapper_v2::sources::contacts::parse(&target, empty)?;
         let redirected = track_scrapper_v2::model::Capture {
@@ -751,7 +750,9 @@ async fn given_office_redirect_changes_when_reparsed_then_original_checkpoint_re
         let mut expected = before.clone();
         expected["raw"]["review_notes"] = serde_json::json!([EARLIER_CLAIM]);
         assert_eq!(after, expected);
-        let legacy_after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(c)-'last_checked' FROM contacts c WHERE source_key='legacy-office'").fetch_one(&test.pool).await?;
+        assert_eq!(before["raw"]["checkpoint_url"], target.url);
+        assert_eq!(before["source_url"], capture.url);
+        let legacy_after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(c)-'last_checked' FROM contacts c WHERE source_key=repeat('a',64)").fetch_one(&test.pool).await?;
         assert_eq!(legacy_after, legacy);
         assert_eq!(export_row(test, "redirected-office.xlsx").await?["school_public_emails"], "");
         let current = track_scrapper_v2::model::Capture { body: visible.as_bytes().to_vec(), ..redirected };
