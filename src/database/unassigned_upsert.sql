@@ -68,4 +68,12 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     normalized_numeric = EXCLUDED.normalized_numeric,
     normalized_unit = EXCLUDED.normalized_unit,
     specification = EXCLUDED.specification
-WHERE results.athlete_source_id IS NULL OR EXCLUDED.is_relay
+WHERE results.athlete_source_id IS NULL
+   OR (EXCLUDED.is_relay AND (
+       EXCLUDED.source <> 'milesplit'
+       OR EXISTS (
+           SELECT 1 FROM athlete_sources
+           WHERE athlete_sources.id = results.athlete_source_id
+             AND athlete_sources.source_id = EXCLUDED.raw #>> '{raw,athleteId}'
+       )
+   ))

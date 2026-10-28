@@ -267,3 +267,80 @@ async fn given_assigned_result_when_validated_relay_correction_replayed_then_own
     })
     .await
 }
+
+#[tokio::test]
+async fn given_assigned_result_when_relay_claims_different_owner_then_conflict_is_retained()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = owned_target();
+            let mut row = owned_row()?;
+            replay(&database, &target, owned_body(vec![row.clone()])).await?;
+            let before = stored(&database, "201782806").await?;
+            row["eventName"] = json!("4x100 Meter Relay");
+            row["athleteId"] = json!("999");
+            row["profileUrl"] = json!("https://www.milesplit.com/athletes/999-other-runner");
+            let parsed = milesplit::parse(&target, &owned_body(vec![row.clone()]).to_string())?;
+            assert_eq!(
+                parsed.unassigned_results[0].result_id.as_deref(),
+                Some("201782806")
+            );
+            replay(&database, &target, owned_body(vec![row.clone()])).await?;
+            replay(&database, &target, owned_body(vec![row.clone()])).await?;
+            assert_eq!(stored(&database, "201782806").await?, before);
+            assert_eq!(count(&database).await?, 2);
+            let retained: Value =
+                sqlx::query_scalar("SELECT raw->'raw' FROM results WHERE source_result_id IS NULL")
+                    .fetch_one(database.pool())
+                    .await?;
+            assert_eq!(retained, row);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_markless_publisher_dq_when_numeric_mark_returns_then_current_raw_status_recovers()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = owned_target();
+            let original = owned_row()?;
+            replay(&database, &target, owned_body(vec![original.clone()])).await?;
+            let mut dq = original.clone();
+            dq.as_object_mut().context("publisher row")?.remove("mark");
+            dq["statusCode"] = json!("DQ");
+            replay(&database, &target, owned_body(vec![dq])).await?;
+            let failed = stored(&database, "201782806").await?;
+            assert_eq!(failed["status"], "DQ");
+            assert_eq!(failed["raw"]["reported_status"], "DQ");
+            assert_eq!(failed["raw"]["source_values"]["statusCode"], "DQ");
+            let mut corrected = original;
+            corrected["mark"] = json!("12.41");
+            corrected
+                .as_object_mut()
+                .context("publisher row")?
+                .remove("statusCode");
+            replay(&database, &target, owned_body(vec![corrected.clone()])).await?;
+            replay(&database, &target, owned_body(vec![corrected])).await?;
+            let recovered = stored(&database, "201782806").await?;
+            assert_eq!(recovered["owner"], failed["owner"]);
+            assert_eq!(recovered["status"], "recorded");
+            assert_eq!(recovered["numeric"], 12_410_000_000_i64);
+            assert!(recovered["raw"].get("reported_status").is_none());
+            assert!(
+                recovered["raw"]["source_values"]
+                    .get("statusCode")
+                    .is_none()
+            );
+            assert_eq!(count(&database).await?, 1);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
