@@ -572,8 +572,13 @@ Complete WIAA coverage with named coaches and published emails for boys' and
 girls' track and cross country, plus a complete school postal address, defers
 that school's older website checkpoints. Incomplete official coverage keeps the
 website attempts; existing failures remain recorded.
-The configured rate (at most one request per second), page budget and access-stop
-guards still apply. Profiles already fetched
+The default rate remains one request per second. Setting
+`requests_per_second = 2.0` or `3.0` under `[limits]` selects a higher rate, with a hard
+ceiling of three requests per second and concurrency fixed at one. Use a higher
+rate only where the source policy permits it. HTTP redirect hops and browser
+document/resource requests retain wire pacing; school contacts remain capped at
+one request per five seconds, or one per thirty seconds for staff-directory URLs.
+The configured page budget and access-stop guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish
 statewide completeness.
 

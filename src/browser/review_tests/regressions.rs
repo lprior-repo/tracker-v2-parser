@@ -57,6 +57,22 @@ async fn given_cross_authority_login_redirect_when_rejected_then_denied_authorit
 #[tokio::test]
 async fn given_eight_scripts_and_redirect_when_acquired_then_wire_receives_are_paced() -> Result<()>
 {
+    paced_scripts_and_redirect(Duration::from_secs(1)).await
+}
+
+#[tokio::test]
+async fn given_two_rps_and_eight_scripts_when_redirected_then_browser_wire_is_paced_at_the_selected_rate()
+-> Result<()> {
+    paced_scripts_and_redirect(Duration::from_millis(500)).await
+}
+
+#[tokio::test]
+async fn given_three_rps_and_eight_scripts_when_redirected_then_browser_wire_is_paced_at_the_selected_rate()
+-> Result<()> {
+    paced_scripts_and_redirect(Duration::from_secs_f64(1.0 / 3.0)).await
+}
+
+async fn paced_scripts_and_redirect(interval: Duration) -> Result<()> {
     let scripts = (0..8)
         .map(|index| format!("<script src='/resource-{index}'></script>"))
         .collect::<String>();
@@ -79,7 +95,7 @@ async fn given_eight_scripts_and_redirect_when_acquired_then_wire_receives_are_p
         .fetch(
             &target(&fixture.origin, "/redirect"),
             &BTreeMap::new(),
-            Duration::from_secs(1),
+            interval,
         )
         .await;
     let received = fixture
@@ -101,12 +117,17 @@ async fn given_eight_scripts_and_redirect_when_acquired_then_wire_receives_are_p
     for pair in observed.windows(2) {
         let elapsed = pair[1].1.duration_since(pair[0].1);
         assert!(
-            elapsed >= Duration::from_millis(990),
+            elapsed >= interval.saturating_sub(Duration::from_millis(10)),
             "{} -> {} received only {elapsed:?} apart",
             pair[0].0,
             pair[1].0
         );
     }
+    let total = observed[9].1.duration_since(observed[0].1);
+    assert!(
+        total < interval * 9 + Duration::from_millis(2500),
+        "browser wire rate did not honor selected interval {interval:?}: {total:?}"
+    );
     Ok(())
 }
 

@@ -162,6 +162,9 @@ mod review_tests;
 mod empty_post_tests;
 
 #[cfg(test)]
+mod rate_tests;
+
+#[cfg(test)]
 mod deadline_tests {
     use super::*;
     use crate::{

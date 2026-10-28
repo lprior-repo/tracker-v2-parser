@@ -120,8 +120,8 @@ pub struct Transport {
 impl Transport {
     pub fn new(options: Options) -> Result<Self> {
         ensure!(
-            options.rps.is_finite() && options.rps > 0.0 && options.rps <= 1.0,
-            "--rps must be finite, positive, and no greater than 1"
+            options.rps.is_finite() && options.rps > 0.0 && options.rps <= 3.0,
+            "--rps must be finite, positive, and no greater than 3"
         );
         Ok(Self {
             options,
@@ -264,7 +264,7 @@ fn request_interval(target: &Target, rps: f64) -> Result<Duration> {
             0.2
         }
     } else {
-        1.0
+        3.0
     };
     let interval = Duration::try_from_secs_f64(rps.min(cap).recip())
         .context("request interval is not representable")?;
@@ -515,11 +515,80 @@ mod pacing_tests {
             "https://example.edu/staff-directory".into(),
             Default::default(),
         );
-        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(30));
-        target.url = "https://example.edu/contact".into();
-        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(5));
+        for rate in [1.0, 2.0, 3.0] {
+            assert_eq!(request_interval(&target, rate)?, Duration::from_secs(30));
+            target.url = "https://example.edu/contact".into();
+            assert_eq!(request_interval(&target, rate)?, Duration::from_secs(5));
+            target.url = "https://example.edu/staff-directory".into();
+        }
         target.kind = PageKind::Athlete;
-        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(1));
+        assert_eq!(
+            request_interval(&target, 8.0)?,
+            Duration::from_secs_f64(1.0 / 3.0)
+        );
+        Ok(())
+    }
+
+    fn options(rps: f64) -> Options {
+        Options {
+            mode: Mode::Http,
+            driver_url: None,
+            profile: PathBuf::new(),
+            headless: true,
+            rps,
+        }
+    }
+
+    #[test]
+    fn given_explicit_wire_rates_when_transport_starts_then_only_finite_positive_rates_up_to_three_are_admitted()
+    -> Result<()> {
+        for rate in [0.001, 1.0, 2.0, 3.0] {
+            Transport::new(options(rate))?;
+        }
+        for rate in [
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            0.0,
+            -1.0,
+            3.0001,
+        ] {
+            assert!(Transport::new(options(rate)).is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn given_explicit_wire_rates_when_requests_are_reserved_then_exact_intervals_and_slower_contacts_apply()
+    -> Result<()> {
+        let mut target = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            "https://wi.milesplit.com/athletes/123".into(),
+            Default::default(),
+        );
+        for rate in [1.0, 2.0, 3.0] {
+            let mut transport = Transport::new(options(rate))?;
+            let interval = Duration::from_secs_f64(rate.recip());
+            assert_eq!(request_interval(&target, rate)?, interval);
+            transport.pace(&target).await?;
+            let first = Instant::now();
+            transport.pace(&target).await?;
+            assert!(first.elapsed() >= interval);
+            assert!(first.elapsed() <= interval + Duration::from_millis(1));
+            target.kind = PageKind::Contacts;
+            target.url = "https://example.edu/contact".into();
+            transport.pace(&target).await?;
+            let contact = Instant::now();
+            transport.pace(&target).await?;
+            assert_eq!(contact.elapsed(), Duration::from_secs(5));
+            target.url = "https://example.edu/staff-directory".into();
+            transport.pace(&target).await?;
+            let directory = Instant::now();
+            transport.pace(&target).await?;
+            assert_eq!(directory.elapsed(), Duration::from_secs(30));
+            target.kind = PageKind::Athlete;
+        }
         Ok(())
     }
 }

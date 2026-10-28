@@ -161,8 +161,8 @@ impl Config {
     fn validate_limits(&self) -> Result<()> {
         let rate = self.limits.requests_per_second;
         ensure!(
-            rate.is_finite() && rate > 0.0 && rate <= 1.0,
-            "requests_per_second must be finite, positive and at most 1"
+            rate.is_finite() && rate > 0.0 && rate <= 3.0,
+            "requests_per_second must be finite, positive and at most 3"
         );
         ensure!(
             (1..=100_000).contains(&self.limits.max_pages),
@@ -220,12 +220,27 @@ mod tests {
         [
             "gradution_years=[2027]",
             "[limits]\nrequests_per_second=nan",
-            "[limits]\nrequests_per_second=2.0",
+            "[limits]\nrequests_per_second=3.0001",
             "[limits]\nmax_attempts=4",
             "[limits]\nconcurrency=2",
             "[export]\nrows_per_file=0",
         ]
         .iter()
         .for_each(|input| assert!(Config::parse(input).is_err(), "{input}"));
+    }
+
+    #[test]
+    fn given_explicit_bounded_rates_when_configured_then_defaults_and_single_concurrency_are_preserved()
+    -> Result<()> {
+        assert_eq!(Config::default().limits.requests_per_second, 1.0);
+        for rate in [0.001, 1.0, 2.0, 3.0] {
+            let config = Config::parse(&format!("[limits]\nrequests_per_second={rate}"))?;
+            assert_eq!(config.limits.requests_per_second, rate);
+            assert_eq!(config.limits.concurrency, 1);
+        }
+        for rate in ["nan", "inf", "-inf", "0.0", "-1.0", "3.0001"] {
+            assert!(Config::parse(&format!("[limits]\nrequests_per_second={rate}")).is_err());
+        }
+        Ok(())
     }
 }
