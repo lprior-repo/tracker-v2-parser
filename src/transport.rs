@@ -1,6 +1,7 @@
 mod http;
 pub(crate) mod policy;
 mod redact;
+pub(crate) mod robots;
 
 use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
 
@@ -138,6 +139,7 @@ impl Transport {
 
     #[tracing::instrument(skip_all)]
     pub async fn fetch(&mut self, target: &Target) -> Result<Capture, Failure> {
+        robots::check(&target.url, &target.url).map_err(|error| failure(&error))?;
         let headers = self.token_headers(target).await?;
         let response = self
             .one(target, &headers)
@@ -154,6 +156,7 @@ impl Transport {
         let Some(url) = &target.token_url else {
             return Ok(BTreeMap::new());
         };
+        robots::check(url, &target.url).map_err(|error| failure(&error))?;
         let mut preflight = target.clone();
         preflight.url.clone_from(url);
         preflight.token_url = None;
@@ -176,6 +179,7 @@ impl Transport {
         target: &Target,
         headers: &BTreeMap<String, String>,
     ) -> Result<Capture> {
+        robots::check(&target.url, &target.url)?;
         let url = policy::source_url(target, &target.url)?;
         if let Some(origin) = &target.browser_origin {
             let origin = policy::source_url(target, origin)?;

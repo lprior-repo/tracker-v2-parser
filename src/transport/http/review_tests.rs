@@ -159,3 +159,22 @@ async fn given_legal_slow_pacing_when_next_request_waits_then_network_budget_is_
     let fixture_closed = fixture.close().await;
     scenario.and(closed).and(fixture_closed)
 }
+
+#[tokio::test]
+async fn given_disallowed_http_hop_when_requested_then_fixture_receives_no_request() -> Result<()> {
+    let fixture = Fixture::start(200, false).await?;
+    let (mut transport, mut target) = transport(&fixture, 1.0)?;
+    target.url = "http://www.milesplit.com/api/v1/meets/123/performances".into();
+    let result = transport.fetch_http(&target, &BTreeMap::new()).await;
+    let requests = fixture.requests.load(Ordering::SeqCst);
+    transport.close().await?;
+    fixture.close().await?;
+    let failure = crate::transport::failure(&result.expect_err("wire policy stop"));
+    assert!(failure.blocked);
+    assert_eq!(
+        failure.stopped_origin.as_deref(),
+        Some("http://www.milesplit.com")
+    );
+    assert_eq!(requests, 0);
+    Ok(())
+}

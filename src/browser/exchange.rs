@@ -71,6 +71,7 @@ impl DestinationPolicy {
     }
 
     fn url(&self, address: &str) -> Result<Url> {
+        crate::transport::robots::check(address, &self.target.url)?;
         if denied_url(address) {
             let url = [address, self.target.url.as_str()]
                 .into_iter()
@@ -386,4 +387,73 @@ fn browser_managed_header(name: &str) -> bool {
 
 pub(super) fn encoded_body(body: &[u8]) -> String {
     STANDARD.encode(body)
+}
+
+#[cfg(test)]
+mod robots_tests {
+    use super::*;
+    use crate::model::{PageContext, PageKind, Source};
+
+    #[test]
+    fn given_browser_subresource_on_disallowed_route_when_checked_then_stop_keeps_typed_authority()
+    -> Result<()> {
+        let target = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            "https://wi.milesplit.com/athletes/123".into(),
+            PageContext::default(),
+        );
+        let policy = DestinationPolicy::new(&target, &BTreeMap::new(), Duration::from_secs(1));
+        let error = policy
+            .url("https://www.milesplit.com/api/v1/meets/123/performances")
+            .expect_err("policy rejects subresource or redirect");
+        let failure = crate::transport::failure(&error);
+        assert!(failure.blocked);
+        assert_eq!(
+            failure.stopped_origin.as_deref(),
+            Some("https://www.milesplit.com")
+        );
+        assert!(failure.capture.is_none());
+        assert!(policy.url("https://wi.milesplit.com/athletes/123").is_ok());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod robots_authority_tests {
+    use super::*;
+    use crate::model::{PageContext, PageKind, Source};
+
+    #[test]
+    fn given_non_http_or_trailing_dot_redirect_when_policy_stops_then_http_authority_is_preserved()
+    -> Result<()> {
+        let target = Target::get(
+            Source::MileSplit,
+            PageKind::Contacts,
+            "https://school.example.edu/staff".into(),
+            PageContext::default(),
+        );
+        let policy = DestinationPolicy::new(&target, &BTreeMap::new(), Duration::from_secs(1));
+        for (address, expected) in [
+            (
+                "https://www.milesplit.com./api/v1/test",
+                "https://www.milesplit.com",
+            ),
+            (
+                "ftp://www.milesplit.com/api/v1/test",
+                "https://school.example.edu",
+            ),
+            (
+                "file://www.milesplit.com/api/v1/test",
+                "https://school.example.edu",
+            ),
+        ] {
+            let error = policy.url(address).expect_err("robots restriction");
+            let failure = crate::transport::failure(&error);
+            assert!(failure.blocked);
+            assert_eq!(failure.stopped_origin.as_deref(), Some(expected));
+            assert!(failure.capture.is_none());
+        }
+        Ok(())
+    }
 }
