@@ -33,25 +33,28 @@ pub(super) fn identities(
     Ok(rows
         .iter()
         .zip(&candidates)
-        .enumerate()
-        .map(|(index, (row, candidate))| {
-            match candidate
-                .as_ref()
-                .filter(|(id, _)| counts.get(id.as_str()) == Some(&1))
-            {
-                Some((id, basis)) => Identity {
-                    id: id.clone(),
-                    basis,
-                },
-                None => Identity {
-                    id: format!(
-                        "profile-history:{athlete_id}:{:x}:ambiguous:{index}",
-                        Sha256::digest(row.html().as_bytes())
-                    ),
+        .scan(
+            BTreeMap::<String, usize>::new(),
+            |occurrences, (row, candidate)| {
+                if let Some((id, basis)) = candidate
+                    .as_ref()
+                    .filter(|(id, _)| counts.get(id.as_str()) == Some(&1))
+                {
+                    return Some(Identity {
+                        id: id.clone(),
+                        basis,
+                    });
+                }
+                let digest = format!("{:x}", Sha256::digest(row.html().as_bytes()));
+                let index = occurrences.entry(digest.clone()).or_default();
+                let id = format!("profile-history:{athlete_id}:{digest}:ambiguous:{index}");
+                *index = index.saturating_add(1);
+                Some(Identity {
+                    id,
                     basis: "ambiguous",
-                },
-            }
-        })
+                })
+            },
+        )
         .collect())
 }
 
@@ -86,13 +89,13 @@ pub fn retained_identity(
     {
         return Ok(None);
     }
-    let Some(mark) = html::value(row, ".seed")? else {
+    let Some(mark) = row.select(&html::selector(".seed")?).next() else {
         return Ok(None);
     };
     let Some(mode) = row.value().attr("data-season") else {
         return Ok(None);
     };
-    if mark.is_empty() || html::masked(row)? || targets::sport(mode).is_err() {
+    if html::text(mark).is_empty() || html::masked(mark)? || targets::sport(mode).is_err() {
         return Ok(None);
     }
     candidate(target, athlete_id, row)

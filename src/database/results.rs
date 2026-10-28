@@ -13,6 +13,7 @@ mod legacy_history;
 mod raw_revisions;
 mod school_evidence;
 
+pub(super) use raw_revisions::prepare as prepare_replay;
 pub(super) use raw_revisions::review as review_revisions;
 pub(super) struct Normalized {
     pub value: Option<i64>,
