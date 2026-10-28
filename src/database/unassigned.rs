@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use futures::{TryStreamExt, stream};
 use sqlx::PgConnection;
 
@@ -29,7 +29,6 @@ async fn save(
     row: &UnassignedResult,
     location: (&str, usize),
 ) -> Result<()> {
-    let school = schools::find(connection, source, row.school_id.as_deref()).await?;
     let key = match row.result_id.as_deref().filter(|id| !id.trim().is_empty()) {
         Some(id) => keys::serialized(&(source, "result", id))?,
         None => match row.source_row.as_deref() {
@@ -37,6 +36,35 @@ async fn save(
             None => keys::serialized(&(source, "unassigned_page_row_content", location, row))?,
         },
     };
+    let affected = upsert(
+        connection,
+        source,
+        row,
+        location,
+        &key,
+        row.result_id.as_deref(),
+    )
+    .await?;
+    if affected == 0 {
+        let rejected_key = keys::serialized(&(source, "rejected_result", location.0, row))?;
+        ensure!(
+            upsert(connection, source, row, location, &rejected_key, None).await? == 1,
+            "rejected result evidence could not be retained"
+        );
+    }
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, row))]
+async fn upsert(
+    connection: &mut PgConnection,
+    source: Source,
+    row: &UnassignedResult,
+    location: (&str, usize),
+    key: &str,
+    result_id: Option<&str>,
+) -> Result<u64> {
+    let school = schools::find(connection, source, row.school_id.as_deref()).await?;
     let reported_status = row
         .raw
         .get("statusCode")
@@ -44,18 +72,18 @@ async fn save(
         .and_then(crate::marks::failure_status);
     let normalized = results::normalize_effective(
         connection,
-        &key,
+        key,
         &row.event,
         &row.mark,
         row.is_relay,
         reported_status,
     )
     .await?;
-    sqlx::query(include_str!("unassigned_upsert.sql"))
+    let saved = sqlx::query(include_str!("unassigned_upsert.sql"))
         .bind(key)
         .bind(school)
         .bind(source.as_str())
-        .bind(&row.result_id)
+        .bind(result_id)
         .bind(&row.event)
         .bind(&row.mark)
         .bind(row.sport.as_str())
@@ -70,5 +98,5 @@ async fn save(
         .bind(normalized.specification)
         .execute(connection)
         .await?;
-    Ok(())
+    Ok(saved.rows_affected())
 }

@@ -108,7 +108,7 @@ pub(super) fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
         .sport
         .context("structured results missing sport")?;
     let mut page = ParsedPage::default();
-    let mut seen = BTreeSet::new();
+    let mut seen = repeated_ids(rows);
     rows.iter().enumerate().try_for_each(|(index, row)| {
         let row_meet = scalar_id(row.get("meetId"));
         let row_set = scalar_id(row.get("meetResultsId"));
@@ -123,6 +123,21 @@ pub(super) fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
             .to_owned(),
     );
     Ok(page)
+}
+
+fn repeated_ids(rows: &[Value]) -> BTreeSet<String> {
+    rows.iter()
+        .filter_map(|row| scalar_id(row.get("id")))
+        .fold(
+            (BTreeSet::new(), BTreeSet::new()),
+            |(mut seen, mut repeated), id| {
+                if !seen.insert(id.clone()) {
+                    repeated.insert(id);
+                }
+                (seen, repeated)
+            },
+        )
+        .1
 }
 
 fn scalar_id(value: Option<&Value>) -> Option<String> {
@@ -151,7 +166,8 @@ fn retain(
     page: &mut ParsedPage,
 ) -> Result<()> {
     let event = text(row, "eventName");
-    let mark = text(row, "mark");
+    let status = text(row, "statusCode").and_then(crate::marks::failure_status);
+    let mark = text(row, "mark").or_else(|| status.map(|_| ""));
     let result_id = scalar_id(row.get("id"));
     let athlete_id = scalar_id(row.get("athleteId"));
     let (graduation_year, needs_review) =
@@ -178,7 +194,10 @@ fn retain(
         || event.is_none()
         || mark.is_none()
     {
-        retain_unassigned(target, row, index, sport, result_id, relay, page)?;
+        let correction_id = result_id.filter(|_| {
+            bound && unique && valid_profile && name.is_some() && event.is_some() && mark.is_some()
+        });
+        retain_unassigned(target, row, index, sport, correction_id, relay, page)?;
         return Ok(());
     }
     let (Some(id), Some(profile), Some(name), Some(event), Some(mark)) =
@@ -219,7 +238,6 @@ fn retain(
             ..target.context.clone()
         },
     ));
-    let status = text(row, "statusCode").and_then(crate::marks::failure_status);
     page.performances.push(Performance {
         athlete_id: id,
         event: event.to_owned(),
