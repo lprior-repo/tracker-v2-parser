@@ -49,6 +49,21 @@ handling. Export reads one repeatable-read, read-only snapshot without scraping
 or migrating. It stages and reopens new XLSX files before non-overwriting
 publication. A completion manifest is published last, listing every part, byte
 length and SHA-256. An absent manifest or mismatched part is not a completed set.
+The collecting `write_spreadsheets` and `write_spreadsheets_with_issues` APIs
+also publish a manifest for empty, single-part and split exports. Their returned
+paths contain only workbooks; the manifest is beside the requested output with
+the extension `manifest.json`.
+
+`Database::athlete_records` and `athlete_records_for` use the same bounded
+collector as `export_snapshot`, returning only its athlete records. Collection
+limits include coverage issues even though these two convenience APIs discard
+them: at most 10,000 combined rows and 32 MiB of serialized content, plus the
+snapshot's per-athlete/component limits. Exceeding a limit returns
+`ExportLimitExceeded`, never a partial result. Use `begin_export_snapshot` for
+bounded batches or `write_export` for larger exports. These reads use a
+read-only transaction without migrations; use `connect_for_export` to connect
+without migrating the existing schema.
+
 Ordinary rollback atomically claims this invocation's visible entries before
 checking ownership. Concurrent replacements are restored without overwriting a
 newer destination; if restoration conflicts, the unrelated entry is retained at

@@ -87,9 +87,9 @@ fn write_parts(
                 stage(destination, chunk, part_issues, options, &mut staged)
             })
     };
-    let manifest = split.then(|| publication::manifest_path(path));
+    let manifest = publication::manifest_path(path);
     let result =
-        staging.and_then(|()| publication::publish(&staged, &destinations, manifest.as_deref()));
+        staging.and_then(|()| publication::publish(&staged, &destinations, Some(&manifest)));
     let cleanup = cleanup_staged(&staged);
     match (result, cleanup) {
         (Ok(()), Ok(())) => Ok(destinations),

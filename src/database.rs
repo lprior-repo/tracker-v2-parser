@@ -185,7 +185,8 @@ impl Database {
         states: &[String],
         years: &[i32],
     ) -> Result<Vec<AthleteRecord>> {
-        report::athlete_records(&self.pool, states, years).await
+        let (records, _) = self.export_snapshot(states, years).await?;
+        Ok(records)
     }
 
     #[tracing::instrument(skip(self, states, years))]
