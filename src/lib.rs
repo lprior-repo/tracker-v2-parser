@@ -15,4 +15,5 @@ pub mod school_directory;
 pub mod scope;
 pub mod sources;
 pub mod transport;
+pub mod wiaa_coop_import;
 pub mod wiaa_enrichment;

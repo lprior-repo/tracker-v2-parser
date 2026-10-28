@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::{
@@ -56,6 +56,8 @@ struct ScrapeArgs {
     config: PathBuf,
     #[arg(long, conflicts_with_all = ["input", "refresh", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"])]
     wiaa_directory: bool,
+    #[arg(long, conflicts_with_all = ["input", "refresh", "wiaa_directory", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"], help = "Import cooperative coach associations from hash-verified public WIAA captures")]
+    wiaa_coop_manifest: Option<PathBuf>,
     #[arg(long, requires_all = ["source", "kind", "url"])]
     input: Option<PathBuf>,
     #[arg(long, requires = "input")]
@@ -120,6 +122,9 @@ impl Cli {
         let database_url = resolve_database_url(self.database_url)?;
         match self.command {
             Command::Scrape(args) => {
+                if let Some(path) = args.wiaa_coop_manifest {
+                    return import_wiaa_coops(&args.config, &path, &database_url).await;
+                }
                 if args.wiaa_directory {
                     return enrich_wiaa(&args.config, &database_url).await;
                 }
@@ -220,6 +225,27 @@ fn resolve_database_url(argument: Option<String>) -> Result<String> {
         Some(_) => Err(anyhow!("database URL is empty")),
         None => database_url(),
     }
+}
+
+async fn import_wiaa_coops(
+    config_path: &std::path::Path,
+    manifest_path: &std::path::Path,
+    database_url: &str,
+) -> Result<()> {
+    let config = Config::load(config_path)?;
+    ensure!(
+        config.states.iter().any(|state| state == "WI") && config.acquisition.includes_contacts(),
+        "WIAA cooperative import requires Wisconsin scope and contact collection"
+    );
+    let report = crate::wiaa_coop_import::import(database_url, manifest_path).await?;
+    println!(
+        "WIAA cooperatives: {} associations; {} programs; {} coaches; {:?} unconfirmed programs",
+        report.associations_imported,
+        report.programs_imported,
+        report.coaches_imported,
+        report.unconfirmed_programs
+    );
+    Ok(())
 }
 
 async fn enrich_wiaa(path: &std::path::Path, database_url: &str) -> Result<()> {

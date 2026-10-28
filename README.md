@@ -324,6 +324,25 @@ names, emails and school addresses; discovery alone does not populate those
 fields. Provider school IDs remain intact. Existing site access stops apply,
 and WIAA global navigation is not crawled.
 
+Reviewed cooperative programs can import their designated host's published
+coach contacts from retained WIAA evidence:
+
+```sh
+cargo run -- scrape --config config.toml --wiaa-coop-manifest /path/to/manifest.json
+```
+
+The manifest supplies all four 2026–2027 boys/girls track/XC reports and each
+host-school capture, with URLs, request scope, capture times and SHA-256 hashes.
+The importer reparses those captures, checks the existing provider identity and
+designated host, and imports only the supported sport/gender coaches. It preserves
+the cooperative's school identity and address. Published expiration years at or
+before 2026 require supplemental hash-verified current schedules that explicitly
+affirm the same cooperative, host, school year, sport/gender and head coach;
+otherwise those programs remain unconfirmed. Raw expiration/deadline fields
+remain in provenance without treating renewal deadlines as employment dates.
+This offline import respects saved WIAA contact access stops and the acquisition
+lock; it makes no network requests.
+
 Scraping backfills contact checkpoints from existing in-scope athletic-provider
 school websites and discovers them when new school pages are parsed. Plain
 published DNS hostnames/paths are requested with HTTPS while the original
@@ -548,6 +567,11 @@ unfinished team or athlete stages still prevent a false completion.
 Roster profiles with no graduation year receive a base-page check to establish
 their year. Result follow-ups and the recruiting worksheet require the selected
 graduation year; known nonmatching athletes remain outside that work.
+Within each school's contacts, saved official WIAA detail pages run first.
+Complete WIAA coverage with named coaches and published emails for boys' and
+girls' track and cross country, plus a complete school postal address, defers
+that school's older website checkpoints. Incomplete official coverage keeps the
+website attempts; existing failures remain recorded.
 The configured rate (at most one request per second), page budget and access-stop
 guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish

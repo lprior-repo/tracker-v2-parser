@@ -71,6 +71,29 @@ WITH cohort AS (
             OR upper(split_part(split_part(p.url,'://',2),'.',1))=ANY($6::text[]))
           AND ((p.cursor->>'kind'='team' AND p.url !~ '/roster/?$')
             OR (p.cursor->>'kind'='roster' AND p.url ~ '/roster/?$')) END
+), official_contact_claims AS MATERIALIZED (
+    SELECT official.source,official.school_id,official.url,
+           NULLIF(btrim(c.name),'') IS NOT NULL AND NULLIF(btrim(c.email),'') IS NOT NULL
+             AND NOT COALESCE(c.raw->'review_notes','[]'::jsonb) @> '["Earlier contact source claim; not confirmed by latest parse"]'::jsonb AS valid,
+           lower(c.role) ~ '^head[[:space:]-]*coach' AS head,
+           lower(c.role) ~ '(^|[^a-z])boys([^a-z]|$)' AS boys,
+           lower(c.role) ~ '(^|[^a-z])girls([^a-z]|$)' AS girls,
+           c.sport IN ('indoor','outdoor') OR lower(c.role) LIKE '%track%' AS track,
+           c.sport='xc' OR lower(c.role) ~ 'cross[[:space:]-]*country|(^|[^a-z])xc([^a-z]|$)' AS xc
+    FROM parents official JOIN schools s ON s.source=official.source AND s.source_id=official.school_id
+    JOIN contacts c ON c.school_id=s.id AND c.kind='coach' AND c.source_url=official.url
+    WHERE official.stage=3 AND official.status='succeeded'
+      AND official.url ~ '^https://schools[.]wiaawi[.]org/Directory/School/GetDirectorySchool[?]orgID=[1-9][0-9]{0,9}$'
+      AND (c.sport IN ('indoor','outdoor','xc') OR lower(c.role) LIKE '%track%'
+        OR lower(c.role) ~ 'cross[[:space:]-]*country|(^|[^a-z])xc([^a-z]|$)')
+      AND NULLIF(btrim(s.address),'') IS NOT NULL AND NULLIF(btrim(s.city),'') IS NOT NULL
+      AND NULLIF(btrim(s.state),'') IS NOT NULL AND NULLIF(btrim(s.postal_code),'') IS NOT NULL
+), official_school_coverage AS MATERIALIZED (
+    SELECT DISTINCT source,school_id FROM official_contact_claims
+    GROUP BY source,school_id,url
+    HAVING bool_and(valid) AND bool_or(valid AND head AND boys AND track)
+      AND bool_or(valid AND head AND girls AND track) AND bool_or(valid AND head AND boys AND xc)
+      AND bool_or(valid AND head AND girls AND xc)
 ), school_anchors AS MATERIALIZED (
     SELECT source,school_id,min(id) AS school_order
     FROM (SELECT id,source,school_id FROM profiles UNION ALL SELECT id,source,school_id FROM parents) saved
@@ -82,9 +105,12 @@ WITH cohort AS (
       AND (p.source,p.athlete_id,p.section) NOT IN (SELECT source,athlete_id,section FROM completed)
       AND (p.section=0 OR (p.source,p.athlete_id,0) IN (SELECT source,athlete_id,section FROM completed))
     UNION ALL
-    SELECT p.id,p.cursor,p.attempts,p.source,p.school_id,p.stage,0::bigint,0
+    SELECT p.id,p.cursor,p.attempts,p.source,p.school_id,p.stage,0::bigint,
+           CASE WHEN p.stage=3 AND p.url ~ '^https://schools[.]wiaawi[.]org/Directory/School/GetDirectorySchool[?]orgID=[1-9][0-9]{0,9}$' THEN 0 ELSE 1 END
     FROM parents p WHERE p.status IN ('pending','failed')
       AND (p.stage<>3 OR p.attempts<$2)
+      AND (p.stage<>3 OR p.url ~ '^https://schools[.]wiaawi[.]org/Directory/School/GetDirectorySchool[?]orgID=[1-9][0-9]{0,9}$'
+        OR (p.source,p.school_id) NOT IN (SELECT source,school_id FROM official_school_coverage))
       AND CASE WHEN p.stage=3 THEN
       (p.source,p.school_id,p.url) NOT IN (SELECT source,school_id,url FROM parents WHERE status='succeeded' AND stage=3)
       ELSE (p.source,p.school_id,p.stage) NOT IN (SELECT source,school_id,stage FROM parents WHERE status='succeeded' AND stage<>3) END

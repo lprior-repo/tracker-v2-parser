@@ -1,0 +1,8 @@
+{
+  "url": "https://schools.wiaawi.org/Directory/School/GetDirectorySchool?orgID=1",
+  "captured_utc": "2026-10-28T17:40:44.100714+00:00",
+  "original_sha256": "8c9954cb8681fd4b34484c5620110287286b130fc424c3fc3290607258e3eca7",
+  "fixture": "wiaa-abbotsford-detail.html",
+  "sha256": "bc857375445d0bc858e24436be06971bdc855e71b14102a6c642c2984499436c",
+  "transformation": "Selected original school identity/address blocks, one orgID input, and four track/XC coach rows; structural main/div/table wrappers added, script/forms/other-program rows omitted; trailing whitespace trimmed; published values unchanged."
+}
