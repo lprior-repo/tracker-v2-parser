@@ -49,8 +49,10 @@ async fn drain_discovered(
     assert!(!discovered.is_empty());
     database.enqueue(discovered, false).await?;
     for expected in discovered {
-        let job = database.next_job(Some(Source::AthleticNet), 3, states)
-            .await?.context("discovered continuation must be selected in acquisition scope")?;
+        let job = database
+            .next_job(Some(Source::AthleticNet), 3, states)
+            .await?
+            .context("discovered continuation must be selected in acquisition scope")?;
         assert_eq!(job.target.url, expected.url);
         assert_eq!(job.target.kind, expected.kind);
         assert!(job.target.context.state.is_none());
@@ -244,28 +246,65 @@ async fn given_provider_access_stop_outside_wisconsin_when_scope_changes_then_hu
 #[tokio::test]
 async fn given_wisconsin_profile_when_meets_are_discovered_then_continuations_keep_discovery_scope()
 -> Result<()> {
-    support::with_schema(|test| Box::pin(async move {
-        let database = Database::connect(&test.url).await?;
-        let states = ["WI".to_owned()];
-        let mut outside = sources::athleticnet::meet_target("999999", Sport::Outdoor)?;
-        outside.context.state = Some("AL".to_owned());
-        let unknown = sources::athleticnet::meet_target("999998", Sport::Outdoor)?;
-        database.enqueue(&[outside.clone(), unknown.clone()], false).await?;
-        let target = sources::athleticnet::athlete_target("28872883", Some("WI"), Sport::Outdoor)?;
-        let page = sources::parse(&target, include_str!("../fixtures/athleticnet/bio-28872883.json"))?;
-        let meets = page.next.into_iter().filter(|target| target.kind == PageKind::Meet).collect::<Vec<_>>();
-        drain_discovered(&database, &meets, &states).await?;
-        let meet = meets.iter().find(|target| target.context.subject_id.as_deref() == Some("634313"))
-            .context("source-discovered fixture meet")?;
-        let metadata = sources::parse(meet, include_str!("../fixtures/athleticnet/meet-634313.json"))?;
-        let results = metadata.next.into_iter().filter(|target| target.kind == PageKind::Results).collect::<Vec<_>>();
-        drain_discovered(&database, &results, &states).await?;
-        assert!(database.next_job(Some(Source::AthleticNet), 3, &states).await?.is_none());
-        let untouched: Vec<(String, String, i32)> = sqlx::query_as(
-            "SELECT url,status,attempts FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
-        ).bind(&outside.url).bind(&unknown.url).fetch_all(&test.pool).await?;
-        assert_eq!(untouched, vec![(outside.url, "pending".to_owned(), 0), (unknown.url, "pending".to_owned(), 0)]);
-        database.close().await;
-        Ok(())
-    })).await
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let states = ["WI".to_owned()];
+            let mut outside = sources::athleticnet::meet_target("999999", Sport::Outdoor)?;
+            outside.context.state = Some("AL".to_owned());
+            let unknown = sources::athleticnet::meet_target("999998", Sport::Outdoor)?;
+            database
+                .enqueue(&[outside.clone(), unknown.clone()], false)
+                .await?;
+            let target =
+                sources::athleticnet::athlete_target("28872883", Some("WI"), Sport::Outdoor)?;
+            let page = sources::parse(
+                &target,
+                include_str!("../fixtures/athleticnet/bio-28872883.json"),
+            )?;
+            let meets = page
+                .next
+                .into_iter()
+                .filter(|target| target.kind == PageKind::Meet)
+                .collect::<Vec<_>>();
+            drain_discovered(&database, &meets, &states).await?;
+            let meet = meets
+                .iter()
+                .find(|target| target.context.subject_id.as_deref() == Some("634313"))
+                .context("source-discovered fixture meet")?;
+            let metadata = sources::parse(
+                meet,
+                include_str!("../fixtures/athleticnet/meet-634313.json"),
+            )?;
+            let results = metadata
+                .next
+                .into_iter()
+                .filter(|target| target.kind == PageKind::Results)
+                .collect::<Vec<_>>();
+            drain_discovered(&database, &results, &states).await?;
+            assert!(
+                database
+                    .next_job(Some(Source::AthleticNet), 3, &states)
+                    .await?
+                    .is_none()
+            );
+            let untouched: Vec<(String, String, i32)> = sqlx::query_as(
+                "SELECT url,status,attempts FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
+            )
+            .bind(&outside.url)
+            .bind(&unknown.url)
+            .fetch_all(&test.pool)
+            .await?;
+            assert_eq!(
+                untouched,
+                vec![
+                    (outside.url, "pending".to_owned(), 0),
+                    (unknown.url, "pending".to_owned(), 0)
+                ]
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
 }

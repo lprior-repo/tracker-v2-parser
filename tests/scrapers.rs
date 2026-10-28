@@ -46,7 +46,9 @@ async fn complete_seed_pages(database: &Database) -> Result<()> {
 
 fn failure_target(id: &str) -> Result<track_scrapper_v2::model::Target> {
     track_scrapper_v2::sources::athleticnet::athlete_target(
-        id, Some("WI"), track_scrapper_v2::model::Sport::Outdoor,
+        id,
+        Some("WI"),
+        track_scrapper_v2::model::Sport::Outdoor,
     )
 }
 
@@ -56,8 +58,15 @@ async fn missing_capture_failure(
 ) -> Result<()> {
     let input = test.directory().join("missing-acquisition-capture.json");
     let error = track_scrapper_v2::runner::Runner::new()
-        .replay(&track_scrapper_v2::config::Config::default(), &test.url, &input, target.clone())
-        .await.err().context("missing replay capture must fail acquisition")?;
+        .replay(
+            &track_scrapper_v2::config::Config::default(),
+            &test.url,
+            &input,
+            target.clone(),
+        )
+        .await
+        .err()
+        .context("missing replay capture must fail acquisition")?;
     assert!(format!("{error:#}").contains("opening replay input"));
     Ok(())
 }
