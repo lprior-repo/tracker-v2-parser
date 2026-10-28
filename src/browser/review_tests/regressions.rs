@@ -328,7 +328,7 @@ async fn given_robots_redirect_when_authority_has_trailing_dot_then_stop_is_norm
     assert!(failure.blocked);
     assert_eq!(
         failure.stopped_origin,
-        Some(format!("http://www.milesplit.com:{port}"))
+        Some(format!("http://www.milesplit.com:{port}").into_boxed_str())
     );
     assert!(requests.is_empty());
     assert_eq!(connections, 0);
