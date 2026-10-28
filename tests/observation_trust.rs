@@ -439,7 +439,9 @@ async fn given_pre_fix_contaminated_affiliation_when_profile_replayed_then_workb
                     && school.address.is_none()
                     && school.state.is_none()));
                 assert_affiliation_workbook(
-                    &test.directory().join("affiliation.xlsx"),
+                    &test
+                        .directory()
+                        .join(format!("affiliation-{}.xlsx", records[0].schools.len())),
                     &records,
                     expected,
                 )?;
