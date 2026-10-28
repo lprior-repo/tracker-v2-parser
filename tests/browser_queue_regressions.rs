@@ -202,3 +202,47 @@ async fn given_precapture_stop_when_persisted_then_both_authorities_are_blocked_
     })
     .await
 }
+
+#[tokio::test]
+async fn given_non_http_login_rejection_when_origin_is_unavailable_then_original_stop_is_durable()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            database
+                .enqueue(&[contact("https://a.example.edu/redirect", "a")], false)
+                .await?;
+            let job = database
+                .next_job(None, 3, &[])
+                .await?
+                .context("original job")?;
+            database
+                .enqueue(&[contact("https://a.example.edu/contact", "a")], false)
+                .await?;
+            let failure = track_scrapper_v2::transport::Failure {
+                stopped_origin: None,
+                capture: Some(Capture {
+                    url: job.target.url.clone(),
+                    status: 403,
+                    content_type: "text/plain".into(),
+                    body: Vec::new(),
+                }),
+                blocked: true,
+                detail: "browser destination requires human access review".into(),
+            };
+            database.fail_acquisition(&job, &failure).await?;
+            let state: (String, String) = sqlx::query_as(
+                "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",
+            )
+            .bind(job.id)
+            .fetch_one(&test.pool)
+            .await?;
+            let next = database.next_job(None, 3, &[]).await?;
+            database.close().await;
+            assert_eq!(state, ("blocked".into(), "https://a.example.edu".into()));
+            assert!(next.is_none());
+            Ok(())
+        })
+    })
+    .await
+}

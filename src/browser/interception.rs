@@ -69,6 +69,7 @@ const AUDIT_SCRIPT: &str = r"(() => {
 })()";
 
 pub(super) struct Interception {
+    policy: Arc<DestinationPolicy>,
     admission: admission::Gate,
     audit_stop: Option<oneshot::Sender<()>>,
     tasks: JoinSet<Result<usize>>,
@@ -109,6 +110,7 @@ impl Interception {
             policy
         };
         let policy = Arc::new(policy);
+        let retained_policy = Arc::clone(&policy);
         let page = page.clone();
         let blocked = Arc::new(AtomicBool::new(false));
         let failures = Arc::clone(&blocked);
@@ -151,6 +153,7 @@ impl Interception {
             .instrument(tracing::info_span!("browser_request_interception")),
         );
         Ok(Self {
+            policy: retained_policy,
             admission,
             audit_stop: Some(audit_stop),
             tasks,
@@ -158,6 +161,16 @@ impl Interception {
             blocked,
             idle,
         })
+    }
+
+    pub fn preserve_stop<T>(&self, result: Result<T>) -> Result<T> {
+        if result.as_ref().is_err_and(|error| {
+            !error.is::<crate::transport::AccessStop>()
+                && !error.is::<crate::transport::AccessStopCaptureError>()
+        }) {
+            self.policy.check_stop()?;
+        }
+        result
     }
 
     pub async fn run(
