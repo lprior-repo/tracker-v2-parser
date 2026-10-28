@@ -199,7 +199,7 @@ fn retain(
     page.athletes.push(Athlete {
         id: id.clone(),
         name,
-        school_id: school_id.clone(),
+        school_id: None,
         gender: gender.clone(),
         graduation_year,
         needs_review,
@@ -212,7 +212,7 @@ fn retain(
         profile.to_owned(),
         PageContext {
             athlete_id: Some(id.clone()),
-            school_id: school_id.clone(),
+            school_id: None,
             state: None,
             school_name: None,
             result_set_ids: Vec::new(),
