@@ -630,9 +630,12 @@ async fn given_existing_contacts_when_upsert_or_checkpoint_fails_then_annotation
     support::with_schema(|test| Box::pin(async move {
         let database = Database::connect(&test.url).await?;
         let target = contact_target("https://school.example.edu/staff");
-        let observed = page(vec![coach(Some("Ada Runner"), Some("old@school.example.edu"), None)], None);
+        let observed = page(vec![coach(Some("Ada Runner"), Some("old@school.example.edu"), None)], Some("office@school.example.edu"));
         records::persist(&database, &target, &observed).await?;
         let before = saved_contacts(test).await?;
+        let school: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source='athleticnet' AND source_id='school-1'").fetch_one(&test.pool).await?;
+        assert_eq!(school["public_email"], "office@school.example.edu");
+        assert!(before.iter().any(|row| row["kind"] == "school_office" && row["raw"]["checkpoint_url"] == target.url));
         let checkpoint: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p")
             .fetch_one(&test.pool).await?;
         let invalid = page(vec![
@@ -643,17 +646,21 @@ async fn given_existing_contacts_when_upsert_or_checkpoint_fails_then_annotation
         let error = error.downcast_ref::<sqlx::Error>().context("SQLx error")?;
         assert_eq!(error.as_database_error().and_then(|error| error.constraint()), Some("contacts_email_check"));
         assert_eq!(saved_contacts(test).await?, before);
+        let restored_school: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source='athleticnet' AND source_id='school-1'").fetch_one(&test.pool).await?;
+        assert_eq!(restored_school, school);
         let failed_checkpoint: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p")
             .fetch_one(&test.pool).await?;
         assert_eq!(failed_checkpoint, checkpoint);
         sqlx::query("ALTER TABLE scrape_pages ADD CONSTRAINT reject_contact_checkpoint CHECK (NOT ('reject-checkpoint' = ANY(notes)))")
             .execute(&test.pool).await?;
-        let mut changed = page(vec![coach(Some("Ada Runner"), Some("new@school.example.edu"), None)], None);
+        let mut changed = page(vec![coach(Some("Ada Runner"), Some("new@school.example.edu"), None)], Some("replacement-office@school.example.edu"));
         changed.notes = vec!["reject-checkpoint".into()];
         let error = records::persist(&database, &target, &changed).await.err().context("checkpoint accepted")?;
         let error = error.downcast_ref::<sqlx::Error>().context("SQLx error")?;
         assert_eq!(error.as_database_error().and_then(|error| error.constraint()), Some("reject_contact_checkpoint"));
         assert_eq!(saved_contacts(test).await?, before);
+        let restored_school: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source='athleticnet' AND source_id='school-1'").fetch_one(&test.pool).await?;
+        assert_eq!(restored_school, school);
         let failed_checkpoint: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p")
             .fetch_one(&test.pool).await?;
         assert_eq!(failed_checkpoint, checkpoint);
