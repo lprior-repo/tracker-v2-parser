@@ -36,28 +36,23 @@ pub(super) fn identities(
         .scan(
             BTreeMap::<String, usize>::new(),
             |occurrences, (row, candidate)| {
-                Some(
-                    match candidate
-                        .as_ref()
-                        .filter(|(id, _)| counts.get(id.as_str()) == Some(&1))
-                    {
-                        Some((id, basis)) => Identity {
-                            id: id.clone(),
-                            basis,
-                        },
-                        None => {
-                            let digest = format!("{:x}", Sha256::digest(row.html().as_bytes()));
-                            let index = occurrences.entry(digest.clone()).or_default();
-                            let id =
-                                format!("profile-history:{athlete_id}:{digest}:ambiguous:{index}");
-                            *index = index.saturating_add(1);
-                            Identity {
-                                id,
-                                basis: "ambiguous",
-                            }
-                        }
-                    },
-                )
+                if let Some((id, basis)) = candidate
+                    .as_ref()
+                    .filter(|(id, _)| counts.get(id.as_str()) == Some(&1))
+                {
+                    return Some(Identity {
+                        id: id.clone(),
+                        basis,
+                    });
+                }
+                let digest = format!("{:x}", Sha256::digest(row.html().as_bytes()));
+                let index = occurrences.entry(digest.clone()).or_default();
+                let id = format!("profile-history:{athlete_id}:{digest}:ambiguous:{index}");
+                *index = index.saturating_add(1);
+                Some(Identity {
+                    id,
+                    basis: "ambiguous",
+                })
             },
         )
         .collect())

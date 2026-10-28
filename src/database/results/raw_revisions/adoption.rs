@@ -125,7 +125,7 @@ pub(super) async fn reconcile(connection: &mut PgConnection, page: &ParsedPage) 
                 };
                 match candidates.as_slice() {
                     [current] if equivalent(current, kind, &values, &url, &raw) => {
-                        adopt(connection, row, current.id).await?
+                        adopt(connection, row, current.id).await?;
                     }
                     _ => quarantine(connection, row).await?,
                 }
