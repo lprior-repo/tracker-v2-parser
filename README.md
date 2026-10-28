@@ -207,12 +207,14 @@ cargo run -- scrape --school-directory /path/to/school_directory.csv \
 
 This mode does not start a crawl or require a scraper configuration. It checks
 the CSV's SHA-256 and byte length against the supplied manifest before opening
-the database. The manifest is not an independently authenticated signature;
-choose trusted inputs. Initial enrichment requires unique normalized name,
+the database. Duplicate `(sources, key)` identities reject the entire directory
+before database access; the same key in distinct source namespaces stays separate.
+The manifest is not an independently authenticated signature; choose trusted
+inputs. Initial enrichment requires unique normalized name,
 state and city plus a corroborating street address or unique matching website.
-Later corrections can follow the saved import identity even when its name/city
-changes, but only still-owned fields may change. Manual or ambiguous conflicts
-remain intact and counted. Each imported field records its source identity,
+Later corrections follow the full saved `(source, source_id)` identity even when
+its name/city changes, but only still-owned fields may change. Manual or ambiguous
+conflicts remain intact and counted. Each imported field records its source identity,
 exact saved value, artifact/hash and address kind. CSV input is limited to
 128 MiB and 250,000 rows; a directory manifest is limited to 1 MiB. Accepted
 imports still retain parsed rows and indexes in memory.
@@ -252,6 +254,9 @@ parsed result content, with the same duplication risk after changes or reorder.
 MileSplit raw-result identifiers likewise include the full published line as
 well as its coordinates; correcting or moving a line can therefore create a
 duplicate rather than overwrite an unrelated result.
+Legacy raw/table reconciliation admits at most 10,000 candidate observations per
+meet set. Already file-identified observations are excluded before that budget,
+so current-format results in other files do not block a small file replay.
 MileSplit HY-TEK results with `Year` and `Finals` columns are retained, including
 the reported school text when no school identifier is published. Team-score
 sections are not interpreted as individual results.
@@ -338,7 +343,8 @@ Use the same PostgreSQL major version on both machines. A backup captures all si
 application tables and SQLx migration history from one exported database snapshot,
 plus retained evidence, the selected configuration, and saved exports. It does
 not copy role passwords, `.env`, browser profiles, old backup directories, or
-unrelated Downloads. Original evidence paths remain provenance; portable evidence
+unrelated Downloads. Backup and restore share the same credential-filename
+rejection policy. Original evidence paths remain provenance; portable evidence
 files are named by SHA-256.
 
 ### Package on the source machine
@@ -360,8 +366,9 @@ python3 scripts/migration/backup.py \
 For exports outside the application's `exports` directory, repeat `--export-file`
 for their completion manifest and **every** workbook part. If a recognized
 completion manifest exists beside a selected workbook, it must be selected too;
-missing parts and checksum mismatches are rejected. Legacy workbooks without
-completion metadata are preserved as files, not certified as complete exports.
+both exact workbook stems and numbered-part manifests are checked. Missing parts,
+incomplete metadata and checksum mismatches are rejected. Only workbooks without
+applicable completion metadata are treated as legacy files, not certified exports.
 The archive has a per-file SHA-256 manifest and full-row database fingerprints.
 Existing output files are never overwritten.
 

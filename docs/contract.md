@@ -64,6 +64,9 @@ rows remain retained, flagged and ineligible for PR selection.
 MileSplit root/numbered file aliases share one validated file identity. Career
 rows use published IDs or unique validated context; legacy adoption requires
 validated, unambiguous stored and incoming evidence. Ambiguity is retained.
+Legacy raw/table reconciliation bounds its candidate set at 10,000 observations.
+Current-format rows with explicit validated file evidence do not consume that
+legacy budget; exceeding the legacy bound fails the transaction explicitly.
 
 Contacts use `UNIQUE(school_id, kind, source_key)`, not canonical-person identity.
 The 64-hex `source_key` is SHA-256 of PostgreSQL
@@ -124,8 +127,11 @@ Imported NCES schools have their own source identities. Existing athletics-site
 schools are enriched only with unambiguous name/state/city candidates corroborated
 by an existing matching address or a website unique to both directories. Subsequent
 same-source corrections require recorded ownership and the exact prior field
-value; manual and unverifiable legacy conflicts remain unchanged. Sparse fields
-do not erase known data. UUIDs and existing numeric foreign keys remain stable.
+value; manual and unverifiable legacy conflicts remain unchanged. Reference
+directory ownership uses the full `(source, source_id)` identity. Duplicate
+`(sources, key)` CSV identities reject the directory before database access;
+equal keys in different source namespaces remain distinct. Sparse fields do not
+erase known data. UUIDs and existing numeric foreign keys remain stable.
 
 School CSV admission is bounded at 128 MiB and 250,000 rows; manifests at 1 MiB.
 Accepted parsed rows/indexes still occupy memory. Directory membership never

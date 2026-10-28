@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs, io::Read, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::Read,
+    path::Path,
+};
 
 use anyhow::{Context, Result, bail};
 use futures::{TryStreamExt, stream};
@@ -54,6 +59,21 @@ struct Entry {
     #[serde(skip)]
     details: Option<Value>,
     sources: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct DirectoryIdentity<'a> {
+    source: &'a str,
+    source_id: &'a str,
+}
+
+impl Entry {
+    fn identity(&self) -> DirectoryIdentity<'_> {
+        DirectoryIdentity {
+            source: &self.sources,
+            source_id: &self.key,
+        }
+    }
 }
 
 type Key = (String, String, String);
@@ -124,6 +144,10 @@ impl Directory {
             .collect::<Result<Vec<_>>>()?;
         if rows.len() > MAX_IMPORT_ROWS {
             bail!("school directory exceeds the {MAX_IMPORT_ROWS} row limit");
+        }
+        let mut identities = HashSet::with_capacity(rows.len());
+        if !rows.iter().all(|row| identities.insert(row.identity())) {
+            bail!("school directory contains duplicate source identities");
         }
         Ok(Self::from_entries(rows, provenance))
     }
@@ -352,14 +376,17 @@ async fn enrich_transaction(
         .entries
         .values()
         .filter_map(Option::as_ref)
-        .map(|entry| (entry.key.as_str(), entry))
+        .map(|entry| (entry.identity(), entry))
         .collect();
     let candidates = schools.iter().filter_map(|school| {
         let previous = school.address_provenance.as_ref().and_then(|provenance| {
             ["address", "postal_code"].iter().find_map(|field| {
                 let owner = provenance.get(*field)?.get("owner")?;
-                let entry = identities.get(owner.get("source_id")?.as_str()?)?;
-                (owner.get("source")?.as_str()? == entry.sources).then_some(*entry)
+                let identity = DirectoryIdentity {
+                    source: owner.get("source")?.as_str()?,
+                    source_id: owner.get("source_id")?.as_str()?,
+                };
+                identities.get(&identity).copied()
             })
         });
         if let Some(entry) = previous {

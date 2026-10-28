@@ -14,12 +14,12 @@ nces:6,Unconfirmed School,Public,15 Main,,Madison,WI,53706,,https://unconfirmed.
 nces:7,Database Duplicate,Public,16 Main,,Madison,WI,53707,,https://dbdup.example,,,,,nces-ccd\n\
 nces:8,Postal Conflict,Public,17 Main,,Madison,WI,53708,,https://postal.example,,,,,nces-ccd\n";
 
-fn fixture(test: &support::Scenario) -> Result<(String, String)> {
+fn fixture(test: &support::Scenario, content: &str) -> Result<(String, String)> {
     let csv = test.directory().join("directory.csv");
     let manifest = test.directory().join("manifest.json");
-    let hash = format!("{:x}", Sha256::digest(CSV.as_bytes()));
-    let data = serde_json::json!({"schema_revision":1,"generation_digest":"generation", "run":{"run_id":"run", "inputs":{"lanes":[{"source":"nces-ccd", "sha256":"input"}]}},"artifacts":[{"name":"school_directory.csv","sha256":hash,"bytes":CSV.len()}]});
-    std::fs::write(&csv, CSV)?;
+    let hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let data = serde_json::json!({"schema_revision":1,"generation_digest":"generation", "run":{"run_id":"run", "inputs":{"lanes":[{"source":"nces-ccd", "sha256":"input"}]}},"artifacts":[{"name":"school_directory.csv","sha256":hash,"bytes":content.len()}]});
+    std::fs::write(&csv, content)?;
     std::fs::write(&manifest, serde_json::to_vec(&data)?)?;
     Ok((
         csv.to_string_lossy().into_owned(),
@@ -41,7 +41,7 @@ async fn offline_directory_preserves_conflicts_and_ambiguity() -> Result<()> {
           ('milesplit','7','Database Duplicate','WI','Madison','16 Main',NULL,NULL,'source'), \
           ('athleticnet','8','Postal Conflict','WI','Madison','17 Main','99999',NULL,'source')")
           .execute(&test.pool).await?;
-        let (csv, manifest) = fixture(test)?;
+        let (csv, manifest) = fixture(test, CSV)?;
         let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
         let output = test.cli(&args).await?;
         support::assert_success(&output);
@@ -67,7 +67,7 @@ async fn wrong_manifest_rejects_before_database_updates() -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         Database::connect(&test.url).await?.close().await;
         sqlx::query("INSERT INTO schools(source,source_id,name,state,city,website,source_url) VALUES ('athleticnet','1','Web School','WI','Madison','https://web.example','source')").execute(&test.pool).await?;
-        let (csv, manifest) = fixture(test)?;
+        let (csv, manifest) = fixture(test, CSV)?;
         std::fs::write(&csv, "changed")?;
         let output = test.cli(&["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest]).await?;
         assert!(!output.status.success());
@@ -104,6 +104,62 @@ async fn website_corroboration_preserves_paths_but_canonicalizes_hosts() -> Resu
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
           "SELECT source_id,address FROM schools ORDER BY source_id").fetch_all(&test.pool).await?;
         assert_eq!(rows, vec![("1".into(), None), ("2".into(), None), ("3".into(), Some("30 Main".into()))]);
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_duplicate_directory_identity_when_replayed_then_owned_address_is_unchanged()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        Database::connect(&test.url).await?.close().await;
+        sqlx::query("INSERT INTO schools(source,source_id,name,state,city,website,source_url) VALUES ('milesplit','alpha','Alpha High','WI','Madison','https://alpha.example/','source')")
+            .execute(&test.pool).await?;
+        let original = "key,name,street1,street2,city,state,zip,website,sources\nsource:1,Alpha High,10 Main,,Madison,WI,53701,https://alpha.example/,reference\n";
+        let (csv, manifest) = fixture(test, original)?;
+        let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
+        support::assert_success(&test.cli(&args).await?);
+        let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source_id='alpha'")
+            .fetch_one(&test.pool).await?;
+        let duplicate = format!("{original}source:1,Beta High,20 Main,,Madison,WI,53702,https://beta.example/,reference\n");
+        fixture(test, &duplicate)?;
+        let output = test.cli(&args).await?;
+        assert!(!output.status.success(), "ambiguous source identity was accepted");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate source identities"));
+        let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source_id='alpha'")
+            .fetch_one(&test.pool).await?;
+        assert_eq!(after, before);
+        assert_eq!(after["address"], "10 Main");
+        assert_eq!(after["postal_code"], "53701");
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_source_scoped_directory_ids_when_names_change_then_both_owned_addresses_update()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        Database::connect(&test.url).await?.close().await;
+        sqlx::query("INSERT INTO schools(source,source_id,name,state,city,website,source_url) VALUES \
+            ('milesplit','alpha','Alpha High','WI','Madison','https://alpha.example/','source'), \
+            ('milesplit','beta','Beta High','WI','Madison','https://beta.example/','source')")
+            .execute(&test.pool).await?;
+        let original = "key,name,street1,street2,city,state,zip,website,sources\n1,Alpha High,10 Main,,Madison,WI,53701,https://alpha.example/,alpha-directory\n1,Beta High,20 Main,,Madison,WI,53702,https://beta.example/,beta-directory\n";
+        let (csv, manifest) = fixture(test, original)?;
+        let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
+        support::assert_success(&test.cli(&args).await?);
+        let corrected = original
+            .replace("Alpha High,10 Main", "Renamed Alpha,11 Main")
+            .replace("Beta High,20 Main", "Renamed Beta,21 Main");
+        fixture(test, &corrected)?;
+        support::assert_success(&test.cli(&args).await?);
+        let addresses: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT source_id,address,postal_code FROM schools ORDER BY source_id",
+        ).fetch_all(&test.pool).await?;
+        assert_eq!(addresses, vec![
+            ("alpha".into(), "11 Main".into(), "53701".into()),
+            ("beta".into(), "21 Main".into(), "53702".into()),
+        ]);
         Ok(())
     })).await
 }
