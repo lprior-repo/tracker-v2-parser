@@ -89,13 +89,13 @@ pub fn retained_identity(
     {
         return Ok(None);
     }
-    let Some(mark) = html::value(row, ".seed")? else {
+    let Some(mark) = row.select(&html::selector(".seed")?).next() else {
         return Ok(None);
     };
     let Some(mode) = row.value().attr("data-season") else {
         return Ok(None);
     };
-    if mark.is_empty() || html::masked(row)? || targets::sport(mode).is_err() {
+    if html::text(mark).is_empty() || html::masked(mark)? || targets::sport(mode).is_err() {
         return Ok(None);
     }
     candidate(target, athlete_id, row)

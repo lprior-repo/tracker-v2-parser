@@ -90,9 +90,6 @@ pub(in crate::database::results) async fn review(
         return Ok(());
     }
     let masked = masked_rows(capture)?;
-    if masked.is_empty() {
-        return Ok(());
-    }
     let rows = sqlx::query_as::<_, (i64, String, Value)>(
         "SELECT r.id,r.source_url,r.raw FROM results r \
          WHERE r.source='milesplit' AND r.source_url=$1 \
@@ -113,11 +110,13 @@ pub(in crate::database::results) async fn review(
                 let html = raw
                     .pointer("/source_values/row/html")
                     .and_then(Value::as_str);
-                if let Some(html) = html.filter(|html| masked.contains(*html))
+                if let Some(html) = html
                     && super::school_evidence::profile_url(&location, &raw).is_some()
                 {
                     let invalid = retained_masked(html)?;
-                    mark(connection, id, invalid).await?;
+                    if invalid || masked.contains(html) {
+                        mark(connection, id, invalid).await?;
+                    }
                 }
                 Ok(connection)
             }

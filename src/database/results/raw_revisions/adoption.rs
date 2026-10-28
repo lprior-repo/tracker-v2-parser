@@ -117,6 +117,9 @@ pub(super) async fn reconcile(connection: &mut PgConnection, page: &ParsedPage) 
                 {
                     return Ok(connection);
                 }
+                if file_identity(&url).is_some_and(|file| !files.contains(file.as_str())) {
+                    return Ok(connection);
+                }
                 let Some(candidates) = incoming.get(&signature(kind, &values)?) else {
                     if file_identity(&url).is_some_and(|file| files.contains(file.as_str())) {
                         quarantine(connection, row).await?;
@@ -177,7 +180,12 @@ fn file_identity(location: &str) -> Option<String> {
     {
         return None;
     }
-    let parts = url.path_segments()?.collect::<Vec<_>>();
+    let parts = url
+        .path()
+        .trim_end_matches('/')
+        .strip_prefix('/')?
+        .split('/')
+        .collect::<Vec<_>>();
     let (["meets", meet, "results", file] | ["meets", meet, "results", file, "raw" | "formatted"]) =
         parts.as_slice()
     else {
@@ -209,8 +217,11 @@ async fn adopt(connection: &mut PgConnection, row: i64, id: &str) -> Result<()> 
 async fn quarantine(connection: &mut PgConnection, row: i64) -> Result<()> {
     sqlx::query(
         "UPDATE results SET raw=jsonb_set(raw, \
-         CASE WHEN raw ? 'source_values' THEN ARRAY['source_values','revision_status'] ELSE ARRAY['raw','revision_status'] END, \
-         '\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=$1",
+         ARRAY[CASE WHEN athlete_source_id IS NOT NULL THEN 'source_values' ELSE 'raw' END], \
+         (CASE WHEN athlete_source_id IS NOT NULL AND jsonb_typeof(raw->'source_values')='object' \
+            THEN raw->'source_values' WHEN athlete_source_id IS NULL AND jsonb_typeof(raw->'raw')='object' \
+            THEN raw->'raw' ELSE '{}'::jsonb END) \
+         || jsonb_build_object('revision_status','unverified_prior_revision'),TRUE) WHERE id=$1",
     ).bind(row).execute(&mut *connection).await?;
     sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id=(SELECT athlete_id FROM results WHERE id=$1)")
         .bind(row).execute(connection).await?;

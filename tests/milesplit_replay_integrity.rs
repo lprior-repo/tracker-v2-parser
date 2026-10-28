@@ -124,6 +124,67 @@ async fn given_unique_history_when_context_becomes_ambiguous_then_old_observatio
 }
 
 #[tokio::test]
+async fn given_career_ranking_sibling_mask_when_context_changes_then_obsolete_mark_is_quarantined()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = career_target();
+            let row = |mark: &str| {
+                career_row(mark, "900").replace(
+                    "<div class=\"location\">",
+                    "<span class=\"mask\">rank</span><div class=\"location\">",
+                )
+            };
+            persist_career(&database, &target, &[row("1:50.00")]).await?;
+            let rows = [row("2:00.00"), row("2:10.00")];
+            let parsed = sources::parse(&target, &career_body(&rows))?;
+            assert_eq!(
+                parsed
+                    .performances
+                    .iter()
+                    .map(|row| row.mark.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["2:00.00", "2:10.00"]
+            );
+            persist_career(&database, &target, &rows).await?;
+            let observed = career_observations(&test.pool).await?;
+            assert_eq!(
+                observed,
+                vec![
+                    (
+                        "1:50.00".to_owned(),
+                        Some("unverified_prior_revision".to_owned())
+                    ),
+                    ("2:00.00".to_owned(), None),
+                    ("2:10.00".to_owned(), None),
+                ]
+            );
+            persist_career(&database, &target, &[rows[1].clone(), rows[0].clone()]).await?;
+            assert_eq!(career_observations(&test.pool).await?, observed);
+            persist_career(&database, &target, &[row("2:05.00")]).await?;
+            assert_eq!(
+                career_observations(&test.pool).await?,
+                vec![
+                    (
+                        "2:00.00".to_owned(),
+                        Some("unverified_prior_revision".to_owned())
+                    ),
+                    ("2:05.00".to_owned(), None),
+                    (
+                        "2:10.00".to_owned(),
+                        Some("unverified_prior_revision".to_owned())
+                    ),
+                ]
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn given_history_when_other_context_or_empty_response_arrives_then_prior_is_not_deleted()
 -> Result<()> {
     support::with_schema(|test| {
@@ -246,6 +307,48 @@ async fn given_retained_self_masked_career_when_replayed_then_quarantine_clears_
 }
 
 #[tokio::test]
+async fn given_retained_own_mask_when_fresh_masked_html_changes_then_prior_mark_stays_quarantined()
+-> Result<()> {
+    for changed_mark in [false, true] {
+        support::with_schema(|test| {
+            Box::pin(async move {
+                let database = Database::connect(&test.url).await?;
+                let target = career_target();
+                let masked = seed_old_masked_career(&database, &target, true).await?;
+                let changed = if changed_mark {
+                    masked.replace("1:50.00", "1:51.00")
+                } else {
+                    masked.replace(
+                        "class=\"record mask\"",
+                        "class=\"record mask\" data-layout=\"new\"",
+                    )
+                };
+                let page = sources::parse(&target, &changed)?;
+                assert!(page.performances.is_empty());
+                persist(&database, &target, &changed, &page).await?;
+                assert_eq!(
+                    career_observations(&test.pool).await?,
+                    vec![(
+                        "1:50.00".to_owned(),
+                        Some("unverified_prior_revision".to_owned())
+                    )]
+                );
+                let html: String =
+                    sqlx::query_scalar("SELECT raw#>>'{source_values,row,html}' FROM results")
+                        .fetch_one(&test.pool)
+                        .await?;
+                assert!(html.contains("1:50.00"));
+                assert!(!html.contains("data-layout"));
+                database.close().await;
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn given_ancestor_mask_without_per_result_capture_binding_when_replayed_then_uncertainty_is_explicit()
 -> Result<()> {
     support::with_schema(|test| {
@@ -270,6 +373,80 @@ async fn given_ancestor_mask_without_per_result_capture_binding_when_replayed_th
             .fetch_one(&test.pool)
             .await?;
             assert_eq!(reason, "ancestor_mask_capture_binding_unproven");
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_previous_identified_raw_shape_when_replayed_then_uncertainty_is_export_visible()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = raw_target(true)?;
+            let body = RAW.replacen(
+                "Jeydyn Fields",
+                "<a href='/athletes/123456'>Jeydyn Fields</a>",
+                1,
+            );
+            let current = sources::parse(&target, &body)?;
+            assert_eq!(current.performances.len(), 1);
+            let mut old = current.clone();
+            let row = old.performances.first_mut().context("identified raw row")?;
+            row.source_values = None;
+            let mut coordinates: Value = serde_json::from_str(
+                row.result_id
+                    .as_deref()
+                    .context("raw ID")?
+                    .strip_prefix("raw:")
+                    .context("raw prefix")?,
+            )?;
+            coordinates[1] = json!("1321880");
+            row.result_id = Some(format!("raw:{}", serde_json::to_string(&coordinates)?));
+            let old_id = row.result_id.clone();
+            persist(&database, &target, &body, &old).await?;
+            let before: Value =
+                sqlx::query_scalar("SELECT raw FROM results WHERE source_result_id=$1")
+                    .bind(&old_id)
+                    .fetch_one(&test.pool)
+                    .await?;
+            assert!(before.get("source_values").is_none() && before.get("raw").is_none());
+            persist(&database, &target, &body, &current).await?;
+            let mut after: Value =
+                sqlx::query_scalar("SELECT raw FROM results WHERE source_result_id=$1")
+                    .bind(&old_id)
+                    .fetch_one(&test.pool)
+                    .await?;
+            assert_eq!(
+                after["source_values"]["revision_status"],
+                "unverified_prior_revision"
+            );
+            after
+                .as_object_mut()
+                .context("retained raw")?
+                .remove("source_values");
+            assert_eq!(after, before);
+            let records = database.athlete_records().await?;
+            let prior = records
+                .iter()
+                .flat_map(|record| &record.performances)
+                .find(|row| row.performance.result_id == old_id)
+                .context("exported prior evidence")?;
+            assert_eq!(
+                prior
+                    .performance
+                    .source_values
+                    .as_ref()
+                    .context("exported marker")?["revision_status"],
+                "unverified_prior_revision"
+            );
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM results")
+                .fetch_one(&test.pool)
+                .await?;
+            assert_eq!(count, 81);
             database.close().await;
             Ok(())
         })
@@ -405,6 +582,118 @@ async fn given_previous_version_raw_keys_when_same_fixture_replayed_then_proven_
         })).await?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn given_identical_rows_in_distinct_numbered_files_when_only_a_replays_then_b_is_untouched()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let a = raw_target(true)?;
+            persist(&database, &a, RAW, &old_raw_page(&a, true)?).await?;
+            let mut b = a.clone();
+            b.url = b.url.replace("1321880", "1321881");
+            let body_b = RAW.replace("1321880", "1321881").replacen(
+                "Jeydyn Fields",
+                "<a href='/athletes/123456'>Jeydyn Fields</a>",
+                1,
+            );
+            let mut old_b = sources::parse(&b, &body_b)?;
+            assert_eq!(old_b.performances.len(), 1);
+            old_b.unassigned_results.clear();
+            let row = old_b
+                .performances
+                .first_mut()
+                .context("file B identified row")?;
+            row.source_values = None;
+            let mut coordinates: Value = serde_json::from_str(
+                row.result_id
+                    .as_deref()
+                    .context("file B ID")?
+                    .strip_prefix("raw:")
+                    .context("raw prefix")?,
+            )?;
+            coordinates[1] = json!("1321881");
+            let a_page = sources::parse(&a, RAW)?;
+            let a_id = a_page
+                .unassigned_results
+                .first()
+                .context("file A matching row")?
+                .result_id
+                .as_deref()
+                .context("file A ID")?;
+            let mut a_coordinates: Value =
+                serde_json::from_str(a_id.strip_prefix("raw:").context("raw prefix")?)?;
+            a_coordinates[1] = json!("1321881");
+            assert_eq!(coordinates, a_coordinates);
+            row.result_id = Some(format!("raw:{}", serde_json::to_string(&coordinates)?));
+            let id_b = row.result_id.clone();
+            persist(&database, &b, &body_b, &old_b).await?;
+            sqlx::query("UPDATE athletes SET needs_review=FALSE")
+                .execute(&test.pool)
+                .await?;
+            let before_result: Value =
+                sqlx::query_scalar("SELECT to_jsonb(r) FROM results r WHERE source_result_id=$1")
+                    .bind(&id_b)
+                    .fetch_one(&test.pool)
+                    .await?;
+            let before_athlete: Value = sqlx::query_scalar("SELECT to_jsonb(a) FROM athletes a")
+                .fetch_one(&test.pool)
+                .await?;
+            persist(&database, &a, RAW, &sources::parse(&a, RAW)?).await?;
+            let after_result: Value =
+                sqlx::query_scalar("SELECT to_jsonb(r) FROM results r WHERE source_result_id=$1")
+                    .bind(&id_b)
+                    .fetch_one(&test.pool)
+                    .await?;
+            let after_athlete: Value = sqlx::query_scalar("SELECT to_jsonb(a) FROM athletes a")
+                .fetch_one(&test.pool)
+                .await?;
+            assert_eq!(after_result, before_result);
+            assert_eq!(after_athlete, before_athlete);
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM results")
+                .fetch_one(&test.pool)
+                .await?;
+            assert_eq!(count, 81);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_legacy_numbered_trailing_slash_url_when_replayed_then_original_rows_are_adopted()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let mut target = raw_target(true)?;
+            target.url.push('/');
+            persist(&database, &target, RAW, &old_raw_page(&target, true)?).await?;
+            let before: Vec<i64> = sqlx::query_scalar("SELECT id FROM results ORDER BY id")
+                .fetch_all(&test.pool)
+                .await?;
+            for replay in [target, raw_target(true)?] {
+                persist(&database, &replay, RAW, &sources::parse(&replay, RAW)?).await?;
+            }
+            let after: Vec<i64> = sqlx::query_scalar("SELECT id FROM results ORDER BY id")
+                .fetch_all(&test.pool)
+                .await?;
+            assert_eq!(after, before);
+            let quarantined: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM results WHERE raw#>>'{raw,revision_status}' IS NOT NULL",
+            )
+            .fetch_one(&test.pool)
+            .await?;
+            assert_eq!(quarantined, 0);
+            assert_eq!(after.len(), 80);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[tokio::test]
