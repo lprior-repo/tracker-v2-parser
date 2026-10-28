@@ -466,13 +466,10 @@ fn postal_conflict(current: &Value, incoming: &Value, provenance: &Value, owner:
     ["address", "city", "state", "postal_code"]
         .iter()
         .any(|field| {
-            field_decision(
-                current.get(*field).and_then(Value::as_str),
-                incoming.get(*field).and_then(Value::as_str),
-                provenance.get(*field),
-                owner,
-            )
-            .1
+            let current = current.get(*field).and_then(Value::as_str);
+            let incoming = incoming.get(*field).and_then(Value::as_str);
+            !compatible(current, incoming)
+                && field_decision(current, incoming, provenance.get(*field), owner).1
         })
 }
 

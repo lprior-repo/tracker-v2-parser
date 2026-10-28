@@ -2,18 +2,18 @@ use anyhow::{Context, Result};
 use futures::{TryStreamExt, stream};
 use sqlx::PgConnection;
 
-use crate::model::{School, Source};
+use crate::model::{School, Source, Target};
 
 #[tracing::instrument(skip(connection, schools))]
 pub(super) async fn save_all(
     connection: &mut PgConnection,
-    source: Source,
+    target: &Target,
     schools: &[School],
     url: &str,
 ) -> Result<()> {
     stream::iter(schools.iter().map(Ok::<_, anyhow::Error>))
         .try_fold(connection, |connection, school| async move {
-            save(connection, source, school, url).await?;
+            save(connection, target, school, url).await?;
             Ok(connection)
         })
         .await
@@ -23,10 +23,11 @@ pub(super) async fn save_all(
 #[tracing::instrument(skip(connection, school))]
 async fn save(
     connection: &mut PgConnection,
-    source: Source,
+    target: &Target,
     school: &School,
     url: &str,
 ) -> Result<()> {
+    let source = target.source;
     let details = serde_json::to_value(school)?;
     let public_email = school.public_email.as_deref();
     let id: i64 = sqlx::query_scalar(
@@ -40,7 +41,7 @@ async fn save(
     ).bind(source.as_str()).bind(&school.id).bind(&school.name).bind(&school.state)
         .bind(&school.city).bind(&school.address).bind(&school.postal_code).bind(&school.website)
         .bind(public_email).bind(url).fetch_one(&mut *connection).await?;
-    save_office(connection, id, public_email, url, &details).await
+    save_office(connection, id, public_email, url, &target.url, &details).await
 }
 
 #[tracing::instrument(skip(connection, email, details))]
@@ -49,11 +50,12 @@ async fn save_office(
     school: i64,
     email: Option<&str>,
     url: &str,
+    checkpoint_url: &str,
     details: &serde_json::Value,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO contacts(school_id,kind,role,email,source_url,raw,source_key) \
-         SELECT $1,'school_office','',$2,$3,$4, \
+         SELECT $1,'school_office','',$2,$3,$4 || jsonb_build_object('checkpoint_url',$5::text), \
          encode(sha256(convert_to(jsonb_build_array($3::text,NULL::text,''::text,NULL::text,lower(btrim($2::text)))::text,'UTF8')),'hex') \
          WHERE $2::text IS NOT NULL AND btrim($2) <> '' \
          ON CONFLICT(school_id,kind,source_key) DO UPDATE SET email=EXCLUDED.email, \
@@ -63,6 +65,7 @@ async fn save_office(
     .bind(email)
     .bind(url)
     .bind(details)
+    .bind(checkpoint_url)
     .execute(connection)
     .await?;
     Ok(())
