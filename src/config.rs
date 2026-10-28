@@ -76,6 +76,7 @@ impl Default for ExportSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    pub acquisition: crate::acquisition::AcquisitionPolicy,
     pub states: Vec<String>,
     pub graduation_years: Vec<i32>,
     pub season: i32,
@@ -87,6 +88,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            acquisition: crate::acquisition::AcquisitionPolicy::default(),
             states: LOWER_48.iter().map(|state| (*state).to_owned()).collect(),
             graduation_years: vec![2027],
             season: 2026,
@@ -111,6 +113,7 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<()> {
+        self.acquisition.validate()?;
         self.validate_limits()?;
         let mut states = self
             .states

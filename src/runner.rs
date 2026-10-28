@@ -123,9 +123,11 @@ impl Runner {
         let targets = Self::discover_targets(config)?;
         targets.iter().try_for_each(validate_target)?;
         database.enqueue(&targets, refresh).await?;
-        database
-            .backfill_contacts(&config.states, &config.enabled_sources(), config.season)
-            .await?;
+        if config.acquisition.includes_contacts() {
+            database
+                .backfill_contacts(&config.states, &config.enabled_sources(), config.season)
+                .await?;
+        }
         let mut athleticnet = make_transport(config, Source::AthleticNet)?;
         let mut milesplit = make_transport(config, Source::MileSplit)?;
         let result = self
@@ -153,6 +155,10 @@ impl Runner {
         for _ in 0..config.limits.max_pages {
             let job = next_enabled_job(database, config, &schedule).await?;
             let Some(job) = job else { break };
+            if let Some(reason) = config.acquisition.exclusion_reason(&job.target) {
+                database.exclude_unattempted(job.id, reason).await?;
+                continue;
+            }
             ensure!(
                 database
                     .start_attempt(job.id, config.limits.max_attempts)
@@ -311,18 +317,29 @@ async fn next_enabled_job(
 
 async fn check_source_stops(database: &Database, config: &Config) -> Result<()> {
     for source in config.enabled_sources() {
-        let blocked: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM scrape_pages WHERE source=$1 AND status='blocked' AND cursor->>'kind' <> 'contacts')",
+        let stops: Vec<(String, i32, serde_json::Value)> = sqlx::query_as(
+            "SELECT url,attempts,cursor FROM scrape_pages WHERE source=$1 AND status='blocked' AND cursor->>'kind' <> 'contacts' ORDER BY id LIMIT 1001",
         )
         .bind(source.as_str())
-        .fetch_one(database.pool())
+        .fetch_all(database.pool())
         .await
         .context("checking source access stops")?;
         ensure!(
-            !blocked,
-            "{} has a blocked page requiring human review",
-            source.as_str()
+            stops.len() <= 1000,
+            "too many source stops; human review required"
         );
+        stops
+            .iter()
+            .try_for_each(|(address, attempts, cursor)| -> Result<()> {
+                ensure!(
+                    config
+                        .acquisition
+                        .permits_preserved_stop(address, *attempts, cursor)?,
+                    "{} has a blocked page requiring human review",
+                    source.as_str()
+                );
+                Ok(())
+            })?;
     }
     Ok(())
 }

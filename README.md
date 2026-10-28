@@ -476,10 +476,29 @@ inputs must use canonical, existing paths: source symlinks and symlinked parents
 are intentionally rejected. Test fixture roots are canonicalized before creating
 their contents so security assertions exercise the selected path itself.
 
-A fresh fixture database does not restore the real dataset or authorize a new
-crawl. Durable source access stops apply across machines and databases. Keep
-Athletic.net disabled, retain the Wisconsin scope and 1,000-page budget, and
-resolve the existing MileSplit access stop before starting live acquisition.
+A fresh database does not restore the real dataset. Durable source access stops
+apply across machines and databases. Keep Athletic.net disabled and retain the
+Wisconsin scope, one request per second, and 1,000-page budget.
+
+For an explicitly requested fresh collection of public results, an operator can
+select this acquisition policy:
+
+```toml
+[acquisition]
+mode = "public_results"
+reviewed_media_stops = ["https://mn.milesplit.com/athletes/13557507-tana-borland/photos"]
+```
+
+The listed stop was reviewed as subscription photos. Its blocked checkpoint is
+retained and never requested again by this policy. Only exact canonical athlete
+photo/video URLs may be reviewed this way. Public-results mode excludes media,
+external school-contact acquisition, and published robots restrictions before
+making requests. Local exclusions retain a separate marker and consume no
+attempts. Existing attempted exclusions require review. Any other blocked
+checkpoint still stops its source; new HTTP denials, challenges, login demands,
+and paywalls retain the existing immediate stop behavior. Omitting this policy
+retains the original complete acquisition behavior. Preserve source-stop evidence
+and disclose any unavailable source inventory when starting fresh.
 
 ### Canonical gate
 

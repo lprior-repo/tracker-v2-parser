@@ -8,6 +8,7 @@ use sqlx::{
 
 use crate::model::{AthleteRecord, Capture, Counts, ParsedPage, Source, Target};
 
+mod acquisition_scope;
 mod contact_discovery;
 mod contacts;
 mod export_snapshot;

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod acquisition;
 mod browser;
 pub mod cli;
 pub mod config;
