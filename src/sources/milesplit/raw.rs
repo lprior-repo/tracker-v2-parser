@@ -271,7 +271,7 @@ fn identified_row(
     let athlete = Athlete {
         id: id.clone(),
         name: row.name.to_owned(),
-        school_id: school.clone(),
+        school_id: None,
         gender: gender.clone(),
         grade: row.grade.map(str::to_owned),
         profile_url: Some(url.clone()),
@@ -280,7 +280,7 @@ fn identified_row(
     let next_context = PageContext {
         athlete_id: Some(id.clone()),
         state: None,
-        school_id: school.clone(),
+        school_id: None,
         school_name: None,
         ..context.clone()
     };

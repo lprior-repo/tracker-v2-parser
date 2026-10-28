@@ -28,7 +28,6 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
     let location = html::value(root, ".athlete-info .city-state")?;
     let (city, state) = location.as_deref().map_or((None, None), html::location);
     let school = profile_school(target, root, city, state.clone())?;
-    let state = state.or_else(|| target.context.state.clone());
     let graduation_claim = html::value(root, ".athlete-info .grad-year")?;
     let graduation_year = html::graduation_year(
         graduation_claim
@@ -45,21 +44,27 @@ pub(super) fn parse(target: &Target, document: &Html) -> Result<ParsedPage> {
         (&schema_gender, &progression_gender),
         (Some(schema), Some(progression)) if schema != progression
     );
-    let source_values = details::values(
+    let mut source_values = details::values(
         target,
         document,
         schema_gender.as_deref(),
         progression_gender.as_deref(),
     )?;
+    source_values
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("profile evidence must be an object"))?
+        .insert(
+            "current_affiliation".to_owned(),
+            serde_json::json!({
+                "school_id": school.as_ref().map(|school| &school.id), "state": state
+            }),
+        );
     let gender = progression_gender.or(schema_gender);
     let same_as = same_as(person.as_ref(), &id)?;
     let mut athlete = Athlete {
         id,
         name,
-        school_id: school
-            .as_ref()
-            .map(|school| school.id.clone())
-            .or_else(|| target.context.school_id.clone()),
+        school_id: school.as_ref().map(|school| school.id.clone()),
         state,
         gender,
         graduation_year,
@@ -125,7 +130,7 @@ fn profile_school(
         id,
         name: html::text(link),
         city,
-        state: state.or_else(|| target.context.state.clone()),
+        state,
         ..School::default()
     }))
 }

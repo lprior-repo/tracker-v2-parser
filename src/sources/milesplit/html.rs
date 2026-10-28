@@ -186,7 +186,12 @@ pub(super) fn access(document: &Html) -> Result<()> {
 
 pub(super) fn masked(root: ElementRef<'_>) -> Result<bool> {
     let mask = selector(".mask, .redact, .record--locked, .paywall, [aria-label='Locked']")?;
-    Ok(mask.matches(&root) || root.select(&mask).next().is_some())
+    Ok(mask.matches(&root)
+        || root.select(&mask).next().is_some()
+        || root
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .any(|ancestor| mask.matches(&ancestor)))
 }
 
 pub(super) fn gender(value: &str) -> Option<String> {
