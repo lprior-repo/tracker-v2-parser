@@ -94,9 +94,10 @@ Repeated claims within a column are sorted deterministically and all retained.
 Public all-season headline PRs retain their published attribution. Ordinary
 results also provide event bests within compatible timing, wind, event and course
 contexts; they do not compete across levels or incompatible contexts. The athlete
-cohort/state settings still apply. No JSON, review prose or supporting sheets are
-written. Compact prepared cells are retained across batches; raw profile JSON and
-result records are discarded after each batch. The total athlete count must fit
+cohort/state settings still apply; this layout includes only confirmed selected
+graduation years. School addresses require a published street address and retain
+postal order. No JSON, review prose or supporting sheets are written. Compact
+prepared cells are retained across batches; raw profile JSON and result records are discarded after each batch. The total athlete count must fit
 `rows_per_file` and Excel's row capacity; prepared storage is limited to 128 MiB.
 Exceeding a row, byte, cell or column capacity fails explicitly without publishing
 a complete export or adding overflow tabs. Empty issue-only batches do not create

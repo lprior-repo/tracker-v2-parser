@@ -171,7 +171,7 @@ fn identity(record: &AthleteRecord) -> Vec<String> {
             .graduation_year
             .map_or_else(String::new, |year| year.to_string()),
         rows::joined(record.schools.iter().map(|school| school.name.as_str())),
-        rows::addresses(record),
+        school_addresses(record),
         coach_field(record, Program::Track, CoachField::Name),
         coach_field(record, Program::Track, CoachField::Email),
         coach_field(record, Program::CrossCountry, CoachField::Name),
@@ -187,6 +187,41 @@ fn identity(record: &AthleteRecord) -> Vec<String> {
         coach_field(record, Program::Unspecified, CoachField::Name),
         coach_field(record, Program::Unspecified, CoachField::Email),
     ]
+}
+
+fn school_addresses(record: &AthleteRecord) -> String {
+    record
+        .schools
+        .iter()
+        .filter_map(|school| {
+            let street = school
+                .address
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?;
+            let city = school
+                .city
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let region = [school.state.as_deref(), school.postal_code.as_deref()]
+                .into_iter()
+                .flatten()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let address = std::iter::once(street)
+                .chain(city)
+                .chain((!region.is_empty()).then_some(region.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(format!("{}: {address}", school.name))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[derive(Clone, Copy)]

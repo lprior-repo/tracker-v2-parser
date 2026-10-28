@@ -6,7 +6,7 @@ use calamine::{Reader, open_workbook_auto};
 use sha2::{Digest, Sha256};
 use track_scrapper_v2::{
     export::{ExportLayout, ExportOptions, StagedExport},
-    model::{AthleteRecord, EvidencedPerformance, Source},
+    model::{AthleteRecord, EvidencedPerformance, School, Source},
 };
 
 fn athlete(id: i64, event: &str, mark: &str) -> AthleteRecord {
@@ -101,5 +101,82 @@ fn total_single_sheet_row_limit_failure_cannot_publish_a_partial_manifest() -> R
     assert!(error.to_string().contains("configured row capacity"));
     assert!(export.finish().is_err());
     assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+    Ok(())
+}
+
+#[test]
+fn selected_cohort_contains_only_confirmed_matching_graduation_years() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("confirmed.xlsx");
+    let matching = athlete(11, "100m", "11.00");
+    let mut unknown = athlete(22, "800m", "2:00.00");
+    unknown.graduation_year = None;
+    let mut other = athlete(33, "400m", "55.00");
+    other.graduation_year = Some(2028);
+    let mut export =
+        StagedExport::new(&path, &options(1000))?.with_layout(ExportLayout::SingleSheet);
+    export.stage_part(&[matching, unknown, other], &[])?;
+    export.finish()?;
+    let mut workbook = open_workbook_auto(&path)?;
+    let sheet = workbook.worksheet_range("Athletes")?;
+    assert_eq!(sheet.height(), 2);
+    assert_eq!(
+        sheet.rows().nth(1).context("matching athlete")?[0].to_string(),
+        "Athlete 11"
+    );
+    assert!(
+        !sheet
+            .rows()
+            .next()
+            .context("headers")?
+            .iter()
+            .any(
+                |header| header.to_string().contains("800m") || header.to_string().contains("400m")
+            )
+    );
+    Ok(())
+}
+
+#[test]
+fn school_address_requires_street_and_preserves_postal_component_order() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("addresses.xlsx");
+    let mut incomplete = athlete(11, "100m", "11.00");
+    let school = School {
+        id: "school".into(),
+        name: "Zebra High".into(),
+        city: Some("Madison".into()),
+        state: Some("WI".into()),
+        postal_code: Some("53703".into()),
+        ..School::default()
+    };
+    incomplete.schools = vec![school.clone()];
+    let mut complete = athlete(22, "800m", "2:00.00");
+    complete.schools = vec![School {
+        address: Some(" 123 Zebra Rd ".into()),
+        ..school
+    }];
+    let mut export =
+        StagedExport::new(&path, &options(1000))?.with_layout(ExportLayout::SingleSheet);
+    export.stage_part(&[incomplete, complete], &[])?;
+    export.finish()?;
+    let mut workbook = open_workbook_auto(&path)?;
+    let sheet = workbook.worksheet_range("Athletes")?;
+    assert_eq!(sheet.height(), 3);
+    let column = sheet
+        .rows()
+        .next()
+        .context("headers")?
+        .iter()
+        .position(|header| header.to_string() == "School address")
+        .context("school address column")?;
+    assert_eq!(
+        sheet.rows().nth(1).context("missing street athlete")?[column].to_string(),
+        ""
+    );
+    assert_eq!(
+        sheet.rows().nth(2).context("complete street athlete")?[column].to_string(),
+        "Zebra High: 123 Zebra Rd, Madison, WI 53703"
+    );
     Ok(())
 }
