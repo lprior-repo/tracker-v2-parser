@@ -45,7 +45,17 @@ Provider-wide access stops still require human review.
 
 
 Scraping uses bounded attempts and checkpoints; access challenges require human
-handling. Export reads one repeatable-read, read-only snapshot without scraping
+handling. MileSplit requests matching the observed robots exclusions
+(`/rankings`, `/virtual-meets`, `/api/`, and `/contact`) stop before acquisition,
+including redirect and browser subresource routes. The restriction is applied
+conservatively across MileSplit subdomains; encoded or ambiguous path forms
+cannot bypass it. The evidence is the `User-agent: *` section of
+`https://www.milesplit.com/robots.txt`, reviewed on 2026-10-28. This narrow denial
+guard is not a complete robots interpreter, a freshness check, or permission to
+crawl other paths or origins. Host-specific policy review and existing access
+stops remain binding. Parser-discovered API targets remain evidence/checkpoints;
+they are not silently discarded or acquired despite the restriction.
+ Export reads one repeatable-read, read-only snapshot without scraping
 or migrating. It stages and reopens new XLSX files before non-overwriting
 publication. A completion manifest is published last, listing every part, byte
 length and SHA-256. An absent manifest or mismatched part is not a completed set.

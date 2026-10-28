@@ -71,6 +71,7 @@ impl DestinationPolicy {
     }
 
     fn url(&self, address: &str) -> Result<Url> {
+        crate::transport::robots::check(address)?;
         if denied_url(address) {
             let url = [address, self.target.url.as_str()]
                 .into_iter()
@@ -386,4 +387,34 @@ fn browser_managed_header(name: &str) -> bool {
 
 pub(super) fn encoded_body(body: &[u8]) -> String {
     STANDARD.encode(body)
+}
+
+#[cfg(test)]
+mod robots_tests {
+    use super::*;
+    use crate::model::{PageContext, PageKind, Source};
+
+    #[test]
+    fn given_browser_subresource_on_disallowed_route_when_checked_then_stop_keeps_typed_authority()
+    -> Result<()> {
+        let target = Target::get(
+            Source::MileSplit,
+            PageKind::Athlete,
+            "https://wi.milesplit.com/athletes/123".into(),
+            PageContext::default(),
+        );
+        let policy = DestinationPolicy::new(&target, &BTreeMap::new(), Duration::from_secs(1));
+        let error = policy
+            .url("https://www.milesplit.com/api/v1/meets/123/performances")
+            .expect_err("policy rejects subresource or redirect");
+        let failure = crate::transport::failure(&error);
+        assert!(failure.blocked);
+        assert_eq!(
+            failure.stopped_origin.as_deref(),
+            Some("https://www.milesplit.com")
+        );
+        assert!(failure.capture.is_none());
+        assert!(policy.url("https://wi.milesplit.com/athletes/123").is_ok());
+        Ok(())
+    }
 }

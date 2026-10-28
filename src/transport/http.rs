@@ -109,6 +109,7 @@ impl Transport {
         url: &Url,
         method: &Method,
     ) -> Result<Response> {
+        super::robots::check(url.as_str())?;
         let client = self.client_for(url).await?;
         let request_url = url.clone();
         #[cfg(test)]
