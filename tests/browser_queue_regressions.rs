@@ -152,3 +152,53 @@ async fn given_redirected_contact_denial_when_persisted_then_effective_authority
     })
     .await
 }
+
+#[tokio::test]
+async fn given_precapture_stop_when_persisted_then_both_authorities_are_blocked_without_capture()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            database
+                .enqueue(&[contact("https://a.example.edu/staff", "a")], false)
+                .await?;
+            let job = database
+                .next_job(None, 3, &[])
+                .await?
+                .context("original job")?;
+            database
+                .enqueue(&[contact("https://b.example.edu/contact", "b")], false)
+                .await?;
+            let failure = track_scrapper_v2::transport::Failure {
+                stopped_origin: Some(
+                    "https://b.example.edu/login?token=synthetic-stop-canary#synthetic-stop-canary"
+                        .into(),
+                ),
+                capture: None,
+                blocked: true,
+                detail: "login destination requires human review".into(),
+            };
+            database.fail_acquisition(&job, &failure).await?;
+            let state: (String, String) = sqlx::query_as(
+                "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",
+            )
+            .bind(job.id)
+            .fetch_one(&test.pool)
+            .await?;
+            let rows: Vec<String> =
+                sqlx::query_scalar("SELECT to_jsonb(p)::text FROM scrape_pages p")
+                    .fetch_all(&test.pool)
+                    .await?;
+            let next = database.next_job(None, 3, &[]).await?;
+            database.close().await;
+            assert_eq!(state, ("blocked".into(), "https://b.example.edu".into()));
+            assert!(
+                rows.iter()
+                    .all(|row| !row.contains("synthetic-stop-canary"))
+            );
+            assert!(next.is_none());
+            Ok(())
+        })
+    })
+    .await
+}

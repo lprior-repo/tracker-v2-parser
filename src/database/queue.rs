@@ -183,12 +183,14 @@ pub(super) async fn fail(
     response: Option<&Capture>,
     detail: &str,
     blocked: bool,
+    stopped_origin: Option<&str>,
 ) -> Result<()> {
     let status = if blocked { "blocked" } else { "failed" };
-    let stopped_origin = response
+    let stopped_origin = stopped_origin
+        .or_else(|| response.map(|capture| capture.url.as_str()))
         .filter(|_| blocked)
-        .map(|capture| {
-            let url = url::Url::parse(&capture.url).context("invalid access-stop URL")?;
+        .map(|address| {
+            let url = url::Url::parse(address).context("invalid access-stop URL")?;
             anyhow::ensure!(
                 matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
                 "access-stop URL must have an HTTP authority"

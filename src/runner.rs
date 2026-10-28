@@ -258,7 +258,7 @@ async fn acquire_job(database: &Database, job: &Job, transport: &mut Transport) 
             );
             let detail = format!("{error:#}");
             database
-                .fail_job(job, failure.capture.as_ref(), &detail, failure.blocked)
+                .fail_acquisition(job, &failure)
                 .await
                 .with_context(|| format!("recording page failure after: {detail}"))?;
             if failure.blocked && job.target.kind != crate::model::PageKind::Contacts {

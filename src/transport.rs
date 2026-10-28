@@ -34,9 +34,10 @@ pub struct Options {
 
 #[derive(Debug)]
 pub struct Failure {
+    pub stopped_origin: Option<Box<str>>,
     pub capture: Option<Capture>,
     pub blocked: bool,
-    pub detail: String,
+    pub detail: Box<str>,
 }
 
 impl fmt::Display for Failure {
@@ -46,6 +47,24 @@ impl fmt::Display for Failure {
 }
 
 impl std::error::Error for Failure {}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AccessStop {
+    pub origin: String,
+    pub status: Option<u16>,
+}
+
+impl fmt::Display for AccessStop {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "source access stopped at {} (HTTP {:?}); human review required",
+            self.origin, self.status
+        )
+    }
+}
+
+impl std::error::Error for AccessStop {}
 
 #[derive(Debug)]
 pub(crate) struct AccessStopCaptureError {
@@ -164,8 +183,7 @@ impl Transport {
             );
         }
         self.pace(target).await?;
-        let interval = Duration::try_from_secs_f64(self.options.rps.recip())
-            .context("browser request interval is not representable")?;
+        let interval = request_interval(target, self.options.rps)?;
         let result = self
             .browser
             .as_ref()
@@ -189,17 +207,7 @@ impl Transport {
 
     #[tracing::instrument(skip_all)]
     async fn pace(&mut self, target: &Target) -> Result<()> {
-        let cap = if target.kind == PageKind::Contacts {
-            if target.url.contains("staff-directory") {
-                1.0 / 30.0
-            } else {
-                0.2
-            }
-        } else {
-            1.0
-        };
-        let interval = Duration::try_from_secs_f64(self.options.rps.min(cap).recip())
-            .context("request interval is not representable")?;
+        let interval = request_interval(target, self.options.rps)?;
         let now = Instant::now();
         let start = self
             .next_request
@@ -224,6 +232,21 @@ impl Transport {
             None => Ok(()),
         }
     }
+}
+
+fn request_interval(target: &Target, rps: f64) -> Result<Duration> {
+    let cap = if target.kind == PageKind::Contacts {
+        if target.url.contains("staff-directory") {
+            1.0 / 30.0
+        } else {
+            0.2
+        }
+    } else {
+        1.0
+    };
+    let interval = Duration::try_from_secs_f64(rps.min(cap).recip())
+        .context("request interval is not representable")?;
+    Ok(interval)
 }
 
 fn public_token(body: &[u8], url: &str) -> Result<String> {
@@ -269,7 +292,8 @@ fn finish_response(mut capture: Capture, denied: bool) -> Result<Capture, Failur
             failure.detail = format!(
                 "source returned HTTP {}; sanitizing response failed: {}",
                 capture.status, failure.detail
-            );
+            )
+            .into_boxed_str();
             failure.blocked = true;
         }
         failure
@@ -281,6 +305,7 @@ fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {
     let blocked = access_stop_status(capture.status) || denied;
     if !(200..300).contains(&capture.status) || denied {
         return Err(Failure {
+            stopped_origin: None,
             detail: format!(
                 "source returned HTTP {}{}; no alternate transport attempted",
                 capture.status,
@@ -289,7 +314,8 @@ fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {
                 } else {
                     ""
                 }
-            ),
+            )
+            .into_boxed_str(),
             capture: Some(capture),
             blocked,
         });
@@ -336,10 +362,12 @@ pub(crate) fn denied_body(capture: &Capture) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-fn failure(error: &anyhow::Error) -> Failure {
+pub(crate) fn failure(error: &anyhow::Error) -> Failure {
     let detail = format!("{error:#}");
     let lower = detail.to_ascii_lowercase();
-    let blocked = error.is::<AccessStopCaptureError>()
+    let stopped = error.downcast_ref::<AccessStop>();
+    let blocked = stopped.is_some()
+        || error.is::<AccessStopCaptureError>()
         || [
             "challenge",
             "requires authentication",
@@ -350,9 +378,10 @@ fn failure(error: &anyhow::Error) -> Failure {
         .iter()
         .any(|marker| lower.contains(marker));
     Failure {
+        stopped_origin: stopped.map(|stop| stop.origin.clone().into_boxed_str()),
         capture: None,
         blocked,
-        detail,
+        detail: detail.into_boxed_str(),
     }
 }
 
@@ -443,5 +472,25 @@ mod tests {
         assert!(!super::denied_url(
             "https://example.com/results?next=/login"
         ));
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::*;
+    #[test]
+    fn given_contact_targets_when_interval_is_selected_then_wire_uses_contact_caps() -> Result<()> {
+        let mut target = Target::get(
+            Source::MileSplit,
+            PageKind::Contacts,
+            "https://example.edu/staff-directory".into(),
+            Default::default(),
+        );
+        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(30));
+        target.url = "https://example.edu/contact".into();
+        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(5));
+        target.kind = PageKind::Athlete;
+        assert_eq!(request_interval(&target, 8.0)?, Duration::from_secs(1));
+        Ok(())
     }
 }

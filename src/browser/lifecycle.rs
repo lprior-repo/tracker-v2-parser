@@ -146,6 +146,7 @@ impl Acquisition {
             &self.target,
             &self.headers,
             self.chromium.endpoint(),
+            self.interval,
             #[cfg(test)]
             self.local_origin.clone(),
             #[cfg(test)]

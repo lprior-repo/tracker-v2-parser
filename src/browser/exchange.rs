@@ -23,6 +23,7 @@ use crate::{
 };
 
 pub(super) struct DestinationPolicy {
+    pacing: super::pacing::Pacing,
     target: Target,
     caller_headers: BTreeSet<String>,
     #[cfg(test)]
@@ -47,8 +48,9 @@ impl std::fmt::Display for RejectedDestination {
 impl std::error::Error for RejectedDestination {}
 
 impl DestinationPolicy {
-    pub fn new(target: &Target, headers: &BTreeMap<String, String>) -> Self {
+    pub fn new(target: &Target, headers: &BTreeMap<String, String>, interval: Duration) -> Self {
         Self {
+            pacing: super::pacing::Pacing::new(interval),
             target: target.clone(),
             caller_headers: headers
                 .keys()
@@ -65,6 +67,14 @@ impl DestinationPolicy {
     }
 
     fn url(&self, address: &str) -> Result<Url> {
+        if denied_url(address) {
+            let url = Url::parse(address)?;
+            return Err(crate::transport::AccessStop {
+                origin: url.origin().ascii_serialization(),
+                status: None,
+            }
+            .into());
+        }
         self.checked_url(address)
             .map_err(|error| anyhow::Error::new(RejectedDestination(error)))
     }
@@ -112,7 +122,9 @@ pub(super) async fn request(
 ) -> Result<Response> {
     let request = &event.request;
     let url = policy.url(&request.url)?;
-    let addresses = policy.addresses(&url).await?;
+    let addresses = tokio::time::timeout(super::COMMAND_TIMEOUT, policy.addresses(&url))
+        .await
+        .context("browser DNS resolution timed out")??;
     let host = url.host_str().context("browser destination has no host")?;
     let client = Client::builder()
         .no_proxy()
@@ -132,12 +144,19 @@ pub(super) async fn request(
     );
     let headers = request_headers(policy, request, &url)?;
     let body = request_body(page, event).await?;
+    policy.pacing.admit().await?;
     let response = client
-        .request(method, url)
+        .request(method, url.clone())
         .headers(headers)
         .body(body)
         .send()
         .await?;
+    if access_stop_status(response.status().as_u16()) {
+        policy.pacing.stop(
+            url.origin().ascii_serialization(),
+            response.status().as_u16(),
+        )?;
+    }
     capture(policy, request, response).await
 }
 
