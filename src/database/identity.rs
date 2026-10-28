@@ -150,6 +150,8 @@ async fn update(
             .source_values
             .as_ref()
             .is_some_and(|values| values.get("current_affiliation").is_some());
+    let details =
+        affiliation_details(connection, profile, school, athlete, current_affiliation).await?;
     sqlx::query(
         "UPDATE athletes a SET \
          needs_review=a.needs_review OR $8 \
@@ -162,8 +164,8 @@ async fn update(
          OR COALESCE(lower(btrim(a.state)) <> lower(btrim($4)), FALSE) \
          OR COALESCE(lower(btrim(a.gender)) <> lower(btrim($5)), FALSE) \
          OR COALESCE(a.graduation_year <> $7, FALSE), \
-         name=COALESCE(a.name,$2),school_id=CASE WHEN $9 THEN $3 ELSE COALESCE(a.school_id,$3) END, \
-         state=CASE WHEN $9 THEN $4 ELSE COALESCE(a.state,$4) END, \
+         name=COALESCE(a.name,$2),school_id=CASE WHEN $9 THEN $3 WHEN p.details->'source_values' ? 'current_affiliation' THEN p.school_id ELSE COALESCE(a.school_id,$3) END, \
+         state=CASE WHEN $9 THEN $4 WHEN p.details->'source_values' ? 'current_affiliation' THEN p.state ELSE COALESCE(a.state,$4) END, \
          gender=COALESCE(a.gender,$5),grade=COALESCE($6,a.grade), \
          graduation_year=COALESCE(a.graduation_year,$7) \
          FROM athlete_sources p WHERE p.id=$1 AND a.id=p.athlete_id",
@@ -181,8 +183,8 @@ async fn update(
     .await?;
     sqlx::query(
         "UPDATE athlete_sources SET name=COALESCE(name,$2), \
-         school_id=CASE WHEN $11 THEN $3 ELSE COALESCE(school_id,$3) END, \
-         state=CASE WHEN $11 THEN $4 ELSE COALESCE(state,$4) END,gender=COALESCE(gender,$5),grade=COALESCE($6,grade), \
+         school_id=CASE WHEN $11 THEN $3 WHEN details->'source_values' ? 'current_affiliation' THEN school_id ELSE COALESCE(school_id,$3) END, \
+         state=CASE WHEN $11 THEN $4 WHEN details->'source_values' ? 'current_affiliation' THEN state ELSE COALESCE(state,$4) END,gender=COALESCE(gender,$5),grade=COALESCE($6,grade), \
          graduation_year=COALESCE(graduation_year,$7),profile_url=COALESCE(profile_url,$8), \
          details=(CASE WHEN $11 THEN details - 'school_id' - 'state' ELSE details END) || (jsonb_strip_nulls($9::jsonb) - 'same_as' - 'source_values') || \
          CASE WHEN $9::jsonb ? 'source_values' THEN jsonb_build_object('source_values', \
@@ -208,12 +210,53 @@ async fn update(
     .bind(&athlete.grade)
     .bind(athlete.graduation_year)
     .bind(&athlete.profile_url)
-    .bind(serde_json::to_value(athlete)?)
+    .bind(details)
     .bind(athlete.needs_review)
     .bind(current_affiliation)
     .execute(connection)
     .await?;
     Ok(())
+}
+
+#[tracing::instrument(skip(connection, athlete))]
+async fn affiliation_details(
+    connection: &mut PgConnection,
+    profile: i64,
+    school: Option<i64>,
+    athlete: &Athlete,
+    current: bool,
+) -> Result<serde_json::Value> {
+    let mut details = serde_json::to_value(athlete)?;
+    if !current {
+        return Ok(details);
+    }
+    let uncertain = if athlete.state.is_none() && school.is_some() {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT CASE WHEN COALESCE(school_id=$2 AND ( \
+             (COALESCE((details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean,FALSE) \
+             AND details#>>'{source_values,current_affiliation,unverified_school_state}'=(SELECT s.state FROM schools s WHERE s.id=$2)) OR \
+             (NOT COALESCE(details#>'{source_values,current_affiliation}' ? 'school_state_unverified',FALSE) \
+             AND ((state IS NOT NULL AND state=(SELECT s.state FROM schools s WHERE s.id=$2)) \
+             OR details->'source_values' ? 'current_affiliation'))),FALSE) \
+             THEN (SELECT s.state FROM schools s WHERE s.id=$2) ELSE NULL END \
+             FROM athlete_sources WHERE id=$1",
+        ).bind(profile).bind(school).fetch_one(connection).await?
+    } else {
+        None
+    };
+    let affiliation = details
+        .pointer_mut("/source_values/current_affiliation")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("current affiliation evidence must be an object")?;
+    affiliation.insert(
+        "school_state_unverified".to_owned(),
+        serde_json::json!(uncertain.is_some()),
+    );
+    affiliation.insert(
+        "unverified_school_state".to_owned(),
+        serde_json::json!(uncertain),
+    );
+    Ok(details)
 }
 
 #[tracing::instrument(skip(connection))]
