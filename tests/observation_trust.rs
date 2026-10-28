@@ -259,7 +259,24 @@ async fn masked_export(container: &str) -> Result<()> {
                 .collect::<String>();
             let reopened: Value = serde_json::from_str(&json)?;
             assert_eq!(reopened, records[0].profile_details[0].source_values);
-            assert!(json.contains("10.01") && json.contains("masked"));
+            let row_kind = if container == "history" {
+                "result_rows"
+            } else {
+                "pr_rows"
+            };
+            let rows = reopened["pages"][&target.url][row_kind]
+                .as_array()
+                .context("reopened source rows")?;
+            let matching = rows
+                .iter()
+                .filter(|row| {
+                    row["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("10.01"))
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "{container}");
+            assert_eq!(matching[0]["masked"], json!(true), "{container}");
             database.close().await;
             Ok(())
         })
@@ -480,6 +497,10 @@ async fn legacy_school_state(stored_state: &str, expected: Option<&str>) -> Resu
         for _ in 0..2 {
             persist(&database, &target, &body).await?;
         }
+        persist(&database, &target, &profile(&target, "", "")).await?;
+        let (absent, _) = database.export_snapshot(&[], &[2026]).await?;
+        assert!(absent[0].schools.is_empty());
+        persist(&database, &target, &body).await?;
         let global: String = sqlx::query_scalar("SELECT state FROM schools WHERE source_id='999'").fetch_one(&test.pool).await?;
         assert_eq!(global, stored_state);
         let (records, _) = database.export_snapshot(&[], &[2026]).await?;
@@ -497,6 +518,42 @@ async fn legacy_school_state(stored_state: &str, expected: Option<&str>) -> Resu
         let (confirmed, _) = database.export_snapshot(&["OH".to_owned()], &[2026]).await?;
         assert_eq!(confirmed[0].schools[0].state.as_deref(), Some("OH"));
         assert_eq!(confirmed[0].profile_details[0].source_values["current_affiliation"]["school_state_unverified"], json!(false));
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_original_historical_a_then_legacy_profile_b_when_replayed_then_b_state_is_not_trusted()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        let (target, body) = meet();
+        let mut historical = sources::parse(&target, &body)?;
+        let school_a = historical.performances[0].school_id.clone().context("historical A")?;
+        historical.athletes[0].school_id = Some(school_a.clone());
+        historical.athletes[0].state = Some("AL".to_owned());
+        let capture = Capture { url: target.url.clone(), status: 200, content_type: "application/json".to_owned(), body: body.as_bytes().to_vec() };
+        database.persist(None, &target, &capture, &historical).await?;
+        let next = &historical.next[0];
+        let profile_body = profile(next, &current_school("999"), "");
+        let mut legacy_b = sources::parse(next, &profile_body)?;
+        legacy_b.athletes[0].source_values.as_mut().and_then(Value::as_object_mut).context("legacy profile evidence")?.remove("current_affiliation");
+        legacy_b.athletes[0].state = Some("AL".to_owned());
+        legacy_b.schools[0].state = Some("AL".to_owned());
+        let capture = Capture { url: next.url.clone(), status: 200, content_type: "text/html".to_owned(), body: profile_body.as_bytes().to_vec() };
+        database.persist(None, next, &capture, &legacy_b).await?;
+        let sticky: (String, String) = sqlx::query_as("SELECT s.source_id,p.details->>'school_id' FROM athlete_sources p JOIN schools s ON s.id=p.school_id").fetch_one(&test.pool).await?;
+        assert_eq!(sticky, (school_a, "999".to_owned()));
+        persist(&database, next, &profile_body).await?;
+        let (records, _) = database.export_snapshot(&["WI".to_owned()], &[2026]).await?;
+        assert_eq!(records.len(), 1, "uncertain B state must not exclude the athlete");
+        assert_eq!(records[0].schools[0].id, "999");
+        assert_eq!(records[0].schools[0].state, None);
+        assert_eq!(records[0].profile_details[0].source_values["current_affiliation"]["school_state_unverified"], json!(true));
+        let stored: String = sqlx::query_scalar("SELECT state FROM schools WHERE source_id='999'").fetch_one(&test.pool).await?;
+        assert_eq!(stored, "AL", "global school fact is retained");
+        assert_affiliation_workbook(&test.directory().join("sticky-a-to-b.xlsx"), &records, "Current School 999")?;
         database.close().await;
         Ok(())
     })).await

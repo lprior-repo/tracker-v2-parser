@@ -230,20 +230,41 @@ async fn affiliation_details(
     if !current {
         return Ok(details);
     }
+    let mut uncertainties: serde_json::Value = sqlx::query_scalar(
+        "SELECT COALESCE(details#>'{source_values,school_state_uncertainties}','{}'::jsonb) FROM athlete_sources WHERE id=$1",
+    )
+    .bind(profile)
+    .fetch_one(&mut *connection)
+    .await?;
     let uncertain = if athlete.state.is_none() && school.is_some() {
         sqlx::query_scalar::<_, Option<String>>(
-            "SELECT CASE WHEN COALESCE(school_id=$2 AND ( \
+            "SELECT CASE WHEN COALESCE(details#>'{source_values,school_state_uncertainties}'->>$3=(SELECT s.state FROM schools s WHERE s.id=$2) OR ((school_id=$2 OR details->>'school_id'=$3) AND ( \
              (COALESCE((details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean,FALSE) \
              AND details#>>'{source_values,current_affiliation,unverified_school_state}'=(SELECT s.state FROM schools s WHERE s.id=$2)) OR \
              (NOT COALESCE(details#>'{source_values,current_affiliation}' ? 'school_state_unverified',FALSE) \
              AND ((state IS NOT NULL AND state=(SELECT s.state FROM schools s WHERE s.id=$2)) \
-             OR details->'source_values' ? 'current_affiliation'))),FALSE) \
+             OR details->'source_values' ? 'current_affiliation')))),FALSE) \
              THEN (SELECT s.state FROM schools s WHERE s.id=$2) ELSE NULL END \
              FROM athlete_sources WHERE id=$1",
-        ).bind(profile).bind(school).fetch_one(connection).await?
+        ).bind(profile).bind(school).bind(&athlete.school_id).fetch_one(connection).await?
     } else {
         None
     };
+    let states = uncertainties
+        .as_object_mut()
+        .context("school state uncertainty evidence must be an object")?;
+    if let Some(id) = &athlete.school_id {
+        if let Some(state) = &uncertain {
+            states.insert(id.clone(), serde_json::json!(state));
+        } else if athlete.state.is_some() {
+            states.remove(id);
+        }
+    }
+    details
+        .get_mut("source_values")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("profile evidence must be an object")?
+        .insert("school_state_uncertainties".to_owned(), uncertainties);
     let affiliation = details
         .pointer_mut("/source_values/current_affiliation")
         .and_then(serde_json::Value::as_object_mut)
