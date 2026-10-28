@@ -10,32 +10,47 @@ enum Escape {
     Second(u8),
 }
 
-pub fn check(address: &str) -> Result<()> {
+pub fn check(address: &str, original: &str) -> Result<()> {
     let url = Url::parse(address).context("parsing robots policy destination")?;
     let Some(host) = url.host_str() else {
         return Ok(());
     };
+    let host = host.trim_end_matches('.');
     if host != "milesplit.com" && !host.ends_with(".milesplit.com") {
         return Ok(());
     }
     let path = decoded_path(url.path()).map_err(|error| {
-        stop(&url).context(format!("ambiguous MileSplit robots policy path: {error:#}"))
+        stop(&url, original).context(format!("ambiguous MileSplit robots policy path: {error:#}"))
     })?;
     let path = path.trim_start_matches('/').to_ascii_lowercase();
     if ["rankings", "virtual-meets", "api/", "contact"]
         .iter()
         .any(|prefix| path.starts_with(prefix))
     {
-        return Err(stop(&url).context(
+        return Err(stop(&url, original).context(
             "MileSplit published robots restrictions prohibit this route; subdomains remain conservatively restricted pending host-specific policy review",
         ));
     }
     Ok(())
 }
 
-fn stop(url: &Url) -> anyhow::Error {
+fn stop(url: &Url, original: &str) -> anyhow::Error {
+    let Some(mut destination) = [url.as_str(), original]
+        .into_iter()
+        .filter_map(|address| Url::parse(address).ok())
+        .find(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+    else {
+        return anyhow::anyhow!("robots restriction has no HTTP authority; human review required");
+    };
+    let host = destination
+        .host_str()
+        .map(|host| host.trim_end_matches('.').to_owned());
+    if let Err(error) = destination.set_host(host.as_deref()) {
+        return anyhow::anyhow!(error)
+            .context("invalid robots stop authority; human review required");
+    }
     anyhow::Error::new(AccessStop {
-        origin: url.origin().ascii_serialization(),
+        origin: destination.origin().ascii_serialization(),
         status: None,
     })
 }

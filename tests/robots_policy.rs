@@ -147,3 +147,78 @@ async fn given_disallowed_token_preflight_when_public_profile_is_requested_then_
     assert!(failure.capture.is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn given_trailing_dot_contact_authority_when_acquired_then_equivalent_host_is_stopped()
+-> Result<()> {
+    let target = Target::get(
+        Source::MileSplit,
+        PageKind::Contacts,
+        "https://www.milesplit.com./api/v1/test".into(),
+        PageContext::default(),
+    );
+    let mut transport = guarded_transport()?;
+    let failure = transport
+        .fetch(&target)
+        .await
+        .expect_err("trailing-dot policy stop");
+    transport.close().await?;
+    assert!(failure.blocked);
+    assert_eq!(
+        failure.stopped_origin.as_deref(),
+        Some("https://www.milesplit.com")
+    );
+    assert!(failure.capture.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_non_http_policy_preflight_when_persisted_then_original_http_authority_survives()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            for (index, address) in [
+                "ftp://www.milesplit.com/api/v1/test",
+                "file://www.milesplit.com/api/v1/test",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let original = Target::get(
+                    Source::MileSplit,
+                    PageKind::Contacts,
+                    format!("https://school-{index}.example.edu/staff"),
+                    PageContext::default(),
+                );
+                database.enqueue(&[original.clone()], false).await?;
+                let job = database
+                    .next_job(None, 3, &[])
+                    .await?
+                    .context("contact job")?;
+                let mut requested = original;
+                requested.token_url = Some(address.into());
+                let mut transport = guarded_transport()?;
+                let failure = transport
+                    .fetch(&requested)
+                    .await
+                    .expect_err("opaque policy stop");
+                transport.close().await?;
+                assert!(failure.blocked);
+                let expected = format!("https://school-{index}.example.edu");
+                assert_eq!(failure.stopped_origin.as_deref(), Some(expected.as_str()));
+                database.fail_acquisition(&job, &failure).await?;
+                let state: (String, String) = sqlx::query_as(
+                    "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",
+                )
+                .bind(job.id)
+                .fetch_one(&test.pool)
+                .await?;
+                assert_eq!(state, ("blocked".into(), expected));
+            }
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
