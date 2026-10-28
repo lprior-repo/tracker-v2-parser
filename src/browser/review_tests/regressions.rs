@@ -312,3 +312,77 @@ async fn given_file_login_redirect_when_policy_rejects_then_original_authority_r
     assert_eq!(requests.len(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn given_robots_redirect_when_authority_has_trailing_dot_then_stop_is_normalized()
+-> Result<()> {
+    let peer = Fixture::start(BTreeMap::new()).await?;
+    let port = url::Url::parse(&peer.origin)?
+        .port()
+        .context("fixture port")?;
+    let address = format!("http://www.milesplit.com.:{port}/api/v1/test");
+    let failure = robots_redirect(&address, Some(url::Url::parse(&address)?.origin())).await?;
+    let requests = peer.recorded()?;
+    let connections = peer.connections.load(Ordering::SeqCst);
+    peer.close().await?;
+    assert!(failure.blocked);
+    assert_eq!(
+        failure.stopped_origin,
+        Some(format!("http://www.milesplit.com:{port}"))
+    );
+    assert!(requests.is_empty());
+    assert_eq!(connections, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_non_http_robots_redirect_when_rejected_then_http_stop_remains_durable() -> Result<()>
+{
+    for address in [
+        "ftp://www.milesplit.com/api/v1/test",
+        "file://www.milesplit.com/api/v1/test",
+    ] {
+        let failure = robots_redirect(address, None).await?;
+        assert!(failure.blocked);
+        let origin = failure.stopped_origin.context("HTTP stop authority")?;
+        let url = url::Url::parse(&origin)?;
+        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+    }
+    Ok(())
+}
+
+async fn robots_redirect(
+    address: &str,
+    peer: Option<url::Origin>,
+) -> Result<crate::transport::Failure> {
+    let fixture = Fixture::start(BTreeMap::from([(
+        "/redirect".into(),
+        (
+            302,
+            "text/plain".into(),
+            String::new(),
+            format!("Location: {address}\r\n"),
+        ),
+    )]))
+    .await?;
+    let profile = tempfile::tempdir()?;
+    let mut browser = browser(&fixture.origin, profile.path()).await?;
+    browser.additional_origin = peer;
+    let result = browser
+        .fetch(
+            &target(&fixture.origin, "/redirect"),
+            &BTreeMap::new(),
+            Duration::ZERO,
+        )
+        .await;
+    let requests = fixture.recorded()?;
+    let closed = browser.close().await;
+    let fixture_closed = fixture.close().await;
+    closed.and(fixture_closed)?;
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("GET /redirect "));
+    let error = result.expect_err("robots redirect must preserve typed stop");
+    assert!(error.is::<crate::transport::AccessStop>(), "{error:#}");
+    Ok(crate::transport::failure(&error))
+}
