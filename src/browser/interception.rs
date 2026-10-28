@@ -228,7 +228,8 @@ async fn drain(tasks: &mut JoinSet<Result<usize>>, cancelled: bool) -> Result<()
 fn joined(result: Option<Result<Result<usize>, JoinError>>, cancelled: bool) -> Result<()> {
     match result {
         Some(Ok(result)) => {
-            tracing::debug!(completed = result?, "browser interception task drained");
+            let completed = result.context("browser acquisition incomplete: interception task failed")?;
+            tracing::debug!(completed, "browser interception task drained");
             Ok(())
         }
         Some(Err(error)) if cancelled && error.is_cancelled() => Ok(()),
@@ -287,3 +288,6 @@ async fn fulfill(
         .context("fulfilling browser request timed out")??;
     Ok(())
 }
+
+#[cfg(test)]
+mod review_tests;

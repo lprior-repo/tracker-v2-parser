@@ -44,12 +44,15 @@ fn handler_result(
 ) -> Result<()> {
     match result {
         Ok(()) if shutdown_requested => Ok(()),
-        Ok(()) => Err(anyhow!("Chromium event handler ended without owned shutdown")),
-        Err(error) if shutdown_requested
-            && matches!(&error, chromiumoxide::error::CdpError::Ws(_)) => {
-                tracing::debug!(%error, "owned Chromium transport closed during requested shutdown");
-                Ok(())
-            }
+        Ok(()) => Err(anyhow!(
+            "Chromium event handler ended without owned shutdown"
+        )),
+        Err(error)
+            if shutdown_requested && matches!(&error, chromiumoxide::error::CdpError::Ws(_)) =>
+        {
+            tracing::debug!(%error, "owned Chromium transport closed during requested shutdown");
+            Ok(())
+        }
         Err(error) => Err(anyhow!(error).context("Chromium event handler failed")),
     }
 }

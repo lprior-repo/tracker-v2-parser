@@ -44,6 +44,24 @@ async fn complete_seed_pages(database: &Database) -> Result<()> {
     Ok(())
 }
 
+fn failure_target(id: &str) -> Result<track_scrapper_v2::model::Target> {
+    track_scrapper_v2::sources::athleticnet::athlete_target(
+        id, Some("WI"), track_scrapper_v2::model::Sport::Outdoor,
+    )
+}
+
+async fn missing_capture_failure(
+    test: &support::Scenario,
+    target: &track_scrapper_v2::model::Target,
+) -> Result<()> {
+    let input = test.directory().join("missing-acquisition-capture.json");
+    let error = track_scrapper_v2::runner::Runner::new()
+        .replay(&track_scrapper_v2::config::Config::default(), &test.url, &input, target.clone())
+        .await.err().context("missing replay capture must fail acquisition")?;
+    assert!(format!("{error:#}").contains("opening replay input"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn given_real_career_when_replayed_twice_then_identity_marks_and_checkpoint_are_unique()
 -> Result<()> {
@@ -283,25 +301,25 @@ async fn given_nonblocked_acquisition_failure_when_scraping_then_three_attempts_
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
-            let mut page = target(Source::AthleticNet, "11");
-            page.context.state = Some("WI".to_owned());
-            page.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
+            let page = failure_target("11")?;
             database.enqueue(std::slice::from_ref(&page), false).await?;
+            for expected in 1..=3 {
+                let job = database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()])
+                    .await?.context("retryable acquisition checkpoint")?;
+                assert_eq!(job.target.url, page.url);
+                missing_capture_failure(test, &job.target).await?;
+                let state: (String, i32, bool, bool) = sqlx::query_as(
+                    "SELECT status,attempts,last_success IS NULL,last_error LIKE 'opening replay input %' FROM scrape_pages WHERE id=$1",
+                ).bind(job.id).fetch_one(&test.pool).await?;
+                assert_eq!(state, ("failed".to_owned(), expected, true, true));
+            }
+            assert!(database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()]).await?.is_none());
             let output = test.cli(&["scrape"]).await?;
             assert!(!output.status.success());
-            let state: (String, i32, Option<String>) =
-                sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE url=$1")
-                    .bind(&page.url)
-                    .fetch_one(&test.pool)
-                    .await?;
-            assert_eq!(state.0, "failed");
-            assert_eq!(state.1, 3);
-            assert!(
-                state
-                    .2
-                    .as_deref()
-                    .is_some_and(|error| error.contains("unsupported port"))
-            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains("exhausted unfinished checkpoints"));
+            let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE url=$1")
+                .bind(&page.url).fetch_one(&test.pool).await?;
+            assert_eq!(attempts, 3);
             database.close().await;
             Ok(())
         })
@@ -316,23 +334,24 @@ async fn given_failed_page_when_other_page_is_pending_then_it_is_attempted_befor
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
-            let mut first = target(Source::AthleticNet, "11");
-            let mut second = target(Source::AthleticNet, "12");
-            first.context.state = Some("WI".to_owned());
-            second.context.state = Some("WI".to_owned());
-            first.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
-            second.token_url = first.token_url.clone();
+            let first = failure_target("11")?;
+            let second = failure_target("12")?;
             database.enqueue(&[first.clone(), second.clone()], false).await?;
-            let config = test.directory().join("two-pages.toml");
-            support::write_config(&config)?;
-            let content = std::fs::read_to_string(&config)?.replace("max_pages = 10", "max_pages = 2");
-            std::fs::write(&config, content)?;
-            let output = test.cli(&["scrape", "--config", config.to_str().context("UTF-8 config")?]).await?;
-            assert!(!output.status.success());
+            let first_job = database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()])
+                .await?.context("first acquisition checkpoint")?;
+            assert_eq!(first_job.target.url, first.url);
+            missing_capture_failure(test, &first_job.target).await?;
+            let next = database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()])
+                .await?.context("untouched checkpoint before failed retry")?;
+            assert_eq!(next.target.url, second.url);
+            missing_capture_failure(test, &next.target).await?;
             let states: Vec<(String, i32, Option<String>)> = sqlx::query_as(
                 "SELECT status,attempts,last_success::text FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
             ).bind(&first.url).bind(&second.url).fetch_all(&test.pool).await?;
             assert_eq!(states, vec![("failed".into(), 1, None), ("failed".into(), 1, None)]);
+            let retry = database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()])
+                .await?.context("failed checkpoint remains retryable after untouched page")?;
+            assert_eq!(retry.id, first_job.id);
             database.close().await;
             Ok(())
         })
@@ -346,14 +365,19 @@ async fn given_exhausted_page_when_other_page_is_pending_then_other_page_is_drai
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             complete_seed_pages(&database).await?;
-            let mut first = target(Source::AthleticNet, "11");
-            first.context.state = Some("WI".to_owned());
-            let mut second = target(Source::AthleticNet, "12");
-            second.context.state = Some("WI".to_owned());
-            second.token_url = Some("https://www.athletic.net:444/preflight".to_owned());
+            let first = failure_target("11")?;
+            let second = failure_target("12")?;
             database.enqueue(&[first.clone(), second.clone()], false).await?;
-            sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error='previous failure' WHERE url=$1")
-                .bind(&first.url).execute(&test.pool).await?;
+            for _ in 0..3 {
+                missing_capture_failure(test, &first).await?;
+            }
+            for _ in 0..3 {
+                let next = database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()])
+                    .await?.context("pending page is drained despite earlier exhausted checkpoint")?;
+                assert_eq!(next.target.url, second.url);
+                missing_capture_failure(test, &next.target).await?;
+            }
+            assert!(database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()]).await?.is_none());
             let output = test.cli(&["scrape"]).await?;
             assert!(!output.status.success());
             assert!(String::from_utf8_lossy(&output.stderr).contains("exhausted unfinished checkpoints"));

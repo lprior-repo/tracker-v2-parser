@@ -1,13 +1,15 @@
+mod http;
 mod observe;
 mod routing;
+mod status;
+
+#[cfg(test)]
+mod test_support;
 
 use std::{
     collections::BTreeMap,
     net::TcpListener as StdListener,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
@@ -25,80 +27,13 @@ use tokio::{
 use tracing::Instrument;
 
 use observe::{Observation, PendingSocket};
+use status::Command;
+pub(super) use status::NativeStatus;
 
 const MAX_CONNECTIONS: usize = 512;
 const MAX_COMMANDS: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(5);
 const ROUTE_DEADLINE: Duration = Duration::from_secs(3);
-
-enum Command {
-    #[cfg(test)]
-    Begin {
-        local_origins: Vec<url::Origin>,
-        reply: oneshot::Sender<Result<usize>>,
-    },
-    Drain(oneshot::Sender<Result<usize>>),
-    Stop,
-    #[cfg(test)]
-    Hold {
-        ready: oneshot::Sender<()>,
-        release: oneshot::Receiver<()>,
-    },
-}
-
-pub(super) struct NativeStatus {
-    accepted: AtomicUsize,
-    denied: AtomicUsize,
-    probes: AtomicUsize,
-    rejected_connects: AtomicUsize,
-    stopped: AtomicBool,
-    control: mpsc::Sender<Command>,
-}
-
-impl NativeStatus {
-    #[cfg(test)]
-    pub async fn begin(&self, local_origins: Vec<url::Origin>) -> Result<usize> {
-        self.request(|reply| Command::Begin {
-            local_origins,
-            reply,
-        })
-        .await
-    }
-
-    pub async fn checkpoint(&self) -> Result<usize> {
-        self.request(Command::Drain).await
-    }
-
-    pub fn counts(&self) -> (usize, usize, usize) {
-        (
-            self.accepted.load(Ordering::Acquire),
-            self.probes.load(Ordering::Acquire),
-            self.rejected_connects.load(Ordering::Acquire),
-        )
-    }
-
-    async fn request(
-        &self,
-        command: impl FnOnce(oneshot::Sender<Result<usize>>) -> Command,
-    ) -> Result<usize> {
-        ensure!(
-            !self.stopped.load(Ordering::Acquire),
-            "native browser transport sink is unavailable"
-        );
-        timeout(DEADLINE, async {
-            let (reply, received) = oneshot::channel();
-            self.control
-                .send(command(reply))
-                .await
-                .context("requesting native listener checkpoint")?;
-            received
-                .await
-                .context("native listener stopped before drain acknowledgement")?
-        })
-        .await
-        .context("native listener checkpoint timed out")?
-    }
-}
 
 pub(super) struct NativeSink {
     listener: Arc<StdListener>,
@@ -122,14 +57,7 @@ impl NativeSink {
         let ready = Arc::new(listener.into_std()?);
         let listener = TcpListener::from_std(ready.try_clone()?)?;
         let (control, commands) = mpsc::channel(1);
-        let status = Arc::new(NativeStatus {
-            accepted: AtomicUsize::new(0),
-            denied: AtomicUsize::new(0),
-            probes: AtomicUsize::new(0),
-            rejected_connects: AtomicUsize::new(0),
-            stopped: AtomicBool::new(false),
-            control,
-        });
+        let status = Arc::new(NativeStatus::new(control));
         let actor = Actor {
             listener,
             ready: Arc::clone(&ready),
@@ -188,7 +116,9 @@ impl NativeSink {
                 match self.tasks.join_next().await {
                     Some(Err(error)) if error.is_cancelled() => {}
                     Some(Err(error)) => {
-                        return Err(anyhow!(error).context("draining aborted native transport sink"));
+                        return Err(
+                            anyhow!(error).context("draining aborted native transport sink")
+                        );
                     }
                     Some(Ok(result)) => {
                         result?;
@@ -200,31 +130,6 @@ impl NativeSink {
         };
         drop(self.listener);
         stopping.and(joined)
-    }
-
-    #[cfg(test)]
-    pub fn denied_connections(&self) -> usize {
-        self.status.denied.load(Ordering::Acquire)
-    }
-
-    #[cfg(test)]
-    pub fn address(&self) -> Result<std::net::SocketAddr> {
-        Ok(self.listener.local_addr()?)
-    }
-
-    #[cfg(test)]
-    pub async fn pause(&self) -> Result<oneshot::Sender<()>> {
-        let (ready, observed) = oneshot::channel();
-        let (release, released) = oneshot::channel();
-        self.status
-            .control
-            .send(Command::Hold {
-                ready,
-                release: released,
-            })
-            .await?;
-        observed.await?;
-        Ok(release)
     }
 }
 
@@ -272,9 +177,7 @@ impl Actor {
             Observation::Probe => {
                 self.status.probes.fetch_add(1, Ordering::AcqRel);
             }
-            Observation::Request => {
-                self.status.denied.fetch_add(1, Ordering::AcqRel);
-            }
+            Observation::Request(kind) => self.status.record_denial(kind),
             Observation::Connect(authority) => {
                 let count = self.connects.entry(authority).or_insert(0);
                 *count = count.saturating_add(1);

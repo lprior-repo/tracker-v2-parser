@@ -34,6 +34,10 @@ struct Fixture {
 
 impl Fixture {
     async fn start(routes: Routes) -> Result<Self> {
+        Self::start_with_gate(routes, None).await
+    }
+
+    async fn start_with_gate(routes: Routes, gate: Option<Arc<Notify>>) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -62,6 +66,7 @@ impl Fixture {
                     Arc::clone(&observed),
                     Arc::clone(&running),
                     Arc::clone(&notifications),
+                    gate.clone(),
                 )
             })
             .try_buffer_unordered(8)
@@ -147,6 +152,7 @@ async fn serve(
     requests: Arc<Mutex<Vec<String>>>,
     active: Arc<AtomicUsize>,
     changed: Arc<Notify>,
+    gate: Option<Arc<Notify>>,
 ) -> Result<()> {
     active.fetch_add(1, Ordering::SeqCst);
     let _connection = Connection {
@@ -175,12 +181,19 @@ async fn serve(
         .map_err(|error| anyhow::anyhow!(error.to_string()))?
         .push(request.clone());
     changed.notify_one();
+    if path == "/capture-ready"
+        && let Some(gate) = gate
+    {
+        timeout(Duration::from_secs(15), gate.notified())
+            .await
+            .context("fixture capture-readiness gate timed out")?;
+    }
     if path == "/large-challenge" {
         socket.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 16777217\r\nConnection: close\r\n\r\n").await?;
         return Ok(());
     }
     if path == "/hang" {
-        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: close\r\n\r\n").await?;
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 99999\r\nConnection: keep-alive\r\n\r\n").await?;
         match socket.read(&mut buffer).await {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
@@ -703,13 +716,18 @@ async fn given_external_fetch_cancellation_when_caller_drops_then_owned_tasks_pa
 #[tokio::test]
 async fn given_unfinished_subresource_when_drain_deadline_expires_then_acquisition_is_incomplete_not_success()
 -> Result<()> {
-    let safe = Fixture::start(BTreeMap::from([(
-        "/page".into(),
-        html("<script>fetch('/hang').catch(() => {})</script>".into()),
-    )]))
+    let release = Arc::new(Notify::new());
+    let safe = Fixture::start_with_gate(
+        BTreeMap::from([
+            ("/page".into(), html("<link rel='icon' href='data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22/%3E'><script>fetch('/hang').catch(() => {})</script><script src='/capture-ready'></script>".into())),
+            ("/capture-ready".into(), (200, "text/javascript".into(), String::new(), String::new())),
+        ]),
+        Some(Arc::clone(&release)),
+    )
     .await?;
     let profile = tempfile::tempdir()?;
     let browser = browser(&safe.origin, profile.path()).await?;
+    let initial_pages = browser.chromium.pages().await?.len();
     let scenario = async {
         let target = target(&safe.origin, "/page");
         let headers = BTreeMap::new();
@@ -718,11 +736,23 @@ async fn given_unfinished_subresource_when_drain_deadline_expires_then_acquisiti
             result = &mut pending => return Err(anyhow::anyhow!("fetch ended before hanging subresource was admitted: {result:?}")),
             observed = safe.wait_for_request("GET /hang ") => observed?,
         }
-        let error = pending.await.err().context("forced drain must not return successful capture")?;
-        assert!(format!("{error:#}").contains("acquisition incomplete"));
+        let ready = safe.wait_for_request("GET /capture-ready ").await;
+        release.notify_one();
+        ready?;
+        let error = match pending.await {
+            Err(error) => error,
+            Ok(capture) => return Err(anyhow::anyhow!(
+                "forced drain must not return successful capture: status={}, url={}, body={}",
+                capture.status, capture.url, String::from_utf8_lossy(&capture.body),
+            )),
+        };
+        let detail = format!("{error:#}");
+        assert!(detail.contains("acquisition incomplete"), "{detail}");
+        assert!(detail.contains("interception exceeded drain deadline"), "{detail}");
         assert!(browser.fetches.lock().await.is_empty());
         safe.wait_for_idle().await?;
         assert_eq!(safe.active.load(Ordering::SeqCst), 0);
+        assert_eq!(browser.chromium.pages().await?.len(), initial_pages);
         Ok::<_, anyhow::Error>(())
     }.await;
     let closed = browser.close().await;

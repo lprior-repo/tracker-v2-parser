@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
+use rustix::fs::{CWD, RenameFlags, renameat_with};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
@@ -103,24 +104,117 @@ fn prepare_manifest(
 }
 
 fn rollback(published: &[(&Path, &Path)]) -> Result<()> {
-    published
+    let errors = published
         .iter()
         .rev()
-        .try_for_each(|(temporary, destination)| {
-            let own = fs::metadata(temporary)?;
-            let current = match fs::symlink_metadata(destination) {
-                Ok(metadata) => metadata,
-                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-                Err(error) => return Err(error.into()),
-            };
-            anyhow::ensure!(
-                own.dev() == current.dev() && own.ino() == current.ino(),
-                "published path changed; refusing to remove {}",
-                destination.display()
-            );
-            fs::remove_file(destination)?;
-            sync_parent(destination)
-        })
+        .filter_map(|(temporary, destination)| rollback_entry(temporary, destination).err())
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(errors.is_empty(), "{}", errors.join("; "));
+    Ok(())
+}
+
+struct RollbackClaim {
+    expected: fs::Metadata,
+    destination: PathBuf,
+    directory: PathBuf,
+    entry: PathBuf,
+}
+
+fn rollback_entry(temporary: &Path, destination: &Path) -> Result<()> {
+    if let Some(claim) = claim_published(temporary, destination)? {
+        finish_claim(&claim)?;
+    }
+    Ok(())
+}
+
+fn claim_published(temporary: &Path, destination: &Path) -> Result<Option<RollbackClaim>> {
+    let expected = fs::metadata(temporary)?;
+    let sequence = super::TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let name = destination
+        .file_name()
+        .context("published file name")?
+        .to_string_lossy();
+    let directory = destination.with_file_name(format!(
+        ".{name}.rollback.{}.{}",
+        std::process::id(),
+        sequence
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    if let Err(error) = sync_parent(&directory) {
+        fs::remove_dir(&directory).with_context(|| {
+            format!(
+                "removing empty rollback directory {}; initial directory sync failed: {error:#}",
+                directory.display()
+            )
+        })?;
+        return Err(error);
+    }
+    let entry = directory.join("entry");
+    let result = renameat_with(CWD, destination, CWD, &entry, RenameFlags::NOREPLACE);
+    if let Err(error) = result {
+        fs::remove_dir(&directory).with_context(|| {
+            format!(
+                "removing empty rollback directory {}; capture failed: {error}",
+                directory.display()
+            )
+        })?;
+        sync_parent(&directory)?;
+        if error == rustix::io::Errno::NOENT {
+            return Ok(None);
+        }
+        return Err(error)
+            .with_context(|| format!("claiming published path {}", destination.display()));
+    }
+    let claim = RollbackClaim {
+        expected,
+        destination: destination.to_path_buf(),
+        directory,
+        entry,
+    };
+    sync_directory(&claim.directory)
+        .and_then(|()| sync_directory(parent(&claim.destination)))
+        .with_context(|| {
+            format!(
+                "syncing rollback claim; entry retained for recovery at {}",
+                claim.entry.display()
+            )
+        })?;
+    Ok(Some(claim))
+}
+
+fn finish_claim(claim: &RollbackClaim) -> Result<()> {
+    let current = fs::symlink_metadata(&claim.entry).with_context(|| {
+        format!(
+            "inspecting rollback entry retained at {}",
+            claim.entry.display()
+        )
+    })?;
+    if claim.expected.dev() == current.dev() && claim.expected.ino() == current.ino() {
+        fs::remove_file(&claim.entry)
+            .with_context(|| format!("removing own rollback entry {}", claim.entry.display()))?;
+        return finish_claim_directory(claim);
+    }
+    renameat_with(CWD, &claim.entry, CWD, &claim.destination, RenameFlags::NOREPLACE)
+        .with_context(|| format!("published path changed; refusing to overwrite {}; unrelated entry retained for recovery at {}", claim.destination.display(), claim.entry.display()))?;
+    sync_parent(&claim.destination)?;
+    finish_claim_directory(claim)?;
+    anyhow::bail!(
+        "published path changed; unrelated entry restored without overwrite: {}",
+        claim.destination.display()
+    )
+}
+
+fn finish_claim_directory(claim: &RollbackClaim) -> Result<()> {
+    sync_directory(&claim.directory)
+        .with_context(|| format!("syncing rollback directory {}", claim.directory.display()))?;
+    fs::remove_dir(&claim.directory).with_context(|| {
+        format!(
+            "removing empty rollback directory {}",
+            claim.directory.display()
+        )
+    })?;
+    sync_parent(&claim.directory)
 }
 
 fn sync_destinations(destinations: &[PathBuf]) -> Result<()> {
@@ -130,14 +224,19 @@ fn sync_destinations(destinations: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-fn sync_parent(path: &Path) -> Result<()> {
-    let parent = match path.parent() {
+fn parent(path: &Path) -> &Path {
+    match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
-    };
-    File::open(parent)?
-        .sync_all()
-        .context("syncing export directory")
+    }
+}
+
+fn sync_parent(path: &Path) -> Result<()> {
+    sync_directory(parent(path)).context("syncing export directory")
+}
+
+fn sync_directory(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
 }
 
 struct DigestWriter(Sha256);
@@ -152,3 +251,6 @@ impl Write for DigestWriter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

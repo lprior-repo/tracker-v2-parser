@@ -731,3 +731,110 @@ async fn given_historical_school_when_snapshot_scopes_and_budgets_main_rows_then
         Ok(())
     })).await
 }
+
+#[tokio::test]
+async fn given_mixed_coverage_backlog_when_batches_cross_phases_and_writer_updates_then_snapshot_preserves_every_issue() -> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        sqlx::query("INSERT INTO scrape_pages(source,page_key,url,cursor,status,notes) SELECT 'milesplit',lpad(number::text,64,'0'),'https://www.milesplit.com/athletes/' || number,'{\"context\":{\"state\":\"WI\"}}','pending',ARRAY['published-note','published-note'] FROM generate_series(1,2001) number").execute(database.pool()).await?;
+        sqlx::query("INSERT INTO results(source_result_key,source,event,raw_mark,sport,status,is_personal_record,is_relay,source_url,raw) VALUES (repeat('c',64),'milesplit','100 Meters','12.34','outdoor','recorded',false,false,'https://www.milesplit.com/athletes/2001','{}')").execute(database.pool()).await?;
+        let mut snapshot = database.begin_export_snapshot(&["WI".to_owned()], &[2027]).await?;
+        let mut issues = snapshot.next_issues().await?.context("first status batch")?;
+        assert_eq!(issues.len(), EXPORT_BATCH_ROWS);
+        assert!(issues.iter().all(|issue| issue.detail == "page pending"));
+        sqlx::query("UPDATE scrape_pages SET status='succeeded',notes=ARRAY['changed-note']").execute(database.pool()).await?;
+        sqlx::query("UPDATE results SET event='Changed event'").execute(database.pool()).await?;
+        while let Some(batch) = snapshot.next_issues().await? {
+            assert!(batch.len() <= EXPORT_BATCH_ROWS);
+            assert!(batch.iter().map(|issue| issue.source.len() + issue.url.len() + issue.detail.len()).sum::<usize>() <= EXPORT_BATCH_BYTES);
+            issues.extend(batch);
+        }
+        assert_eq!(issues.len(), 6_004);
+        assert_eq!(issues.iter().filter(|issue| issue.detail == "page pending").count(), 2_001);
+        assert_eq!(issues.iter().filter(|issue| issue.detail == "page note: published-note").count(), 4_002);
+        assert_eq!(issues.iter().filter(|issue| issue.detail == "unassigned result | 100 Meters | 12.34 | recorded").count(), 1);
+        assert_eq!(issues.iter().filter(|issue| issue.url.ends_with("/2001") && issue.detail == "page note: published-note").count(), 2);
+        assert!(issues.iter().all(|issue| !issue.detail.contains("Changed") && !issue.detail.contains("changed-note")));
+        snapshot.finish().await?;
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_small_issues_in_all_phases_when_exporting_then_requested_single_workbook_contains_every_issue() -> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        seed_athletes(&database, 1).await?;
+        seed_notes(&database, 1, "published-note").await?;
+        sqlx::query("UPDATE scrape_pages SET status='pending'").execute(database.pool()).await?;
+        sqlx::query("INSERT INTO results(source_result_key,source,event,raw_mark,sport,status,is_personal_record,is_relay,source_url,raw) VALUES (repeat('b',64),'milesplit','100 Meters','12.34','outdoor','recorded',false,false,'https://www.milesplit.com/athletes/notes','{}')").execute(database.pool()).await?;
+        let output = test.directory().join("all-phases.xlsx");
+        let parts = database.write_export(&output, &options()).await?;
+        assert_eq!(parts, vec![output.clone()]);
+        assert!(!test.directory().join("all-phases-0001.xlsx").exists());
+        assert_eq!(workbook_names(&parts)?, vec!["Athlete 1"]);
+        let mut workbook = open_workbook_auto(&output)?;
+        let issues = workbook.worksheet_range("Issues")?;
+        let cells = issues.rows().flatten().map(ToString::to_string).collect::<Vec<_>>();
+        for published in ["page pending", "page note: published-note", "unassigned result | 100 Meters | 12.34 | recorded"] {
+            assert!(cells.iter().any(|cell| cell.contains(published)), "missing {published}");
+        }
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_issue_byte_boundary_between_phases_when_reading_then_next_phase_is_deferred_without_limit_error() -> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        seed_notes(&database, 1, &"x".repeat(EXPORT_BATCH_BYTES / 2)).await?;
+        sqlx::query("UPDATE scrape_pages SET status='failed',last_error=repeat('y',$1::integer)")
+            .bind(i32::try_from(EXPORT_BATCH_BYTES / 2)?).execute(database.pool()).await?;
+        let mut snapshot = database.begin_export_snapshot(&["WI".to_owned()], &[2027]).await?;
+        let first = snapshot.next_issues().await?.context("status batch")?;
+        assert_eq!(first.len(), 1);
+        assert!(first[0].detail.starts_with("page failed: "));
+        let second = snapshot.next_issues().await?.context("deferred note batch")?;
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].detail, format!("page note: {}", "x".repeat(EXPORT_BATCH_BYTES / 2)));
+        assert!(snapshot.next_issues().await?.is_none());
+        snapshot.finish().await?;
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_current_school_and_factual_athlete_states_when_scoped_then_school_state_wins_and_unknowns_remain_reviewable() -> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        sqlx::query("INSERT INTO athletes(name,state,graduation_year) VALUES ('Known Alabama','AL',2027),('Known Wisconsin',U&'\\00A0wi\\2003',2027),('Unknown State',NULL,2027),('Blank State',U&'\\2003\\00A0',2027),('Current WI overrides AL','AL',2027),('Current AL overrides WI','WI',2027),('Unknown Current School uses WI','WI',2027),('Unknown Current School uses AL','AL',2027),('Unknown Current School no state',NULL,2027)").execute(database.pool()).await?;
+        sqlx::query("INSERT INTO schools(source,source_id,name,state,source_url) VALUES ('athleticnet','wi','Current Wisconsin',U&'\\2003wI\\00A0','https://www.athletic.net/team/1'),('athleticnet','al','Current Alabama','AL','https://www.athletic.net/team/2'),('athleticnet','unknown','Current Unknown',U&'\\2003\\00A0','https://www.athletic.net/team/3')").execute(database.pool()).await?;
+        sqlx::query("INSERT INTO athlete_sources(athlete_id,source,source_id,school_id) SELECT id,'athleticnet',id::text,CASE WHEN name='Current WI overrides AL' THEN (SELECT id FROM schools WHERE source_id='wi') WHEN name='Current AL overrides WI' THEN (SELECT id FROM schools WHERE source_id='al') WHEN name LIKE 'Unknown Current School %' THEN (SELECT id FROM schools WHERE source_id='unknown') END FROM athletes").execute(database.pool()).await?;
+        let mut historical = records::performance("12.34");
+        historical.school_id = Some("wi".to_owned());
+        sqlx::query("INSERT INTO results(source_result_key,athlete_id,athlete_source_id,represented_school_id,source,event,raw_mark,sport,status,is_personal_record,is_relay,source_url,raw) SELECT repeat('d',64),p.athlete_id,p.id,(SELECT id FROM schools WHERE source_id='wi'),p.source,'100 Meters','12.34','outdoor','recorded',false,false,'https://www.athletic.net/athlete/11',$1::jsonb FROM athlete_sources p JOIN athletes a ON a.id=p.athlete_id WHERE a.name='Known Alabama'").bind(serde_json::to_value(historical)?).execute(database.pool()).await?;
+        let expected_wi = vec!["Known Wisconsin", "Unknown State", "Blank State", "Current WI overrides AL", "Unknown Current School uses WI", "Unknown Current School no state"];
+        let selected = database.athlete_records_for(&["\u{00a0}Wi\u{2003}".to_owned()], &[2027]).await?;
+        assert_eq!(selected.iter().map(|athlete| athlete.name.as_str()).collect::<Vec<_>>(), expected_wi);
+        let (snapshot, _) = database.export_snapshot(&["WI".to_owned()], &[2027]).await?;
+        assert_eq!(snapshot.iter().map(|athlete| athlete.name.as_str()).collect::<Vec<_>>(), expected_wi);
+        for unknown in ["Known Wisconsin", "Unknown State", "Blank State", "Unknown Current School no state"] {
+            assert!(snapshot.iter().find(|athlete| athlete.name == unknown).context("retained review athlete")?.needs_review);
+        }
+        let (alabama, _) = database.export_snapshot(&["AL".to_owned()], &[2027]).await?;
+        assert_eq!(alabama.iter().map(|athlete| athlete.name.as_str()).collect::<Vec<_>>(), vec!["Known Alabama", "Unknown State", "Blank State", "Current AL overrides WI", "Unknown Current School uses AL", "Unknown Current School no state"]);
+        let historical = alabama.iter().find(|athlete| athlete.name == "Known Alabama").context("historical athlete")?;
+        assert!(historical.schools.is_empty());
+        assert_eq!(historical.performances.len(), 1);
+        assert_eq!(historical.performances[0].performance.school_id.as_deref(), Some("wi"));
+        let mut export_options = options();
+        export_options.rows_per_file = 100;
+        let paths = database.write_export(&test.directory().join("state-fallback.xlsx"), &export_options).await?;
+        assert_eq!(workbook_names(&paths)?, expected_wi);
+        database.close().await;
+        Ok(())
+    })).await
+}

@@ -49,9 +49,12 @@ handling. Export reads one repeatable-read, read-only snapshot without scraping
 or migrating. It stages and reopens new XLSX files before non-overwriting
 publication. A completion manifest is published last, listing every part, byte
 length and SHA-256. An absent manifest or mismatched part is not a completed set.
-Ordinary publication errors remove only this invocation's own links; abrupt
-process death can leave unmanifested partial files, which are not automatically
-deleted. Choose a new output name rather than overwriting another file.
+Ordinary rollback atomically claims this invocation's visible entries before
+checking ownership. Concurrent replacements are restored without overwriting a
+newer destination; if restoration conflicts, the unrelated entry is retained at
+the recovery path reported by the error. Abrupt process death can leave
+unmanifested partial files, which are not automatically deleted. Choose a new
+output name rather than overwriting another file.
 
 The main sheet has one row per selected canonical athlete ID. Only explicitly
 published high-school observations compete for PRs. All-level, middle-school,
@@ -242,6 +245,8 @@ from the output. The collecting API also has a 32 MiB/10,000-item total cap; the
 CLI streams batches. These are application admission limits, not a PostgreSQL
 peak-memory guarantee: PostgreSQL can materialize one stored JSONB/varlena value
 before measuring it. At most 10,000 workbook parts can be staged.
+Coverage is read in bounded status/note/unassigned phases, filling batches across
+phase boundaries; exact page-URL lookups use a crash-safe PostgreSQL hash index.
 
 
 Scraping backfills contact checkpoints from existing in-scope athletic-provider

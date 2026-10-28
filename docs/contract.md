@@ -252,9 +252,11 @@ rows. PostgreSQL's own per-value materialization is not a peak-RSS guarantee.
 rust_xlsxwriter stages bounded parts; calamine reopens them and verifies required
 sheets/row counts before non-overwriting publication. A manifest naming all
 parts, byte lengths and SHA-256 hashes is published and synced last. Only a valid
-manifest with matching parts establishes completion. Ordinary rollback removes
-only this invocation's links; abrupt termination may leave unmanifested partial
-files, never proof of a complete set.
+manifest with matching parts establishes completion. Ordinary rollback atomically
+claims an entry before checking ownership, removes only this invocation's entries,
+and restores unrelated replacements without overwrite. Restoration conflicts retain
+the unrelated entry at an explicit recovery path. Abrupt termination may leave
+unmanifested partial files, never proof of a complete set.
 
 ## Hazards and evidence boundary
 

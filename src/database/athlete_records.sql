@@ -17,13 +17,19 @@ WITH school_links AS (
 ), selected AS (
     SELECT a.*,
            a.needs_review OR NOT EXISTS (SELECT 1 FROM school_links sl WHERE sl.athlete_id = a.id)
-               OR (a.state IS NULL AND NOT COALESCE(ss.has_state, false))
+               OR (NULLIF(btrim(a.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'), '') IS NULL AND NOT COALESCE(ss.has_state, false))
                OR a.graduation_year IS NULL AS report_needs_review
     FROM athletes a
     LEFT JOIN school_states ss ON ss.athlete_id = a.id
     WHERE a.name IS NOT NULL
-      AND (cardinality($1::text[]) = 0 OR NOT COALESCE(ss.has_state, false)
-           OR COALESCE(ss.matches_state, false))
+      AND (cardinality($1::text[]) = 0 OR CASE WHEN COALESCE(ss.has_state, false)
+           THEN COALESCE(ss.matches_state, false)
+           ELSE NULLIF(btrim(a.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'), '') IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM unnest($1::text[]) selected(state)
+                    WHERE lower(btrim(selected.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) =
+                          lower(btrim(a.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))
+                ) END)
       AND (cardinality($2::integer[]) = 0 OR a.graduation_year = ANY($2) OR a.graduation_year IS NULL)
 ), profile_data AS (
     SELECT p.athlete_id,

@@ -3021,6 +3021,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rust_xlsxwriter",
+ "rustix",
  "scraper",
  "serde",
  "serde_json",

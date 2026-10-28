@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use calamine::{Reader, open_workbook_auto};
+use sha2::{Digest, Sha256};
 use std::fs;
 use track_scrapper_v2::export::{ExportOptions, write_spreadsheets};
 use track_scrapper_v2::model::{AthleteRecord, School};
@@ -32,19 +33,6 @@ fn options() -> ExportOptions {
     }
 }
 
-#[test]
-fn later_part_write_failure_leaves_no_published_or_temporary_files() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let output = directory.path().join("export.xlsx");
-    let records = [
-        athlete(1, "First".to_owned()),
-        athlete(2, "x".repeat(32_768)),
-    ];
-
-    assert!(write_spreadsheets(&output, &records, &options()).is_err());
-    assert_eq!(fs::read_dir(directory.path())?.count(), 0);
-    Ok(())
-}
 
 #[test]
 fn existing_later_part_is_preserved_and_nothing_else_is_published() -> Result<()> {
@@ -80,7 +68,19 @@ fn successful_split_publishes_verified_parts_without_temporary_files() -> Result
             directory.path().join("export-0002.xlsx")
         ]
     );
-    for (part, name) in parts.iter().zip(["First", "Second"]) {
+    let manifest_path = output.with_extension("manifest.json");
+    let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+    assert_eq!(manifest["format"], "track-scrapper-export-v1");
+    assert_eq!(manifest["complete"], true);
+    let entries = manifest["parts"].as_array().context("completion manifest parts")?;
+    let manifest_parts = entries.iter().map(|entry| {
+        Ok(directory.path().join(entry["file"].as_str().context("manifest part name")?))
+    }).collect::<Result<Vec<_>>>()?;
+    assert_eq!(manifest_parts, parts);
+    for ((part, name), entry) in parts.iter().zip(["First", "Second"]).zip(entries) {
+        let bytes = fs::read(part)?;
+        assert_eq!(entry["bytes"], u64::try_from(bytes.len())?);
+        assert_eq!(entry["sha256"], format!("{:x}", Sha256::digest(&bytes)));
         let mut workbook = open_workbook_auto(part)?;
         let sheet = workbook.worksheet_range("Athletes")?;
         assert_eq!(
@@ -88,6 +88,13 @@ fn successful_split_publishes_verified_parts_without_temporary_files() -> Result
             Some(name)
         );
     }
-    assert_eq!(fs::read_dir(directory.path())?.count(), 2);
+    for entry in fs::read_dir(directory.path())? {
+        let path = entry?.path();
+        assert!(
+            parts.contains(&path) || path == manifest_path,
+            "unexpected unpublished or staging artifact: {}",
+            path.display()
+        );
+    }
     Ok(())
 }

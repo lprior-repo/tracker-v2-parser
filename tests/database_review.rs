@@ -1026,20 +1026,11 @@ async fn given_current_and_historical_schools_when_profile_records_export_then_o
             let ohio = database
                 .athlete_records_for(&["OH".to_owned()], &[2027])
                 .await?;
-            assert_eq!(
-                ohio.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
-                vec!["Unknown Current"]
-            );
+            assert!(ohio.is_empty());
             let (ohio_snapshot, _) = database
                 .export_snapshot(&["OH".to_owned()], &[2027])
                 .await?;
-            assert_eq!(
-                ohio_snapshot
-                    .iter()
-                    .map(|row| row.name.as_str())
-                    .collect::<Vec<_>>(),
-                vec!["Unknown Current"]
-            );
+            assert!(ohio_snapshot.is_empty());
             let historical: (String, String) = sqlx::query_as(
                 "SELECT state,address FROM schools WHERE source='milesplit' AND source_id='202'",
             )

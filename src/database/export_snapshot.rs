@@ -61,9 +61,29 @@ pub struct ExportSnapshot<'a> {
     records_finished: bool,
     issues_finished: bool,
     pending_record: Option<(AthleteRecord, usize)>,
-    pending_issue: Option<(ExportIssue, usize)>,
     record_sql: Arc<str>,
     usable: bool,
+}
+
+type IssueRow = (
+    Option<String>, Option<String>, Option<String>, i32, i64, i64, i64, bool,
+);
+
+fn decode_issue_batch(rows: Vec<IssueRow>) -> Result<(Vec<ExportIssue>, usize)> {
+    rows.into_iter().try_fold((Vec::new(), 0_usize), |(mut issues, bytes), (source, url, detail, _, id, _, size, _)| {
+        let source = source.ok_or(ExportLimitExceeded {
+            kind: "coverage issue serialized bytes", id, actual: size,
+            limit: i64::try_from(EXPORT_BATCH_BYTES)?,
+        })?;
+        let bytes = bytes.checked_add(usize::try_from(size)?)
+            .context("coverage batch byte counter overflow")?;
+        issues.push(ExportIssue {
+            source,
+            url: url.context("missing bounded issue URL")?,
+            detail: detail.context("missing bounded issue detail")?,
+        });
+        Ok((issues, bytes))
+    })
 }
 
 #[tracing::instrument(skip(pool))]
@@ -114,7 +134,7 @@ async fn validate_reports(transaction: &mut Transaction<'_, Postgres>) -> Result
         .await
         .context("validating existing athlete export schema without writes")?;
     let issues = format!(
-        "SELECT source,url,detail,kind,item_id,ordinal,bytes FROM ({}) issues LIMIT 0",
+        "SELECT source,url,detail,kind,item_id,ordinal,bytes,phase_exhausted FROM ({}) issues LIMIT 0",
         include_str!("export_issues.sql")
     );
     sqlx::query(sqlx::AssertSqlSafe(issues))
@@ -123,6 +143,7 @@ async fn validate_reports(transaction: &mut Transaction<'_, Postgres>) -> Result
         .bind(0_i64)
         .bind(0_i64)
         .bind(i64::try_from(EXPORT_BATCH_BYTES)?)
+        .bind(i64::try_from(EXPORT_BATCH_ROWS)?)
         .execute(&mut **transaction)
         .await
         .context("validating existing coverage export schema without writes")?;
@@ -158,11 +179,10 @@ impl<'a> ExportSnapshot<'a> {
             states: states.to_vec(),
             years: years.to_vec(),
             athlete_cursor: 0,
-            issue_cursor: (-1, 0, 0),
+            issue_cursor: (0, 0, 0),
             records_finished: false,
             issues_finished: false,
             pending_record: None,
-            pending_issue: None,
             record_sql: record_sql.into(),
             usable: true,
         })
@@ -321,79 +341,60 @@ impl<'a> ExportSnapshot<'a> {
     }
 
     async fn read_issues_batch(&mut self) -> Result<Option<Vec<ExportIssue>>> {
-        if self.issues_finished && self.pending_issue.is_none() {
-            return Ok(None);
-        }
-        let (_, issues, _, _) = stream::iter(0..EXPORT_BATCH_ROWS)
+        let (_, issues, _, _) = stream::iter(0..3)
             .map(Ok::<_, anyhow::Error>)
-            .try_fold(
-                (self, Vec::new(), 0_usize, false),
-                |(snapshot, mut issues, bytes, full), _| async move {
-                    if full {
-                        return Ok((snapshot, issues, bytes, full));
-                    }
-                    let Some((issue, size)) = snapshot.read_issue().await? else {
-                        return Ok((snapshot, issues, bytes, false));
-                    };
-                    let total = bytes
-                        .checked_add(size)
-                        .context("export issue byte counter overflow")?;
-                    if total > EXPORT_BATCH_BYTES {
-                        snapshot.pending_issue = Some((issue, size));
-                        return Ok((snapshot, issues, bytes, true));
-                    }
-                    issues.push(issue);
-                    Ok((snapshot, issues, total, false))
-                },
-            )
+            .try_fold((self, Vec::new(), 0_usize, false), |(snapshot, mut issues, bytes, full), _| async move {
+                if full || snapshot.issues_finished || issues.len() == EXPORT_BATCH_ROWS || bytes == EXPORT_BATCH_BYTES {
+                    return Ok((snapshot, issues, bytes, full));
+                }
+                let max_rows = EXPORT_BATCH_ROWS.checked_sub(issues.len()).context("coverage row budget underflow")?;
+                let max_bytes = EXPORT_BATCH_BYTES.checked_sub(bytes).context("coverage byte budget underflow")?;
+                let (batch, batch_bytes, full) = snapshot.fetch_issue_batch(max_rows, max_bytes).await?;
+                issues.extend(batch);
+                let bytes = bytes.checked_add(batch_bytes).context("coverage byte counter overflow")?;
+                Ok((snapshot, issues, bytes, full))
+            })
             .await?;
         Ok((!issues.is_empty()).then_some(issues))
     }
 
-    async fn read_issue(&mut self) -> Result<Option<(ExportIssue, usize)>> {
-        type IssueRow = (
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i32,
-            i64,
-            i64,
-            i64,
-        );
-        if let Some(issue) = self.pending_issue.take() {
-            return Ok(Some(issue));
-        }
-        if self.issues_finished {
-            return Ok(None);
-        }
-        let row: Option<IssueRow> = sqlx::query_as(include_str!("export_issues.sql"))
+    async fn fetch_issue_batch(&mut self, max_rows: usize, max_bytes: usize) -> Result<(Vec<ExportIssue>, usize, bool)> {
+        let rows: Vec<IssueRow> = sqlx::query_as(include_str!("export_issues.sql"))
             .bind(&self.states)
             .bind(self.issue_cursor.0)
             .bind(self.issue_cursor.1)
             .bind(self.issue_cursor.2)
-            .bind(i64::try_from(EXPORT_BATCH_BYTES)?)
-            .fetch_optional(&mut *self.transaction)
+            .bind(i64::try_from(max_bytes)?)
+            .bind(i64::try_from(max_rows)?)
+            .fetch_all(&mut *self.transaction)
             .await
-            .context("loading bounded coverage issue")?;
-        let Some((source, url, detail, kind, id, ordinal, size)) = row else {
-            self.issues_finished = true;
-            return Ok(None);
+            .context("loading bounded coverage issue batch")?;
+        let Some(first) = rows.first() else {
+            self.advance_issue_phase()?;
+            return Ok((Vec::new(), 0, false));
         };
-        self.issue_cursor = (kind, id, ordinal);
-        let source = source.ok_or(ExportLimitExceeded {
-            kind: "coverage issue serialized bytes",
-            id,
-            actual: size,
-            limit: i64::try_from(EXPORT_BATCH_BYTES)?,
-        })?;
-        Ok(Some((
-            ExportIssue {
-                source,
-                url: url.context("missing bounded issue URL")?,
-                detail: detail.context("missing bounded issue detail")?,
-            },
-            usize::try_from(size)?,
-        )))
+        if first.0.is_none() && first.6 > i64::try_from(max_bytes)? && first.6 <= i64::try_from(EXPORT_BATCH_BYTES)? {
+            return Ok((Vec::new(), 0, true));
+        }
+        let exhausted = first.7;
+        let cursor = rows.last().map(|row| (row.3, row.4, row.5))
+            .context("missing coverage batch cursor")?;
+        let (issues, bytes) = decode_issue_batch(rows)?;
+        let full = !exhausted && issues.len() < max_rows;
+        if exhausted {
+            self.advance_issue_phase()?;
+        } else {
+            self.issue_cursor = cursor;
+        }
+        Ok((issues, bytes, full))
+    }
+
+    fn advance_issue_phase(&mut self) -> Result<()> {
+        self.issue_cursor = (
+            self.issue_cursor.0.checked_add(1).context("coverage phase overflow")?, 0, 0,
+        );
+        self.issues_finished = self.issue_cursor.0 > 2;
+        Ok(())
     }
 
     #[tracing::instrument(skip(self))]

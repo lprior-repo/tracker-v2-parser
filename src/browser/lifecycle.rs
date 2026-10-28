@@ -76,9 +76,11 @@ impl Acquisition {
         };
         let native = self.native_status.checkpoint().await.and_then(|count| {
             let (accepted, probes, rejected_connects) = self.native_status.counts();
+            let (non_connects, invalid_connects, incomplete_connects) = self.native_status.denial_kinds();
+            let (methods, paths) = self.native_status.request_kinds();
             ensure!(
                 count == baseline,
-                "browser acquisition incomplete: native request was blocked (accepted={accepted}, benign_probes={probes}, rejected_connects={rejected_connects}, denied_before={baseline}, denied_after={count})"
+                "browser acquisition incomplete: native request was blocked (accepted={accepted}, benign_probes={probes}, rejected_connects={rejected_connects}, non_connects={non_connects}, invalid_connects={invalid_connects}, incomplete_connects={incomplete_connects}, methods_get_head_options_other={methods:?}, paths_favicon_probe_other={paths:?}, denied_before={baseline}, denied_after={count})"
             );
             Ok(())
         });

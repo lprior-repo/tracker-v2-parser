@@ -13,13 +13,21 @@ use tokio::{
     net::TcpStream,
 };
 
+use super::http::{self, Method, Path};
+
 const CONNECT: &[u8] = b"CONNECT ";
 const MAX_AUTHORITY: usize = 320;
 const MAX_PREFIX: usize = MAX_AUTHORITY.saturating_add(9);
 
+pub(super) enum Denial {
+    NonConnect(Method, Path),
+    InvalidConnect,
+    IncompleteConnect,
+}
+
 pub(super) enum Observation {
     Probe,
-    Request,
+    Request(Denial),
     Connect(String),
 }
 
@@ -27,18 +35,28 @@ struct Prefix {
     method: usize,
     authority: [u8; MAX_AUTHORITY],
     length: usize,
+    http: Option<http::Prefix>,
 }
 
 impl Prefix {
     fn next(&mut self, byte: u8) -> Result<Option<Observation>> {
+        if let Some(http) = self.http.as_mut() {
+            return Ok(http.next(byte).map(|(method, path)| Observation::Request(Denial::NonConnect(method, path))));
+        }
         if self.method < CONNECT.len() {
             let matches = CONNECT.get(self.method) == Some(&byte);
             self.method = self.method.saturating_add(1);
-            return Ok((!matches).then_some(Observation::Request));
+            if !matches && self.method == 1 {
+                self.http = http::Prefix::new(byte);
+                if self.http.is_some() {
+                    return Ok(None);
+                }
+            }
+            return Ok((!matches).then_some(Observation::Request(Denial::NonConnect(Method::Other, Path::Other))));
         }
         if byte == b' ' {
             if self.length == 0 {
-                return Ok(Some(Observation::Request));
+                return Ok(Some(Observation::Request(Denial::InvalidConnect)));
             }
             let bytes = self
                 .authority
@@ -51,10 +69,10 @@ impl Prefix {
             return Ok(Some(Observation::Connect(copied)));
         }
         if !byte.is_ascii_alphanumeric() && !matches!(byte, b'.' | b'-' | b':' | b'[' | b']') {
-            return Ok(Some(Observation::Request));
+            return Ok(Some(Observation::Request(Denial::InvalidConnect)));
         }
         let Some(slot) = self.authority.get_mut(self.length) else {
-            return Ok(Some(Observation::Request));
+            return Ok(Some(Observation::Request(Denial::InvalidConnect)));
         };
         *slot = byte;
         self.length = self.length.saturating_add(1);
@@ -62,10 +80,14 @@ impl Prefix {
     }
 
     const fn ended(&self) -> Observation {
+        if let Some(http) = self.http.as_ref() {
+            let (method, path) = http.ended();
+            return Observation::Request(Denial::NonConnect(method, path));
+        }
         if self.method == 0 {
             Observation::Probe
         } else {
-            Observation::Request
+            Observation::Request(Denial::IncompleteConnect)
         }
     }
 
@@ -112,6 +134,7 @@ impl PendingSocket {
                 method: 0,
                 authority: [0; MAX_AUTHORITY],
                 length: 0,
+                http: None,
             },
             quiescent: false,
             waker: AtomicWaker::new(),

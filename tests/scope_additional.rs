@@ -119,15 +119,21 @@ async fn given_linked_school_states_when_scoped_then_school_and_cohort_determine
                     .iter()
                     .map(|record| record.name.as_str())
                     .collect::<Vec<_>>(),
-                vec!["Runner 21", "Runner 22", "Runner 24"]
+                vec!["Runner 21"]
             );
-            assert!(records[1].schools.is_empty());
-            assert!(records[1].needs_review);
+            assert_eq!(records[0].schools[0].state.as_deref(), Some(" wi "));
+            let ohio = database.athlete_records_for(&["OH".to_owned()], &[2027]).await?;
             assert_eq!(
-                records[1].performances[0].performance.school_id.as_deref(),
+                ohio.iter().map(|record| record.name.as_str()).collect::<Vec<_>>(),
+                vec!["Runner 22", "Runner 23", "Runner 24"]
+            );
+            assert!(ohio[0].schools.is_empty());
+            assert!(ohio[0].needs_review);
+            assert_eq!(
+                ohio[0].performances[0].performance.school_id.as_deref(),
                 Some("school-22")
             );
-            assert!(records[2].needs_review);
+            assert!(ohio[2].needs_review);
             let all = database.athlete_records_for(&[], &[]).await?;
             assert_eq!(all.len(), 5);
             database.close().await;

@@ -95,35 +95,53 @@ fn identified(body: &str, secret: &Regex) -> Result<bool> {
 }
 
 pub(super) fn ambiguous_computed(text: &str) -> bool {
+    let mut inspected = 0_usize;
     text.match_indices('[').any(|(offset, _)| {
-        text.get(offset..)
+        let Some(suffix) = text
+            .get(offset..)
             .and_then(|suffix| suffix.strip_prefix('['))
-            .is_some_and(computed_prefix)
+        else {
+            return false;
+        };
+        let (ambiguous, length) = computed_prefix(suffix);
+        inspected = inspected.saturating_add(length);
+        ambiguous || inspected > 64 * 1024 * 1024
     })
 }
 
-fn computed_prefix(text: &str) -> bool {
+fn computed_prefix(text: &str) -> (bool, usize) {
     let Some((prefix, grouped)) = skip_grouping(text, '(') else {
-        return false;
+        return (false, text.len());
     };
     let Some(delimiter @ ('\'' | '"' | '`')) = prefix.chars().next() else {
-        return false;
+        return (false, text.len().saturating_sub(prefix.len()));
     };
     let Some(literal_end) = quoted_end(prefix, delimiter) else {
-        return false;
+        return (false, text.len());
     };
     let Some((suffix, _)) = prefix
         .get(literal_end..)
         .and_then(|suffix| skip_grouping(suffix, ')'))
     else {
-        return false;
+        return (false, text.len());
     };
-    suffix.starts_with('+')
-        || ((grouped || delimiter == '`')
-            && suffix
-                .strip_prefix(']')
-                .and_then(skip_trivia)
-                .is_some_and(assignment_operator))
+    let inspected = text.len().saturating_sub(suffix.len());
+    if suffix.starts_with('+') {
+        return (true, inspected);
+    }
+    if !grouped && delimiter != '`' {
+        return (false, inspected);
+    }
+    let Some(after_bracket) = suffix.strip_prefix(']') else {
+        return (false, inspected);
+    };
+    let Some(remainder) = skip_trivia(after_bracket) else {
+        return (false, text.len());
+    };
+    (
+        assignment_operator(remainder),
+        text.len().saturating_sub(remainder.len()),
+    )
 }
 
 fn skip_grouping(text: &str, delimiter: char) -> Option<(&str, bool)> {
@@ -131,10 +149,10 @@ fn skip_grouping(text: &str, delimiter: char) -> Option<(&str, bool)> {
         let Some(suffix) = skip_trivia(suffix) else {
             return std::ops::ControlFlow::Break(None);
         };
-        match suffix.strip_prefix(delimiter) {
-            Some(suffix) => std::ops::ControlFlow::Continue((suffix, true)),
-            None => std::ops::ControlFlow::Break(Some((suffix, grouped))),
-        }
+        suffix.strip_prefix(delimiter).map_or(
+            std::ops::ControlFlow::Break(Some((suffix, grouped))),
+            |suffix| std::ops::ControlFlow::Continue((suffix, true)),
+        )
     }) {
         std::ops::ControlFlow::Break(result) => result,
         std::ops::ControlFlow::Continue(_) => None,
@@ -149,17 +167,16 @@ fn skip_trivia(text: &str) -> Option<&str> {
         } else if let Some(comment) = suffix.strip_prefix("//") {
             Some(
                 comment
-                    .find(['\r', '\n', '\u{2028}', '\u{2029}'])
-                    .and_then(|offset| comment.get(offset..))
-                    .map_or("", |remainder| remainder),
+                    .split_once(['\r', '\n', '\u{2028}', '\u{2029}'])
+                    .map_or("", |(_, remainder)| remainder),
             )
         } else {
             return std::ops::ControlFlow::Break(Some(suffix));
         };
-        match remainder {
-            Some(remainder) => std::ops::ControlFlow::Continue(remainder),
-            None => std::ops::ControlFlow::Break(None),
-        }
+        remainder.map_or(
+            std::ops::ControlFlow::Break(None),
+            std::ops::ControlFlow::Continue,
+        )
     }) {
         std::ops::ControlFlow::Break(result) => result,
         std::ops::ControlFlow::Continue(_) => None,

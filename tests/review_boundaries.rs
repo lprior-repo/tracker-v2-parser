@@ -166,6 +166,11 @@ fn given_ambiguous_computed_or_outside_script_assignments_when_sanitized_then_no
         "<script>window[/* key */{}((('to') /* prefix */ + 'ken'))]='synthetic-canary';</script>",
         " ".repeat(1_025)
     );
+    let deeply_grouped = format!(
+        "<script>window[{}'to'{} + 'ken']='synthetic-canary';</script>",
+        "(".repeat(64),
+        ")".repeat(64)
+    );
     for body in [
         "<script>window['se' + 'cret'] = 'synthetic-canary';</script>",
         "<script>window[`token`] = 'synthetic-canary';</script>",
@@ -183,6 +188,7 @@ fn given_ambiguous_computed_or_outside_script_assignments_when_sanitized_then_no
         "<script>const results={\"Result\":\"44.88\"}; window[/* key */(('to') + 'ken')]='synthetic-canary';</script>",
         long_computed.as_str(),
         padded_prefix.as_str(),
+        deeply_grouped.as_str(),
         "<script>const results={\"Result\":\"44.88\"}; stats['event' + suffix] = 1;</script>",
         "<p>token='a'+'b';</p>\"<script>token='a'+'b';</script>\"=1",
         "<p>token='synthetic-'+'canary';</p><script>token='synthetic-'+'canary';</script>",
