@@ -580,3 +580,88 @@ fn given_one_staged_part_and_unrelated_numbered_neighbor_when_finished_then_requ
     assert_eq!(manifest["parts"][0]["file"], "single.xlsx");
     Ok(())
 }
+
+#[test]
+fn given_collected_empty_single_or_split_records_when_published_then_manifest_matches_returned_workbooks()
+-> Result<()> {
+    use sha2::{Digest, Sha256};
+    for count in [0, 1, 3] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("collected.xlsx");
+        let records: Vec<_> = (0..count)
+            .map(|id| {
+                let mut athlete = record(Vec::new());
+                athlete.id = id;
+                athlete
+            })
+            .collect();
+        let mut options = options();
+        options.rows_per_file = 2;
+        let files = write_spreadsheets_with_issues(&path, &records, &[], &options)?;
+        let expected = if count > 2 {
+            vec![
+                directory.path().join("collected-0001.xlsx"),
+                directory.path().join("collected-0002.xlsx"),
+            ]
+        } else {
+            vec![path.clone()]
+        };
+        assert_eq!(files, expected);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.with_extension("manifest.json"))?)?;
+        assert_eq!(manifest["complete"], true);
+        let parts = manifest["parts"].as_array().context("manifest parts")?;
+        assert_eq!(parts.len(), files.len());
+        let mut rows = 0;
+        for (part, file) in parts.iter().zip(&files) {
+            let bytes = std::fs::read(file)?;
+            assert_eq!(
+                part["file"],
+                file.file_name()
+                    .context("filename")?
+                    .to_str()
+                    .context("UTF-8")?
+            );
+            assert_eq!(part["bytes"], bytes.len());
+            assert_eq!(part["sha256"], format!("{:x}", Sha256::digest(&bytes)));
+            rows += open_workbook_auto(file)?
+                .worksheet_range("Athletes")?
+                .height()
+                - 1;
+        }
+        assert_eq!(rows, usize::try_from(count)?);
+        assert_eq!(
+            std::fs::read_dir(directory.path())?.count(),
+            files.len() + 1
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_existing_collected_manifest_when_republishing_then_workbooks_and_manifest_are_untouched()
+-> Result<()> {
+    use track_scrapper_v2::export::write_spreadsheets;
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("single.xlsx");
+    let files = write_spreadsheets(&path, &[record(Vec::new())], &options())?;
+    assert_eq!(files, [path.clone()]);
+    let manifest_path = path.with_extension("manifest.json");
+    let manifest = std::fs::read(&manifest_path)?;
+    let workbook = std::fs::read(&path)?;
+    assert!(write_spreadsheets(&path, &[], &options()).is_err());
+    assert_eq!(std::fs::read(&path)?, workbook);
+    std::fs::remove_file(&path)?;
+    let error = write_spreadsheets_with_issues(&path, &[], &[], &options())
+        .err()
+        .context("existing manifest must prevent publication")?;
+    assert!(
+        error
+            .to_string()
+            .contains("completion manifest already exists")
+    );
+    assert_eq!(std::fs::read(&manifest_path)?, manifest);
+    assert!(!path.exists());
+    assert_eq!(std::fs::read_dir(directory.path())?.count(), 1);
+    Ok(())
+}

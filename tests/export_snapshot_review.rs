@@ -409,6 +409,7 @@ async fn given_observation_count_boundary_when_another_row_arrives_then_large_at
             let limit = error
                 .downcast_ref::<ExportLimitExceeded>()
                 .context("typed observation limit")?;
+            assert_convenience_limit(&database, "athlete observations").await?;
             assert_eq!(limit.kind, "athlete observations");
             assert_eq!(limit.actual, EXPORT_MAX_OBSERVATIONS + 1);
             assert_eq!(limit.limit, EXPORT_MAX_OBSERVATIONS);
@@ -525,6 +526,7 @@ async fn given_oversized_constituents_when_exporting_then_every_component_is_che
             let mut snapshot = database.begin_export_snapshot(&options().states, &options().graduation_years).await?;
             let error = snapshot.next_records(1).await.err().context("oversized constituent must fail")?;
             let limit = error.downcast_ref::<ExportLimitExceeded>().context("typed constituent budget")?;
+            assert_convenience_limit(&database, "athlete constituent serialized bytes").await?;
             assert_eq!(limit.kind, "athlete constituent serialized bytes");
             assert!(limit.actual > EXPORT_COMPONENT_BYTES);
             assert!(snapshot.next_records(1).await.err().context("failed snapshot must not resume")?.downcast_ref::<ExportSnapshotInvalidated>().is_some());
@@ -591,6 +593,7 @@ async fn given_large_convenience_snapshot_when_collecting_then_total_byte_budget
             let limit = error
                 .downcast_ref::<ExportLimitExceeded>()
                 .context("typed total byte limit")?;
+            assert_convenience_limit(&database, "collected snapshot serialized bytes").await?;
             assert_eq!(limit.kind, "collected snapshot serialized bytes");
             assert_eq!(limit.limit, i64::try_from(EXPORT_COLLECTION_BYTES)?);
             assert!(limit.actual > limit.limit);
@@ -857,4 +860,98 @@ async fn given_current_school_and_factual_athlete_states_when_scoped_then_school
         database.close().await;
         Ok(())
     })).await
+}
+
+async fn assert_convenience_limit(database: &Database, kind: &str) -> Result<()> {
+    for scoped in [false, true] {
+        let result = if scoped {
+            database
+                .athlete_records_for(&options().states, &options().graduation_years)
+                .await
+        } else {
+            database.athlete_records().await
+        };
+        let error = result
+            .err()
+            .context("convenience API must enforce snapshot limits")?;
+        let limit = error
+            .downcast_ref::<ExportLimitExceeded>()
+            .context("typed convenience limit")?;
+        assert_eq!(limit.kind, kind);
+        assert!(limit.actual > limit.limit);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_oversized_athlete_when_using_convenience_apis_then_both_return_typed_limits()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            seed_athletes(&database, 1).await?;
+            sqlx::query("UPDATE athletes SET name=repeat('x',$1::integer)")
+                .bind(i32::try_from(EXPORT_BATCH_BYTES)?)
+                .execute(database.pool())
+                .await?;
+            assert_convenience_limit(&database, "athlete serialized bytes").await?;
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_excess_coverage_when_using_convenience_apis_then_shared_collection_bound_applies()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            seed_notes(&database, EXPORT_COLLECTION_ROWS + 1, "note").await?;
+            assert_convenience_limit(&database, "collected snapshot rows").await?;
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_readonly_connection_when_using_convenience_apis_then_records_match_snapshot_without_migrations()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            seed_athletes(&database, 2).await?;
+            sqlx::query("UPDATE athletes SET graduation_year=2028 WHERE name='Athlete 2'")
+                .execute(database.pool())
+                .await?;
+            let before = schema_signature(database.pool()).await?;
+            let reader = Database::connect_for_export(&readonly_url(&test.url, None)?).await?;
+            let all = reader.athlete_records().await?;
+            assert_eq!(
+                all.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+                ["Athlete 1", "Athlete 2"]
+            );
+            let scoped = reader
+                .athlete_records_for(&options().states, &options().graduation_years)
+                .await?;
+            assert_eq!(scoped.len(), 1);
+            assert_eq!(scoped[0].name, "Athlete 1");
+            let expected = reader
+                .export_snapshot(&options().states, &options().graduation_years)
+                .await?
+                .0;
+            assert_eq!(
+                serde_json::to_value(scoped)?,
+                serde_json::to_value(expected)?
+            );
+            assert_eq!(schema_signature(database.pool()).await?, before);
+            reader.close().await;
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
 }

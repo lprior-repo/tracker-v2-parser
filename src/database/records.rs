@@ -49,6 +49,7 @@ async fn save_profiles(
     page: &ParsedPage,
     url: &str,
 ) -> Result<()> {
+    contacts::review_office(connection, target, url).await?;
     schools::save_all(connection, target.source, &page.schools, url).await?;
     identity::review_school_conflicts(connection, target.source, &page.schools).await?;
     identity::save_all(connection, target.source, &page.athletes).await
