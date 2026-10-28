@@ -329,51 +329,108 @@ published failure status does not replace the original mark and cannot win a PR.
 
 ## Backup and recovery
 
-PostgreSQL is the durable authority. Normal process-crash recovery uses its WAL;
-do not replace the data directory or reset checkpoints to recover a stopped
-scraper. The exercised server has `fsync`, `full_page_writes` and
-`synchronous_commit` enabled. WAL archiving is disabled, so this setup does not
-provide point-in-time recovery after loss of the data directory.
+PostgreSQL stores the application data. DoltHub synchronizes Beads issues only;
+it does not back up athletes, results, checkpoints, retained HTML, or workbooks.
+GitHub carries the code and migrations, not the live database or credentials.
 
-A complete **application** backup consists of a PostgreSQL custom-format dump
-of `public` plus the retained evidence directory. It includes all six application
-tables, UUIDs, source mappings, result history, attempts/checkpoints and SQLx
-migration history. Role passwords and cluster configuration are not included.
-With an existing private backup directory:
+The portable migration tools require Python 3 and PostgreSQL command-line tools.
+Use the same PostgreSQL major version on both machines. A backup captures all six
+application tables and SQLx migration history from one exported database snapshot,
+plus retained evidence, the selected configuration, and saved exports. It does
+not copy role passwords, `.env`, browser profiles, old backup directories, or
+unrelated Downloads. Original evidence paths remain provenance; portable evidence
+files are named by SHA-256.
 
-```sh
-pg_dump --dbname "$DATABASE_URL" --format=custom --schema=public \
-  --no-owner --no-privileges --file "$BACKUP/database.dump"
-tar --create --gzip --file "$BACKUP/evidence.tar.gz" \
-  --directory "$HOME/.local/share/track-scrapper-v2" evidence
-```
+### Package on the source machine
 
-Adjust the archive directory for a custom XDG/evidence path. Retain a SHA-256
-manifest for both files. Copy the backup off the database disk for disk-loss
-protection. Older pages fetched before evidence retention was introduced do not
-gain original response bytes retroactively.
-
-Restore only into a newly created, isolated database. The following exercised
-restore command removes matching objects in that **restore target**, never the
-live database:
+Use libpq environment variables or a private `PGPASSFILE` for authentication;
+never put a password or database URL in command arguments. Stop source writers
+before the final cutover so the old and new machines cannot diverge afterward.
+The dump and logical fingerprints use one snapshot even if writers are active.
 
 ```sh
-pg_restore --dbname "$RESTORE_DATABASE_URL" --no-owner --no-privileges \
-  --single-transaction --exit-on-error --clean --if-exists "$BACKUP/database.dump"
-tar --extract --gzip --keep-old-files --file "$BACKUP/evidence.tar.gz" \
-  --directory "$RESTORE_APPLICATION_DATA"
+PGHOST=localhost PGUSER=track_scrapper \
+python3 scripts/migration/backup.py \
+  --database track_scrapper \
+  --data-dir "$HOME/.local/share/track-scrapper-v2" \
+  --config config.toml \
+  --output "$HOME/track-scrapper-migration.tar.gz"
 ```
 
-Create the application login and make it the restore database owner first.
-Restore as that login, or pass `--role track_scrapper` from an authorized
-administrator: `--no-owner` assigns restored objects to the active role.
-Restore evidence at its recorded location, or locate backed-up bodies by their
-recorded SHA-256 in the configured evidence root. Re-run `scrape` against the
-restored database to continue unfinished checkpoints; `export` does not scrape.
-The recovery drill compares row counts and ordered full-row fingerprints for all
-six tables and migration history, plus sequence values and ownership, then
-exercises the restored CLI. Backup-file integrity uses the SHA-256 manifest.
-A verified snapshot recovers its captured state, not subsequent writes.
+For exports outside the application's `exports` directory, repeat `--export-file`
+for their completion manifest and **every** workbook part. If a recognized
+completion manifest exists beside a selected workbook, it must be selected too;
+missing parts and checksum mismatches are rejected. Legacy workbooks without
+completion metadata are preserved as files, not certified as complete exports.
+The archive has a per-file SHA-256 manifest and full-row database fingerprints.
+Existing output files are never overwritten.
+
+### Transfer privately
+
+The archive contains database records and source evidence. Keep it out of Git
+and public DoltHub repositories. Tailscale Taildrop encrypts the transfer between
+your devices; the archive is permission-restricted but **not encrypted at rest**.
+Use an encrypted disk or separately encrypt the archive if it will be stored on
+an untrusted disk or cloud service. Checksums detect corruption, not a maliciously
+replaced manifest: restore only a bundle from your trusted source machine.
+
+```sh
+sha256sum "$HOME/track-scrapper-migration.tar.gz"
+tailscale file cp "$HOME/track-scrapper-migration.tar.gz" lewiss-mac-mini:
+```
+
+Receive the file in the Mac's Tailscale app. Compare `shasum -a 256` against the
+source checksum before restoring. Do not expose PostgreSQL's port to the internet
+or copy its live data directory between Linux and macOS.
+
+### Hydrate a new machine
+
+Fetch this repository's `main` first. On macOS, Python 3 and Homebrew must already
+be available. `--bootstrap-macos` installs and starts the matching PostgreSQL
+Homebrew service; omit it on Linux where PostgreSQL is already running.
+
+```sh
+git pull --ff-only origin main
+python3 scripts/migration/restore.py \
+  --archive "$HOME/Downloads/track-scrapper-migration.tar.gz" \
+  --database track_scrapper \
+  --data-dir "$HOME/.local/share/track-scrapper-v2" \
+  --bootstrap-macos
+```
+
+Use a role allowed to create the new database, not a PostgreSQL superuser when
+restoring an external dump. Dumps execute SQL; archive validation is not a SQL
+sandbox. The restore refuses an existing database or data directory. It checks
+paths, file types, checksums, PostgreSQL major version, and all logical row
+fingerprints before publishing the restored files. It never cleans or drops an
+existing database. A failed restore identifies any newly created partial target.
+
+The new data directory contains `config.toml`, `evidence`, `exports`, and a private
+`.env` configured for the destination. Build the application from the repository
+root, then run it from that data directory so its dotenv loader reads the
+destination settings:
+
+```sh
+REPO="$PWD"
+env -u CI moon run pipeline:build
+(
+  cd "$HOME/.local/share/track-scrapper-v2"
+  env -u DATABASE_URL -u TRACK_SCRAPPER_EVIDENCE_DIR \
+    "$REPO/target/release/track-scrapper-v2" export \
+    --config config.toml --output exports/restored-athletes.xlsx
+)
+```
+
+Reopen the export and check its completion manifest before resuming scraping.
+Restoration preserves captured data; it does not fill missing PRs or contacts or
+prove complete source coverage. Keep the old machine unchanged until the new
+database and files have been verified. Older captures without retained response
+bodies do not gain original bytes retroactively.
+
+PostgreSQL WAL protects ordinary process-crash recovery. This logical backup does
+not include role passwords, cluster configuration, or point-in-time recovery.
+Beads issues move separately using `bd dolt push` on the source and `bd dolt pull`
+on the destination.
 
 ## Checks
 

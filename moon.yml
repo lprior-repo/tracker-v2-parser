@@ -46,7 +46,9 @@ tasks:
   test:
     command: 'cargo test --workspace --all-features --locked'
     toolchains: [system]
-    inputs: *rustInputs
+    inputs:
+      - '@group(rustInputs)'
+      - 'scripts/migration/**/*.py'
     options: *qualityOptions
   build:
     command: 'cargo build --workspace --release --all-features --locked'
@@ -61,6 +63,15 @@ tasks:
     env:
       RUSTDOCFLAGS: '-D warnings'
     inputs: *rustInputs
+    options: *qualityOptions
+  migration-test:
+    command: 'python3 -m unittest discover -s scripts/migration -p test_*.py'
+    toolchains: [system]
+    inputs:
+      - 'scripts/migration/**/*.py'
+      - 'moon.yml'
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     options: *qualityOptions
   ci-source:
     deps: [fmt, check, lint-src]
