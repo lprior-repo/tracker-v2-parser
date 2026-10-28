@@ -1,6 +1,10 @@
 mod program;
+mod role;
 mod rules;
 mod scope;
+
+use crate::model::CoachRole;
+use role::parse_role;
 
 use anyhow::{Result, ensure};
 use scraper::{ElementRef, Html};
@@ -51,7 +55,14 @@ fn candidates(
         return Vec::new();
     }
     let role = published_role(block, rules, &content);
-    if !rules.coach.is_match(&role) || rules.excluded.is_match(&role) {
+    let parsed = parse_role(&role);
+    if parsed.is_none() && !rules.coach.is_match(&role) {
+        return Vec::new();
+    }
+    if rules.excluded.is_match(&role) {
+        return Vec::new();
+    }
+    if parsed == Some(CoachRole::AthleticDirector) {
         return Vec::new();
     }
     let (program, program_review) = program_text(block, rules, &role);
