@@ -1,4 +1,5 @@
 mod audit;
+mod capture;
 mod exchange;
 mod interception;
 mod lifecycle;
@@ -21,12 +22,9 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use chromiumoxide::{
     Browser as Chromium, Page,
     browser::BrowserConfig,
-    cdp::browser_protocol::network::{
-        self, EventLoadingFinished, EventResponseReceived, GetResponseBodyParams, ResourceType,
-    },
     cdp::browser_protocol::{browser::BrowserContextId, target::CreateBrowserContextParams},
 };
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::{
     net::TcpListener,
@@ -35,6 +33,8 @@ use tokio::{
     time::timeout,
 };
 use tracing::Instrument;
+
+use capture::{PageCapture, navigate};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -63,6 +63,8 @@ pub struct Browser {
     native_sink: native::NativeSink,
     fetches: Mutex<JoinSet<Result<()>>>,
     handler: JoinHandle<Result<()>>,
+    #[cfg(test)]
+    capture_ready: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
     local_origin: Option<url::Origin>,
     #[cfg(test)]
@@ -140,6 +142,8 @@ impl Browser {
             additional_origin: None,
             #[cfg(test)]
             fail_page_close: false,
+            #[cfg(test)]
+            capture_ready: None,
         };
         let params = CreateBrowserContextParams::builder()
             .dispose_on_detach(true)
@@ -196,6 +200,8 @@ impl Browser {
             additional_origin: self.additional_origin.clone(),
             #[cfg(test)]
             fail_page_close: self.fail_page_close,
+            #[cfg(test)]
+            capture_ready: self.capture_ready.clone(),
         };
         let (reply, received) = oneshot::channel();
         {
@@ -223,7 +229,7 @@ impl Browser {
         target: &Target,
         headers: &BTreeMap<String, String>,
         interval: Duration,
-    ) -> Result<Capture> {
+    ) -> Result<PageCapture> {
         let method = target.method.as_deref().map_or("GET", |value| value);
         ensure!(
             matches!(method, "GET" | "POST"),
@@ -235,13 +241,17 @@ impl Browser {
                 || denied_capture(&bootstrap)
                 || !(200..300).contains(&bootstrap.status)
             {
-                return Ok(bootstrap);
+                return Ok(PageCapture::Response(bootstrap));
             }
             tokio::time::sleep(interval).await;
-            return browser_fetch(page, target, headers, method).await;
+            return browser_fetch(page, target, headers, method)
+                .await
+                .map(PageCapture::Response);
         }
         if method == "GET" && target.body.is_none() && headers.is_empty() {
-            return navigate(page, &target.url).await;
+            return capture::document(page, &target.url)
+                .await
+                .map(PageCapture::Navigation);
         }
         let url = url::Url::parse(&target.url).context("parsing browser target")?;
         let origin = url.origin().ascii_serialization();
@@ -250,10 +260,12 @@ impl Browser {
             || denied_capture(&bootstrap)
             || !(200..300).contains(&bootstrap.status)
         {
-            return Ok(bootstrap);
+            return Ok(PageCapture::Response(bootstrap));
         }
         tokio::time::sleep(interval).await;
-        browser_fetch(page, target, headers, method).await
+        browser_fetch(page, target, headers, method)
+            .await
+            .map(PageCapture::Response)
     }
 
     #[tracing::instrument(skip_all)]
@@ -330,99 +342,6 @@ fn finish_page_fetch(result: Result<Capture>, cleanup: Result<()>) -> Result<Cap
         }
     }
 }
-
-async fn navigate(page: &Page, url: &str) -> Result<Capture> {
-    let limit = i64::try_from(MAX_BODY_BYTES).context("browser buffer limit")?;
-    page.execute(
-        network::EnableParams::builder()
-            .max_resource_buffer_size(limit)
-            .max_total_buffer_size(limit.saturating_mul(2))
-            .build(),
-    )
-    .await?;
-    let frame = page
-        .mainframe()
-        .await?
-        .context("browser page has no main frame")?;
-    let responses = page.event_listener::<EventResponseReceived>().await?;
-    let finished = page.event_listener::<EventLoadingFinished>().await?;
-    page.goto(url).await.context("navigating browser page")?;
-    let response = responses
-        .filter(|event| {
-            futures::future::ready(
-                event.r#type == ResourceType::Document && event.frame_id.as_ref() == Some(&frame),
-            )
-        })
-        .next()
-        .await
-        .context("browser navigation ended without a document response")?;
-    let status =
-        u16::try_from(response.response.status).context("invalid browser response status")?;
-    let body_result = timeout(COMMAND_TIMEOUT, async {
-        let request_id = response.request_id.clone();
-        finished
-            .filter(|event| futures::future::ready(event.request_id == request_id))
-            .next()
-            .await
-            .context("browser document did not finish loading")?;
-        let result = page
-            .execute(GetResponseBodyParams::new(request_id))
-            .await
-            .context("capturing browser document")?
-            .result;
-        let body = if result.base64_encoded {
-            decode_body(&result.body)?
-        } else {
-            result.body.into_bytes()
-        };
-        ensure!(
-            body.len() <= MAX_BODY_BYTES,
-            "source response exceeded 16 MiB limit"
-        );
-        Ok::<_, anyhow::Error>(body)
-    })
-    .await
-    .context("capturing browser document timed out")
-    .and_then(|result| result);
-    let body = body_result.map_err(|error| {
-        if access_stop_status(status) || denied_url(&response.response.url) {
-            AccessStopCaptureError { status, error }.into()
-        } else {
-            error
-        }
-    })?;
-    let capture = Capture {
-        url: response.response.url.clone(),
-        status,
-        content_type: response.response.mime_type.clone(),
-        body,
-    };
-    if !capture.content_type.contains("html")
-        || !(200..300).contains(&capture.status)
-        || denied_capture(&capture)
-    {
-        return Ok(capture);
-    }
-    let rendered: String = page
-        .evaluate_function(RENDER_SCRIPT)
-        .await
-        .context("capturing rendered page")?
-        .into_value()
-        .context("decoding rendered page")?;
-    Ok(Capture {
-        body: decode_body(&rendered)?,
-        ..capture
-    })
-}
-
-const RENDER_SCRIPT: &str = r"async function() {
-    if (document.readyState !== 'complete') await new Promise(resolve => window.addEventListener('load', resolve, {once: true}));
-    const bytes = new TextEncoder().encode(document.documentElement.outerHTML);
-    if (bytes.length > 16777216) throw new Error('source response exceeded 16 MiB limit');
-    let binary = '';
-    for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-    return btoa(binary);
-}";
 
 #[derive(Serialize)]
 struct FetchArgs<'a> {

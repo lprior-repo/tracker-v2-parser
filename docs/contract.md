@@ -237,9 +237,11 @@ summaries stay within 1,024 UTF-16 units and explicitly reference complete Issue
 continuations; other oversized cells use lossless `Cell_details` chunks.
 Strings are literal, not formulas. Sanitized public profile JSON and individually
 linked profile URLs remain on `Profile_details`, not duplicate athlete rows.
-State-normalized page notes, unfinished work and unassigned results remain in the
-completed workbook set. Coverage batches are partitioned, not copied into every
-part; a successful reparse replaces that page's prior notes.
+State selection trims surrounding Unicode whitespace and ignores ASCII case in
+both snapshot queries and final workbook filtering. Relevant page notes,
+unfinished work and unassigned results remain in the completed workbook set.
+Coverage issues occur once across parts, including the collecting API; a
+successful reparse replaces that page's prior notes.
 
 
 **C8 — publication:** export opens a compatible schema without migrations and

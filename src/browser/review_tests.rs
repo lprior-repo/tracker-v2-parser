@@ -719,7 +719,7 @@ async fn given_unfinished_subresource_when_drain_deadline_expires_then_acquisiti
     let release = Arc::new(Notify::new());
     let safe = Fixture::start_with_gate(
         BTreeMap::from([
-            ("/page".into(), html("<link rel='icon' href='data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22/%3E'><script>fetch('/hang').catch(() => {})</script><script src='/capture-ready'></script>".into())),
+            ("/page".into(), html("<script>fetch('/hang').catch(() => {})</script><script src='/capture-ready'></script>".into())),
             ("/capture-ready".into(), (200, "text/javascript".into(), String::new(), String::new())),
         ]),
         Some(Arc::clone(&release)),
@@ -1242,4 +1242,92 @@ async fn given_private_connect_when_native_probe_is_closed_then_request_is_denie
     .await;
     let closed = sink.finish().await;
     scenario.and(closed)
+}
+
+#[tokio::test]
+async fn given_implicit_ui_favicon_when_browser_settles_then_icon_is_pinned_before_target_closes_and_published_dom_is_unchanged()
+-> Result<()> {
+    let safe = Fixture::start(BTreeMap::from([
+        ("/page".into(), html("<title>Ordinary school</title><p>source school</p><a href='/roster'>Roster</a>".into())),
+        ("/favicon.ico".into(), (200, "image/svg+xml".into(), "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16'/></svg>".into(), String::new())),
+    ])).await?;
+    let profile = tempfile::tempdir()?;
+    let browser = browser(&safe.origin, profile.path()).await?;
+    let initial_pages = browser.chromium.pages().await?.len();
+    let scenario = async {
+        let target = target(&safe.origin, "/page");
+        for _ in 0..2 {
+            let capture = browser
+                .fetch(&target, &BTreeMap::new(), Duration::ZERO)
+                .await?;
+            assert_eq!(capture.status, 200);
+            assert_eq!(capture.url, target.url);
+            let document = std::str::from_utf8(&capture.body)?;
+            assert!(document.contains("source school"));
+            assert!(document.contains("href=\"/roster\""));
+            assert!(!document.contains("data:image"));
+            assert!(browser.fetches.lock().await.is_empty());
+            assert_eq!(browser.chromium.pages().await?.len(), initial_pages);
+        }
+        assert!(
+            safe.recorded()?
+                .iter()
+                .any(|request| request.starts_with("GET /favicon.ico "))
+        );
+        assert_eq!(browser.native_sink.denied_connections(), 0);
+        safe.wait_for_idle().await?;
+        assert_eq!(safe.active.load(Ordering::SeqCst), 0);
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    let closed = browser.close().await;
+    let safe_closed = safe.close().await;
+    scenario.and(closed).and(safe_closed)
+}
+
+#[tokio::test]
+async fn given_fetch_started_after_load_when_settlement_completes_then_navigation_captures_updated_dom_and_api_keeps_raw_json()
+-> Result<()> {
+    let release = Arc::new(Notify::new());
+    let captured = Arc::new(Notify::new());
+    let safe = Fixture::start_with_gate(
+        BTreeMap::from([
+            ("/page".into(), html("<p id='record'>Loading</p><script>addEventListener('load', async () => { const response = await fetch('/capture-ready'); document.getElementById('record').textContent = await response.text(); });</script>".into())),
+            ("/capture-ready".into(), (200, "text/plain".into(), "Published after-load coaching record".into(), String::new())),
+            ("/api".into(), (200, "application/json".into(), "{\"value\":\"raw API response\"}".into(), String::new())),
+        ]),
+        Some(Arc::clone(&release)),
+    ).await?;
+    let profile = tempfile::tempdir()?;
+    let mut browser = browser(&safe.origin, profile.path()).await?;
+    browser.capture_ready = Some(Arc::clone(&captured));
+    let initial_pages = browser.chromium.pages().await?.len();
+    let scenario = async {
+        let target = target(&safe.origin, "/page");
+        let headers = BTreeMap::new();
+        let mut pending = Box::pin(browser.fetch(&target, &headers, Duration::ZERO));
+        tokio::select! {
+            result = &mut pending => return Err(anyhow::anyhow!("capture ended before delayed response was released: {result:?}")),
+            observed = safe.wait_for_request("GET /capture-ready ") => observed?,
+        }
+        let ready = timeout(Duration::from_secs(5), captured.notified()).await;
+        release.notify_one();
+        ready.context("capture stage was not reached while delayed fetch remained pending")?;
+        let capture = pending.await?;
+        assert_eq!(capture.status, 200);
+        let document = std::str::from_utf8(&capture.body)?;
+        assert!(document.contains("<p id=\"record\">Published after-load coaching record</p>"), "{document}");
+        let mut api = crate::model::Target::get(Source::AthleticNet, PageKind::Contacts, format!("{}/api", safe.origin), PageContext::default());
+        api.browser_origin = Some(safe.origin.clone());
+        let response = browser.fetch(&api, &headers, Duration::ZERO).await?;
+        assert_eq!(response.body, b"{\"value\":\"raw API response\"}");
+        assert!(browser.fetches.lock().await.is_empty());
+        assert_eq!(browser.chromium.pages().await?.len(), initial_pages);
+        safe.wait_for_idle().await?;
+        assert_eq!(safe.active.load(Ordering::SeqCst), 0);
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    let closed = browser.close().await;
+    let safe_closed = safe.close().await;
+    scenario.and(closed).and(safe_closed)
 }

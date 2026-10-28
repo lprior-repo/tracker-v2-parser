@@ -81,8 +81,10 @@ fn write_parts(
         selected
             .chunks(options.rows_per_file)
             .zip(&destinations)
-            .try_for_each(|(chunk, destination)| {
-                stage(destination, chunk, issues, options, &mut staged)
+            .enumerate()
+            .try_for_each(|(index, (chunk, destination))| {
+                let part_issues = if index == 0 { issues } else { &[] };
+                stage(destination, chunk, part_issues, options, &mut staged)
             })
     };
     let manifest = split.then(|| publication::manifest_path(path));

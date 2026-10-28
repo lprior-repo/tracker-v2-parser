@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use calamine::{Reader, open_workbook_auto};
 use sha2::{Digest, Sha256};
 use std::fs;
-use track_scrapper_v2::export::{ExportOptions, write_spreadsheets};
+use track_scrapper_v2::export::{
+    ExportIssue, ExportOptions, write_spreadsheets, write_spreadsheets_with_issues,
+};
 use track_scrapper_v2::model::{AthleteRecord, School};
 
 fn athlete(id: i64, name: String) -> AthleteRecord {
@@ -33,7 +35,6 @@ fn options() -> ExportOptions {
     }
 }
 
-
 #[test]
 fn existing_later_part_is_preserved_and_nothing_else_is_published() -> Result<()> {
     let directory = tempfile::tempdir()?;
@@ -47,7 +48,17 @@ fn existing_later_part_is_preserved_and_nothing_else_is_published() -> Result<()
 
     assert!(write_spreadsheets(&output, &records, &options()).is_err());
     assert_eq!(fs::read(&existing)?, b"other user's file");
-    assert_eq!(fs::read_dir(directory.path())?.count(), 1);
+    assert!(!output.exists());
+    assert!(!output.with_extension("manifest.json").exists());
+    assert!(!directory.path().join("export-0001.xlsx").exists());
+    for entry in fs::read_dir(directory.path())? {
+        let path = entry?.path();
+        assert!(
+            !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".tmp"))
+        );
+    }
     Ok(())
 }
 
@@ -72,10 +83,17 @@ fn successful_split_publishes_verified_parts_without_temporary_files() -> Result
     let manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
     assert_eq!(manifest["format"], "track-scrapper-export-v1");
     assert_eq!(manifest["complete"], true);
-    let entries = manifest["parts"].as_array().context("completion manifest parts")?;
-    let manifest_parts = entries.iter().map(|entry| {
-        Ok(directory.path().join(entry["file"].as_str().context("manifest part name")?))
-    }).collect::<Result<Vec<_>>>()?;
+    let entries = manifest["parts"]
+        .as_array()
+        .context("completion manifest parts")?;
+    let manifest_parts = entries
+        .iter()
+        .map(|entry| {
+            Ok(directory
+                .path()
+                .join(entry["file"].as_str().context("manifest part name")?))
+        })
+        .collect::<Result<Vec<_>>>()?;
     assert_eq!(manifest_parts, parts);
     for ((part, name), entry) in parts.iter().zip(["First", "Second"]).zip(entries) {
         let bytes = fs::read(part)?;
@@ -96,5 +114,41 @@ fn successful_split_publishes_verified_parts_without_temporary_files() -> Result
             path.display()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn given_coverage_issue_when_athletes_split_then_issue_is_published_exactly_once() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let output = directory.path().join("coverage.xlsx");
+    let records = [
+        athlete(1, "First".to_owned()),
+        athlete(2, "Second".to_owned()),
+    ];
+    let issues = [ExportIssue {
+        source: "milesplit".to_owned(),
+        url: "https://wi.milesplit.com/teams/1".to_owned(),
+        detail: "roster unavailable for public inspection".to_owned(),
+    }];
+    let parts = write_spreadsheets_with_issues(&output, &records, &issues, &options())?;
+    let mut published = Vec::new();
+    let mut athletes = Vec::new();
+    for part in parts {
+        let mut workbook = open_workbook_auto(part)?;
+        athletes.extend(
+            workbook
+                .worksheet_range("Athletes")?
+                .rows()
+                .skip(1)
+                .map(|row| row[1].to_string()),
+        );
+        for cell in workbook.worksheet_range("Issues")?.rows().flatten() {
+            if cell.to_string() == issues[0].detail {
+                published.push(cell.to_string());
+            }
+        }
+    }
+    assert_eq!(athletes, ["First", "Second"]);
+    assert_eq!(published, [issues[0].detail.clone()]);
     Ok(())
 }

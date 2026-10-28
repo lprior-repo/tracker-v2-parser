@@ -1,4 +1,3 @@
-mod http;
 mod observe;
 mod routing;
 mod status;

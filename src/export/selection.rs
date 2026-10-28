@@ -13,7 +13,7 @@ pub(super) fn in_scope(record: &AthleteRecord, options: &ExportOptions) -> bool 
             options
                 .states
                 .iter()
-                .any(|selected| selected.eq_ignore_ascii_case(state.trim()))
+                .any(|selected| selected.trim().eq_ignore_ascii_case(state.trim()))
         });
     let year = record
         .graduation_year

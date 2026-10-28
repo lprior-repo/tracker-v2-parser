@@ -17,7 +17,13 @@ impl NativeSink {
     pub async fn pause(&self) -> Result<oneshot::Sender<()>> {
         let (ready, observed) = oneshot::channel();
         let (release, released) = oneshot::channel();
-        self.status.control.send(Command::Hold { ready, release: released }).await?;
+        self.status
+            .control
+            .send(Command::Hold {
+                ready,
+                release: released,
+            })
+            .await?;
         observed.await?;
         Ok(release)
     }

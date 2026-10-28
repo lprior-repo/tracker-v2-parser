@@ -68,13 +68,16 @@ contacts; historical represented schools stay attached to results. Unknown
 current affiliation remains blank and flagged. Unknown cohorts or school states
 remain visible review candidates, not accepted scope membership; known
 out-of-scope records remain excluded.
+State selection trims surrounding Unicode whitespace and ignores ASCII case
+through both database selection and workbook writing.
 
 Main rows use at most 5,455 stable PR keys; further keys and overlong comparison
 keys remain in `PR_overflow`. Review summaries are limited to 1,024 UTF-16 units
-with explicit continuation notices. Complete issues use continuation rows;
-other oversized cells use `Cell_details`. Worksheets split before Excel row,
-column, cell or hyperlink limits. `Observations` is always present, independently
-of the optional per-athlete worksheets.
+with explicit continuation notices. Complete issues use continuation rows and
+coverage issues occur once across the completed workbook set. Other oversized
+cells use `Cell_details`. Worksheets split before Excel row, column, cell or
+hyperlink limits. `Observations` is always present, independently of the optional
+per-athlete worksheets.
 
 Published coach names appear in `coach_names`, independently of `coach_emails`.
 A named track/XC coach remains visible when no mailbox is published; an
@@ -247,6 +250,8 @@ peak-memory guarantee: PostgreSQL can materialize one stored JSONB/varlena value
 before measuring it. At most 10,000 workbook parts can be staged.
 Coverage is read in bounded status/note/unassigned phases, filling batches across
 phase boundaries; exact page-URL lookups use a crash-safe PostgreSQL hash index.
+Unfinished contact checkpoints have a partial authority index so propagating a
+blocked site's stop does not scan the national page backlog.
 
 
 Scraping backfills contact checkpoints from existing in-scope athletic-provider
@@ -334,12 +339,15 @@ tar --extract --gzip --keep-old-files --file "$BACKUP/evidence.tar.gz" \
   --directory "$RESTORE_APPLICATION_DATA"
 ```
 
-Recreate the application login with the required database permissions separately.
+Create the application login and make it the restore database owner first.
+Restore as that login, or pass `--role track_scrapper` from an authorized
+administrator: `--no-owner` assigns restored objects to the active role.
 Restore evidence at its recorded location, or locate backed-up bodies by their
 recorded SHA-256 in the configured evidence root. Re-run `scrape` against the
 restored database to continue unfinished checkpoints; `export` does not scrape.
-The recovery drill compares row counts and ordered full-row SHA-256 fingerprints
-for all six tables and migration history, then exercises the restored CLI.
+The recovery drill compares row counts and ordered full-row fingerprints for all
+six tables and migration history, plus sequence values and ownership, then
+exercises the restored CLI. Backup-file integrity uses the SHA-256 manifest.
 A verified snapshot recovers its captured state, not subsequent writes.
 
 ## Checks

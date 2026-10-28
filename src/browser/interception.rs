@@ -5,7 +5,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -14,7 +13,9 @@ use chromiumoxide::{
     cdp::browser_protocol::{
         fetch::{self, EventRequestPaused, FulfillRequestParams, HeaderEntry},
         network::{ResourceType, SetBypassServiceWorkerParams, SetCacheDisabledParams},
+        page::{EventLifecycleEvent, SetLifecycleEventsEnabledParams},
     },
+    listeners::EventStream,
 };
 use futures::{StreamExt, TryStreamExt, stream};
 use tokio::{
@@ -26,14 +27,17 @@ use tracing::Instrument;
 
 use super::{
     COMMAND_TIMEOUT,
+    capture::PageCapture,
     exchange::{self, DestinationPolicy},
 };
-use crate::model::{Capture, Target};
+use crate::model::Target;
+
+mod admission;
+mod drain;
 
 const MAX_PAGE_REQUESTS: usize = 512;
 const CONCURRENT_REQUESTS: usize = 8;
 const PENDING_REQUESTS: usize = 32;
-const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const AUXILIARY_POLICY: &str = "sandbox allow-scripts allow-same-origin allow-forms; worker-src 'none'; frame-src 'none'; connect-src http: https:";
 const AUDIT_SCRIPT: &str = r"(() => {
     const report = globalThis.__trackBlockedBinding;
@@ -65,9 +69,12 @@ const AUDIT_SCRIPT: &str = r"(() => {
 })()";
 
 pub(super) struct Interception {
-    stop: Option<(oneshot::Sender<()>, oneshot::Sender<()>)>,
+    admission: admission::Gate,
+    audit_stop: Option<oneshot::Sender<()>>,
     tasks: JoinSet<Result<usize>>,
+    guards: JoinSet<Result<usize>>,
     blocked: Arc<AtomicBool>,
+    idle: EventStream<EventLifecycleEvent>,
 }
 
 impl Interception {
@@ -84,6 +91,9 @@ impl Interception {
             .await?;
         page.execute(SetCacheDisabledParams::new(true)).await?;
         let events = page.event_listener::<EventRequestPaused>().await?;
+        let idle = page.event_listener::<EventLifecycleEvent>().await?;
+        page.execute(SetLifecycleEventsEnabledParams::new(true))
+            .await?;
         page.execute(fetch::EnableParams::default()).await?;
         let policy = DestinationPolicy::new(target, headers);
         #[cfg(test)]
@@ -101,32 +111,22 @@ impl Interception {
         let page = page.clone();
         let blocked = Arc::new(AtomicBool::new(false));
         let failures = Arc::clone(&blocked);
-        let (stop, stopped) = oneshot::channel();
         let mut tasks = JoinSet::new();
+        let mut guards = JoinSet::new();
         let audit_stop = super::audit::install(
             endpoint,
             page.target_id(),
             AUDIT_SCRIPT,
-            &mut tasks,
+            &mut guards,
             Arc::clone(&blocked),
         )
         .await?;
         let (pending, receiver) = mpsc::channel(PENDING_REQUESTS);
-        tasks.spawn(
-            async move {
-                events
-                    .take_until(stopped)
-                    .take(MAX_PAGE_REQUESTS)
-                    .map(Ok::<_, anyhow::Error>)
-                    .try_fold(0_usize, |count, event| {
-                        let sent = pending
-                            .try_send(event)
-                            .context("browser request admission budget exceeded");
-                        async move { sent.map(|()| count.saturating_add(1)) }
-                    })
-                    .await
-            }
-            .instrument(tracing::info_span!("browser_request_admission")),
+        let (admission, admitted) = admission::new(events, pending, Arc::clone(&blocked));
+        guards.spawn(
+            admitted
+                .run()
+                .instrument(tracing::info_span!("browser_request_admission")),
         );
         tasks.spawn(
             async move {
@@ -150,29 +150,26 @@ impl Interception {
             .instrument(tracing::info_span!("browser_request_interception")),
         );
         Ok(Self {
-            stop: Some((stop, audit_stop)),
+            admission,
+            audit_stop: Some(audit_stop),
             tasks,
+            guards,
             blocked,
+            idle,
         })
     }
 
     pub async fn run(
         &mut self,
-        operation: impl Future<Output = Result<Capture>>,
-    ) -> Result<Capture> {
+        operation: impl Future<Output = Result<PageCapture>>,
+    ) -> Result<PageCapture> {
         let result = tokio::select! {
             result = operation => result,
-            stopped = self.tasks.join_next() => {
-                match stopped {
-                    Some(Ok(Ok(count))) => Err(anyhow!("browser interception stopped after {count} requests before acquisition completed")),
-                    Some(Ok(Err(error))) => Err(error.context("browser interception failed")),
-                    Some(Err(error)) => Err(anyhow!(error).context("browser interception task failed")),
-                    None => Err(anyhow!("browser interception task disappeared")),
-                }
-            }
+            stopped = self.tasks.join_next() => stopped_result(stopped),
+            stopped = self.guards.join_next() => stopped_result(stopped),
         };
         let capture = result?;
-        if !crate::transport::access_stop_status(capture.status) {
+        if !crate::transport::access_stop_status(capture.capture().status) {
             ensure!(
                 !self.blocked.load(Ordering::Acquire),
                 "browser acquisition incomplete: a requested destination was blocked"
@@ -180,61 +177,16 @@ impl Interception {
         }
         Ok(capture)
     }
-
-    pub async fn finish(mut self, access_stop: bool) -> Result<()> {
-        if let Some((stop, audit_stop)) = self.stop.take() {
-            if stop.send(()).is_err() {
-                tracing::debug!("browser interceptor already stopped");
-            }
-            if audit_stop.send(()).is_err() {
-                tracing::debug!("browser acquisition audit already stopped");
-            }
-        }
-        let result = match timeout(DRAIN_TIMEOUT, drain(&mut self.tasks, false)).await {
-            Ok(result) => result,
-            Err(_) => self.abort_and_drain().await,
-        };
-        result?;
-        ensure!(
-            access_stop || !self.blocked.load(Ordering::Acquire),
-            "browser acquisition incomplete: a requested destination was blocked"
-        );
-        Ok(())
-    }
-
-    async fn abort_and_drain(&mut self) -> Result<()> {
-        let aborted = self.tasks.len();
-        self.tasks.abort_all();
-        let result = drain(&mut self.tasks, true).await;
-        tracing::warn!(
-            aborted,
-            remaining = self.tasks.len(),
-            "browser interception exceeded drain deadline"
-        );
-        result?;
-        Err(anyhow!(
-            "browser interception exceeded drain deadline; acquisition incomplete"
-        ))
-    }
 }
 
-async fn drain(tasks: &mut JoinSet<Result<usize>>, cancelled: bool) -> Result<()> {
-    let first = joined(tasks.join_next().await, cancelled);
-    let second = joined(tasks.join_next().await, cancelled);
-    let third = joined(tasks.join_next().await, cancelled);
-    first.and(second).and(third)
-}
-
-fn joined(result: Option<Result<Result<usize>, JoinError>>, cancelled: bool) -> Result<()> {
+fn stopped_result(result: Option<Result<Result<usize>, JoinError>>) -> Result<PageCapture> {
     match result {
-        Some(Ok(result)) => {
-            let completed = result.context("browser acquisition incomplete: interception task failed")?;
-            tracing::debug!(completed, "browser interception task drained");
-            Ok(())
-        }
-        Some(Err(error)) if cancelled && error.is_cancelled() => Ok(()),
-        Some(Err(error)) => Err(anyhow!(error).context("joining browser interception")),
-        None => Ok(()),
+        Some(Ok(Ok(count))) => Err(anyhow!(
+            "browser interception task stopped after {count} events before acquisition completed"
+        )),
+        Some(Ok(Err(error))) => Err(error.context("browser interception failed")),
+        Some(Err(error)) => Err(anyhow!(error).context("browser interception task failed")),
+        None => Err(anyhow!("browser interception task disappeared")),
     }
 }
 
