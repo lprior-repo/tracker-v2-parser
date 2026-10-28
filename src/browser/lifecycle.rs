@@ -53,7 +53,7 @@ impl Acquisition {
             )
             .await?;
         #[cfg(not(test))]
-        let baseline = self.native_status.checkpoint().await?;
+        let baseline = self.native_status.begin().await?;
         let params = CreateTargetParams::builder()
             .url("about:blank")
             .browser_context_id(self.context.clone())
@@ -146,6 +146,7 @@ impl Acquisition {
             &self.target,
             &self.headers,
             self.chromium.endpoint(),
+            self.interval,
             #[cfg(test)]
             self.local_origin.clone(),
             #[cfg(test)]

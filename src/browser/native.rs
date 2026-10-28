@@ -3,6 +3,8 @@ mod routing;
 mod status;
 
 #[cfg(test)]
+mod lifetime_tests;
+#[cfg(test)]
 mod test_support;
 
 use std::{
@@ -47,6 +49,8 @@ struct Actor {
     commands: mpsc::Receiver<Command>,
     pending: FuturesUnordered<PendingSocket>,
     connects: BTreeMap<String, usize>,
+    accepted: usize,
+    remaining_steps: usize,
     #[cfg(test)]
     local_origins: Vec<url::Origin>,
 }
@@ -64,6 +68,8 @@ impl NativeSink {
             commands,
             pending: FuturesUnordered::new(),
             connects: BTreeMap::new(),
+            accepted: 0,
+            remaining_steps: MAX_COMMANDS,
             #[cfg(test)]
             local_origins: Vec::new(),
         };
@@ -77,7 +83,6 @@ impl NativeSink {
                         .await
                         .map(|active| active.then_some(((), actor)))
                 })
-                .take(MAX_COMMANDS)
                 .try_fold(
                     0_usize,
                     |count, ()| async move { Ok(count.saturating_add(1)) },
@@ -134,13 +139,19 @@ impl NativeSink {
 
 impl Actor {
     async fn step(&mut self) -> Result<bool> {
+        self.remaining_steps = self
+            .remaining_steps
+            .checked_sub(1)
+            .context("native browser acquisition command budget exceeded")?;
         tokio::select! {
             biased;
             command = self.commands.recv() => match command.context("native sink owner dropped command channel")? {
-                #[cfg(test)]
-                Command::Begin { local_origins, reply } => {
+                Command::Begin { #[cfg(test)] local_origins, reply } => {
                     self.reply_checkpoint(reply).await?;
-                    self.local_origins = local_origins;
+                    self.accepted = 0;
+                    self.remaining_steps = MAX_COMMANDS;
+                    #[cfg(test)]
+                    { self.local_origins = local_origins; }
                 }
                 Command::Drain(reply) => self.reply_checkpoint(reply).await?,
                 Command::Stop => { self.checkpoint().await?; return Ok(false); }
@@ -161,12 +172,16 @@ impl Actor {
         Ok(true)
     }
 
-    fn accept(&self, socket: TcpStream) -> Result<()> {
-        let previous = self.status.accepted.fetch_add(1, Ordering::AcqRel);
+    fn accept(&mut self, socket: TcpStream) -> Result<()> {
         ensure!(
-            previous < MAX_CONNECTIONS,
+            self.accepted < MAX_CONNECTIONS,
             "native browser connection budget exceeded"
         );
+        self.accepted = self
+            .accepted
+            .checked_add(1)
+            .context("native acquisition connection count overflow")?;
+        self.status.accepted.fetch_add(1, Ordering::AcqRel);
         self.pending.push(PendingSocket::new(socket));
         Ok(())
     }

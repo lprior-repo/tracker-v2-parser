@@ -101,7 +101,7 @@ pub(super) async fn document(page: &Page, url: &str) -> Result<Capture> {
     .and_then(std::convert::identity);
     let body = body_result.map_err(|error| {
         if access_stop_status(status) || denied_url(&response.response.url) {
-            AccessStopCaptureError { status, error }.into()
+            AccessStopCaptureError::new(status, error, &response.response.url).into()
         } else {
             error
         }

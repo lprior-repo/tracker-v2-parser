@@ -84,6 +84,7 @@ impl Interception {
         target: &Target,
         headers: &BTreeMap<String, String>,
         endpoint: &str,
+        interval: std::time::Duration,
         #[cfg(test)] local_origin: Option<url::Origin>,
         #[cfg(test)] additional_origin: Option<url::Origin>,
     ) -> Result<Self> {
@@ -95,7 +96,7 @@ impl Interception {
         page.execute(SetLifecycleEventsEnabledParams::new(true))
             .await?;
         page.execute(fetch::EnableParams::default()).await?;
-        let policy = DestinationPolicy::new(target, headers);
+        let policy = DestinationPolicy::new(target, headers, interval);
         #[cfg(test)]
         let policy = {
             let mut policy = policy;
@@ -197,12 +198,18 @@ async fn fulfill(
     event: &EventRequestPaused,
     blocked: &AtomicBool,
 ) -> Result<()> {
-    let response = timeout(COMMAND_TIMEOUT, exchange::request(policy, page, event))
-        .await
-        .context("pinned browser exchange timed out")
-        .and_then(|result| result);
+    let response = exchange::request(policy, page, event).await;
+    let observed_stop = response
+        .as_ref()
+        .is_ok_and(|response| crate::transport::access_stop_status(response.status));
     let mut response = match response {
         Ok(response) => response,
+        Err(error)
+            if error.is::<crate::transport::AccessStop>()
+                || error.is::<crate::transport::AccessStopCaptureError>() =>
+        {
+            return Err(error);
+        }
         Err(error)
             if event.resource_type == ResourceType::Document
                 && !error.is::<exchange::RejectedDestination>() =>
@@ -219,6 +226,15 @@ async fn fulfill(
             }
         }
     };
+    if observed_stop && event.resource_type != ResourceType::Document {
+        return Err(crate::transport::AccessStop {
+            origin: url::Url::parse(&event.request.url)?
+                .origin()
+                .ascii_serialization(),
+            status: Some(response.status),
+        }
+        .into());
+    }
     if crate::transport::access_stop_status(response.status) {
         blocked.store(true, Ordering::Release);
     }
