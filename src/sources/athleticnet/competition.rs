@@ -58,16 +58,39 @@ pub(super) fn validated(target: &Target) -> Option<&CompetitionEvidence> {
         && evidence.source == target.source
         && target.context.subject_id.as_deref() == Some(evidence.meet_id.as_str())
         && target.context.sport == Some(evidence.sport)
+        && requested_meet(target, evidence)
         && v::id(&evidence.meet, "ID").as_deref() == Some(evidence.meet_id.as_str())
         && evidence.divisions.len() <= MAX_DIVISIONS
         && serde_json::to_vec(evidence).ok()?.len() <= MAX_EVIDENCE_BYTES)
         .then_some(evidence)
 }
 
+fn requested_meet(target: &Target, evidence: &CompetitionEvidence) -> bool {
+    let Ok(url) = url::Url::parse(&target.url) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && matches!(url.host_str(), Some("www.athletic.net" | "athletic.net"))
+        && url.path() == "/api/v1/Meet/GetAllResultsData"
+        && unique_query(&url, "meetId").as_deref() == Some(evidence.meet_id.as_str())
+        && unique_query(&url, "sport").as_deref() == Some(super::scope(evidence.sport))
+}
+
+fn unique_query(url: &url::Url, parameter: &str) -> Option<String> {
+    url.query_pairs()
+        .filter(|(key, _)| key == parameter)
+        .try_fold(None, |found, (_, value)| {
+            if found.is_some() {
+                Err(())
+            } else {
+                Ok(Some(value.into_owned()))
+            }
+        })
+        .ok()
+        .flatten()
+}
+
 pub(super) fn level(value: &Value) -> Option<bool> {
-    if value.get("LevelMask").is_some() {
-        return Some(false);
-    }
     if let Some(level) = value.get("Level") {
         return Some(
             level.as_u64() == Some(4)
@@ -95,6 +118,9 @@ pub(super) fn result_level(
 }
 
 fn inherited_level(evidence: &CompetitionEvidence, block: &Value, row: &Value) -> Option<bool> {
+    if level(&evidence.meet) == Some(false) {
+        return Some(false);
+    }
     if row.get("MeetID").is_some()
         && v::id(row, "MeetID").as_deref() != Some(evidence.meet_id.as_str())
     {
@@ -126,5 +152,11 @@ fn inherited_level(evidence: &CompetitionEvidence, block: &Value, row: &Value) -
     {
         return Some(false);
     }
-    level(division).or_else(|| level(&evidence.meet))
+    level(division).or_else(|| {
+        if division.get("LevelMask").is_some() {
+            None
+        } else {
+            level(&evidence.meet)
+        }
+    })
 }

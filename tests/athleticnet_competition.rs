@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use track_scrapper_v2::{
     database::Database,
-    model::{Capture, ParsedPage, Source, Sport, Target},
+    model::{Capture, ParsedPage, Sport, Target},
     sources::athleticnet::{meet_target, parse},
 };
 
@@ -180,6 +180,47 @@ fn given_division_evidence_when_ids_or_levels_conflict_then_hs_is_not_inherited(
             parsed_level(&serde_json::from_value(encoded)?, &results())?,
             Value::Null
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_known_non_hs_meet_when_division_says_hs_then_contradiction_rejects_admission() -> Result<()>
+{
+    let mut body = metadata(Some(json!(2)), None);
+    body["tfDivisions"] = json!([{"MeetID":634313,"IDDiv":1,"Level":4}]);
+    assert_eq!(
+        parsed_level(&results_target(&body)?, &results())?,
+        Value::Null
+    );
+    body["meet"]
+        .as_object_mut()
+        .context("meet")?
+        .remove("Level");
+    body["meet"]["LevelMask"] = json!(6);
+    assert_eq!(
+        parsed_level(&results_target(&body)?, &results())?,
+        "high school"
+    );
+    Ok(())
+}
+
+#[test]
+fn given_resumed_evidence_when_request_identity_changes_then_old_meet_cannot_label_new_results()
+-> Result<()> {
+    let target = results_target(&metadata(Some(json!(4)), None))?;
+    for url in [
+        "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=999999&sport=tf",
+        "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=634313&sport=xc",
+        "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=634313&meetId=999999&sport=tf",
+        "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=634313&sport=tf&sport=xc",
+        "https://www.athletic.net/api/v1/Meet/GetAllResultsData?meetId=634313",
+        "https://www.athletic.net/api/v1/Meet/Other?meetId=634313&sport=tf",
+    ] {
+        let mut encoded = serde_json::to_value(&target)?;
+        encoded["url"] = json!(url);
+        let resumed: Target = serde_json::from_value(encoded)?;
+        assert_eq!(parsed_level(&resumed, &results())?, Value::Null, "{url}");
     }
     Ok(())
 }
@@ -372,4 +413,52 @@ async fn given_explicit_and_unknown_levels_when_persisted_twice_and_exported_the
         support::with_schema(|test| Box::pin(export_case(test, level, mask, eligible))).await?;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn given_captured_bio_when_cli_replayed_twice_then_unknown_levels_remain_observations()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            support::assert_success(&support::import_bio(test).await?);
+            let before: i64 = sqlx::query_scalar("SELECT count(*) FROM results")
+                .fetch_one(&test.pool)
+                .await?;
+            support::assert_success(&support::import_bio(test).await?);
+            let after: i64 = sqlx::query_scalar("SELECT count(*) FROM results")
+                .fetch_one(&test.pool)
+                .await?;
+            assert_eq!(after, before);
+            assert_eq!(after, 53);
+            let output = test.directory().join("captured-bio.xlsx");
+            support::assert_success(
+                &test
+                    .cli(&[
+                        "export",
+                        "--output",
+                        output.to_str().context("output path")?,
+                    ])
+                    .await?,
+            );
+            let mut workbook = open_workbook_auto(output)?;
+            let athletes = workbook.worksheet_range("Athletes")?;
+            assert!(
+                athletes
+                    .rows()
+                    .next()
+                    .context("headers")?
+                    .iter()
+                    .all(|cell| !cell.to_string().starts_with("best_observed::athleticnet::"))
+            );
+            let observations = workbook.worksheet_range("Observations")?;
+            assert!(
+                observations
+                    .rows()
+                    .skip(1)
+                    .any(|row| row.iter().any(|cell| cell.to_string() == "11.48a"))
+            );
+            Ok(())
+        })
+    })
+    .await
 }
