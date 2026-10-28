@@ -81,6 +81,19 @@ the recovery path reported by the error. Abrupt process death can leave
 unmanifested partial files, which are not automatically deleted. Choose a new
 output name rather than overwriting another file.
 
+The checked-in configuration selects `layout = "single_sheet"` under `[export]`.
+This writes one `Athletes` worksheet per workbook part: school/address, published
+track/XC coach names and emails, profile links, and every captured source-published
+PR. PR columns retain the published sport, event, competition level and provider;
+all-level and middle-school marks remain visible with their own labels. Raw event
+labels and marks remain visible even when numeric normalization is unsupported.
+Repeated claims within a column are sorted deterministically and all retained.
+No PR winner is inferred across levels or incompatible contexts. The athlete
+cohort/state settings still apply. No JSON, review prose or supporting sheets are
+written. Oversized cells/column plans fail explicitly rather than adding overflow
+tabs. Empty issue-only batches do not create extra empty files.
+
+`layout = "detailed"` selects the diagnostic export described below.
 The main sheet has one row per selected canonical athlete ID. Only explicitly
 published high-school observations compete for PRs. All-level, middle-school,
 college, unknown-level and unconfirmed prior-revision observations remain in
@@ -487,12 +500,15 @@ select this acquisition policy:
 [acquisition]
 mode = "public_results"
 reviewed_media_stops = ["https://mn.milesplit.com/athletes/13557507-tana-borland/photos"]
+collect_contacts = true
 ```
 
+`collect_contacts = true` enables the existing school-contact parser/backfill
+while retaining authority-scoped contact access stops. Its default is false.
 The listed stop was reviewed as subscription photos. Its blocked checkpoint is
 retained and never requested again by this policy. Only exact canonical athlete
 photo/video URLs may be reviewed this way. Public-results mode excludes media,
-external school-contact acquisition, and published robots restrictions before
+external school-contact acquisition unless enabled, and published robots restrictions before
 making requests. Local exclusions retain a separate marker and consume no
 attempts. Existing attempted exclusions require review. Any other blocked
 checkpoint still stops its source; new HTTP denials, challenges, login demands,

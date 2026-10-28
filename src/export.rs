@@ -3,6 +3,7 @@ mod profiles;
 mod publication;
 mod rows;
 mod selection;
+mod single_sheet;
 mod workbook;
 
 use crate::model::AthleteRecord;
@@ -12,6 +13,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportLayout {
+    #[default]
+    Detailed,
+    SingleSheet,
+}
 
 #[derive(Debug, Clone)]
 pub struct ExportOptions {
@@ -76,7 +85,14 @@ fn write_parts(
     })?;
     let mut staged = Vec::with_capacity(destinations.len());
     let staging = if selected.is_empty() {
-        stage(path, &[], issues, options, &mut staged)
+        stage(
+            path,
+            &[],
+            issues,
+            options,
+            &mut staged,
+            ExportLayout::Detailed,
+        )
     } else {
         selected
             .chunks(options.rows_per_file)
@@ -84,7 +100,14 @@ fn write_parts(
             .enumerate()
             .try_for_each(|(index, (chunk, destination))| {
                 let part_issues = if index == 0 { issues } else { &[] };
-                stage(destination, chunk, part_issues, options, &mut staged)
+                stage(
+                    destination,
+                    chunk,
+                    part_issues,
+                    options,
+                    &mut staged,
+                    ExportLayout::Detailed,
+                )
             })
     };
     let manifest = publication::manifest_path(path);
@@ -122,6 +145,7 @@ fn stage(
     issues: &[ExportIssue],
     options: &ExportOptions,
     staged: &mut Vec<PathBuf>,
+    layout: ExportLayout,
 ) -> Result<()> {
     let name = path
         .file_name()
@@ -135,7 +159,10 @@ fn stage(
         .open(&temporary)?;
     staged.push(temporary);
     let temporary = staged.last().context("missing staged workbook")?;
-    workbook::write_and_verify(temporary, records, issues, options)?;
+    match layout {
+        ExportLayout::Detailed => workbook::write_and_verify(temporary, records, issues, options)?,
+        ExportLayout::SingleSheet => single_sheet::write_and_verify(temporary, records)?,
+    }
     file.sync_all().context("syncing verified workbook")
 }
 
@@ -173,6 +200,7 @@ pub struct StagedExport {
     options: ExportOptions,
     staged: Vec<PathBuf>,
     destinations: Vec<PathBuf>,
+    layout: ExportLayout,
 }
 
 impl StagedExport {
@@ -183,10 +211,20 @@ impl StagedExport {
             options: options.clone(),
             staged: Vec::new(),
             destinations: Vec::new(),
+            layout: ExportLayout::Detailed,
         })
     }
 
+    #[must_use]
+    pub const fn with_layout(mut self, layout: ExportLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
     pub fn stage_part(&mut self, records: &[AthleteRecord], issues: &[ExportIssue]) -> Result<()> {
+        if self.layout == ExportLayout::SingleSheet && records.is_empty() {
+            return Ok(());
+        }
         anyhow::ensure!(
             self.staged.len() == self.destinations.len(),
             "cannot continue a failed staged export"
@@ -208,14 +246,30 @@ impl StagedExport {
             .iter()
             .filter(|record| selection::in_scope(record, &self.options))
             .collect::<Vec<_>>();
-        stage(&path, &records, issues, &self.options, &mut self.staged)?;
+        stage(
+            &path,
+            &records,
+            issues,
+            &self.options,
+            &mut self.staged,
+            self.layout,
+        )?;
         self.destinations.push(path);
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<Vec<PathBuf>> {
         if self.destinations.is_empty() {
-            self.stage_part(&[], &[])?;
+            let path = destination(&self.path, 0, true)?;
+            stage(
+                &path,
+                &[],
+                &[],
+                &self.options,
+                &mut self.staged,
+                self.layout,
+            )?;
+            self.destinations.push(path);
         }
         if self.destinations.len() == 1 {
             let destination = self

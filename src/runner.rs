@@ -568,7 +568,7 @@ async fn read_replay(input: &Path) -> Result<Vec<u8>> {
 
 async fn export_records(database: &Database, config: &Config, output: &Path) -> Result<()> {
     database
-        .write_export(
+        .write_export_with_layout(
             output,
             &crate::export::ExportOptions {
                 states: config.states.clone(),
@@ -576,6 +576,7 @@ async fn export_records(database: &Database, config: &Config, output: &Path) -> 
                 rows_per_file: config.export.rows_per_file,
                 per_athlete_sheets: config.export.per_athlete_sheets,
             },
+            config.export.layout,
         )
         .await?;
     Ok(())

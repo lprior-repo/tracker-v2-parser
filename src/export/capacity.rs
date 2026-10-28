@@ -133,8 +133,10 @@ fn new_sheet(workbook: &mut Workbook, base: &str, part: u32, headers: &[String])
 }
 
 fn is_hyperlink(header: &str, text: &str) -> bool {
-    (matches!(header, "source_profiles" | "profile_url" | "source_url")
-        || header.ends_with("::source_url"))
+    (matches!(
+        header,
+        "source_profiles" | "profile_url" | "source_url" | "Profile"
+    ) || header.ends_with("::source_url"))
         && (text.starts_with("https://") || text.starts_with("http://"))
         && !text.contains("; ")
         && text.encode_utf16().count() <= 2_080

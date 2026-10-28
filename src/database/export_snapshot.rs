@@ -545,8 +545,9 @@ pub(super) async fn write(
     snapshot: ExportSnapshot<'_>,
     output: &Path,
     options: &ExportOptions,
+    layout: crate::export::ExportLayout,
 ) -> Result<Vec<PathBuf>> {
-    let staged = StagedExport::new(output, options)?;
+    let staged = StagedExport::new(output, options)?.with_layout(layout);
     let rows = options.rows_per_file.min(EXPORT_BATCH_ROWS);
     let staged = parts(snapshot, rows)
         .try_fold(staged, |mut staged, (records, issues)| async move {

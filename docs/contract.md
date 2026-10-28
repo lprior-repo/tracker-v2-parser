@@ -225,7 +225,18 @@ graduation year, current school or crawl configuration. Numeric normalization is
 independent, so excluded observations remain available without becoming HS PRs.
 
 
-**C7 — spreadsheet:** one local athlete ID per row, school/postal fields,
+**C7 — spreadsheet:**
+The user-selected `single_sheet` layout presents every captured source-published
+PR on that athlete's row, including all/MS/college/unknown levels under explicit
+level/provider/sport/event labels. This is a display of published claims, not HS
+eligibility or a new cross-context PR ranking. Multiple claims remain sorted and
+retained. Raw marks and unsupported event labels are preserved. Coach names and
+emails are read from persisted source-school contact claims. JSON, audit prose,
+overflow and supporting tabs are omitted; over-capacity output fails explicitly.
+Each published workbook part contains exactly one Athletes sheet. The diagnostic
+`detailed` layout retains the following supporting-sheet contract.
+
+One local athlete ID per row, school/postal fields,
 `coach_names`, distinct coach/school email fields, observed PR columns, and source
 links. Coach email aggregation omits null; a named coach without email remains
 visible in `coach_names` with a blank email when no mailbox is published.

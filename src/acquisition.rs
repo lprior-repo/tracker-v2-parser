@@ -18,6 +18,8 @@ pub enum AcquisitionPolicy {
     PublicResults {
         #[serde(default)]
         reviewed_media_stops: Vec<ReviewedMediaStop>,
+        #[serde(default)]
+        collect_contacts: bool,
     },
 }
 
@@ -79,6 +81,7 @@ impl AcquisitionPolicy {
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::PublicResults {
             reviewed_media_stops,
+            ..
         } = self
         {
             ensure!(
@@ -90,14 +93,21 @@ impl AcquisitionPolicy {
     }
 
     pub(crate) const fn includes_contacts(&self) -> bool {
-        matches!(self, Self::Complete)
+        matches!(
+            self,
+            Self::Complete
+                | Self::PublicResults {
+                    collect_contacts: true,
+                    ..
+                }
+        )
     }
 
     pub(crate) fn exclusion_reason(&self, target: &Target) -> Option<&'static str> {
         if matches!(self, Self::Complete) {
             return None;
         }
-        if target.kind == PageKind::Contacts {
+        if target.kind == PageKind::Contacts && !self.includes_contacts() {
             return Some("Public-results scope excludes external school-contact acquisition");
         }
         if target.source != Source::MileSplit {
@@ -123,6 +133,7 @@ impl AcquisitionPolicy {
     ) -> Result<bool> {
         let Self::PublicResults {
             reviewed_media_stops,
+            ..
         } = self
         else {
             return Ok(false);

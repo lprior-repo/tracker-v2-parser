@@ -234,10 +234,21 @@ impl Database {
         output: &std::path::Path,
         options: &crate::export::ExportOptions,
     ) -> Result<Vec<std::path::PathBuf>> {
+        self.write_export_with_layout(output, options, crate::export::ExportLayout::Detailed)
+            .await
+    }
+
+    #[tracing::instrument(skip(self, options))]
+    pub async fn write_export_with_layout(
+        &self,
+        output: &std::path::Path,
+        options: &crate::export::ExportOptions,
+        layout: crate::export::ExportLayout,
+    ) -> Result<Vec<std::path::PathBuf>> {
         let snapshot = self
             .begin_export_snapshot(&options.states, &options.graduation_years)
             .await?;
-        export_snapshot::write(snapshot, output, options).await
+        export_snapshot::write(snapshot, output, options, layout).await
     }
 }
 

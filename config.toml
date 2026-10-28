@@ -17,5 +17,6 @@ enabled = true
 transport = "http"
 
 [export]
+layout = "single_sheet"
 rows_per_file = 100000
 per_athlete_sheets = false

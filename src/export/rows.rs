@@ -172,7 +172,7 @@ fn optional(value: Option<&str>) -> String {
     value.map_or_else(String::new, str::to_owned)
 }
 
-fn joined<'a>(values: impl Iterator<Item = &'a str>) -> String {
+pub(super) fn joined<'a>(values: impl Iterator<Item = &'a str>) -> String {
     values
         .filter(|value| !value.trim().is_empty())
         .collect::<BTreeSet<_>>()
@@ -181,7 +181,7 @@ fn joined<'a>(values: impl Iterator<Item = &'a str>) -> String {
         .join("; ")
 }
 
-fn addresses(record: &AthleteRecord) -> String {
+pub(super) fn addresses(record: &AthleteRecord) -> String {
     record
         .schools
         .iter()

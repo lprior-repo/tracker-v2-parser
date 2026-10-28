@@ -62,6 +62,7 @@ impl Default for Limits {
 pub struct ExportSettings {
     pub rows_per_file: usize,
     pub per_athlete_sheets: bool,
+    pub layout: crate::export::ExportLayout,
 }
 
 impl Default for ExportSettings {
@@ -69,6 +70,7 @@ impl Default for ExportSettings {
         Self {
             rows_per_file: 100_000,
             per_athlete_sheets: false,
+            layout: crate::export::ExportLayout::default(),
         }
     }
 }
