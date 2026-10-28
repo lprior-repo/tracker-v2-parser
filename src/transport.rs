@@ -213,8 +213,11 @@ impl Transport {
         result
     }
 
-    const fn uses_browser(&self, target: &Target) -> bool {
-        if matches!(target.kind, PageKind::Contacts) {
+    fn uses_browser(&self, target: &Target) -> bool {
+        if matches!(target.kind, PageKind::Contacts)
+            && !(matches!(self.options.mode, Mode::Http)
+                && crate::sources::wiaa::is_public_directory_url(&target.url))
+        {
             return true;
         }
         match self.options.mode {

@@ -42,6 +42,9 @@ Changing states restricts resumed checkpoint acquisition and unfinished-work
 reporting without deleting or resetting saved data from other states. Unknown
 checkpoint scope is not permission to start an unrelated national crawl.
 Provider-wide access stops still require human review.
+Graduation-year filtering skips athlete-profile checkpoints already known to
+belong to another cohort without changing their saved status or attempts.
+Profiles with unknown graduation years remain eligible for discovery.
 
 
 Scraping uses bounded attempts and checkpoints; access challenges require human
@@ -82,16 +85,22 @@ unmanifested partial files, which are not automatically deleted. Choose a new
 output name rather than overwriting another file.
 
 The checked-in configuration selects `layout = "single_sheet"` under `[export]`.
-This writes one `Athletes` worksheet per workbook part: school/address, published
-track/XC coach names and emails, profile links, and every captured source-published
-PR. PR columns retain the published sport, event, competition level and provider;
+This writes exactly one workbook with one `Athletes` worksheet across database
+batches: school/address, published track/XC coach names and emails, profile links,
+and every captured source-published PR. PR columns retain the published sport, event, competition level and provider;
 all-level and middle-school marks remain visible with their own labels. Raw event
 labels and marks remain visible even when numeric normalization is unsupported.
 Repeated claims within a column are sorted deterministically and all retained.
-No PR winner is inferred across levels or incompatible contexts. The athlete
+Public all-season headline PRs retain their published attribution. Ordinary
+results also provide event bests within compatible timing, wind, event and course
+contexts; they do not compete across levels or incompatible contexts. The athlete
 cohort/state settings still apply. No JSON, review prose or supporting sheets are
-written. Oversized cells/column plans fail explicitly rather than adding overflow
-tabs. Empty issue-only batches do not create extra empty files.
+written. Compact prepared cells are retained across batches; raw profile JSON and
+result records are discarded after each batch. The total athlete count must fit
+`rows_per_file` and Excel's row capacity; prepared storage is limited to 128 MiB.
+Exceeding a row, byte, cell or column capacity fails explicitly without publishing
+a complete export or adding overflow tabs. Empty issue-only batches do not create
+extra empty files.
 
 `layout = "detailed"` selects the diagnostic export described below.
 The main sheet has one row per selected canonical athlete ID. Only explicitly
@@ -296,6 +305,23 @@ phase boundaries; exact page-URL lookups use a crash-safe PostgreSQL hash index.
 Unfinished contact checkpoints have a partial authority index so propagating a
 blocked site's stop does not scan the national page backlog.
 
+
+Discover published Wisconsin WIAA school contacts after collecting provider
+schools, with `WI` selected and contact collection enabled:
+
+```sh
+cargo run -- scrape --config config.toml --wiaa-directory
+cargo run -- scrape --config config.toml
+cargo run -- export --config config.toml --output athletes-with-contacts.xlsx
+```
+
+The first command reads the public WIAA directory and enqueues school-detail
+pages matched by exact normalized school name, Wisconsin state and city. It
+reports missing, uncorroborated and ambiguous matches without guessing identities.
+The subsequent scrape acquires those pages and persists published track/XC coach
+names, emails and school addresses; discovery alone does not populate those
+fields. Provider school IDs remain intact. Existing site access stops apply,
+and WIAA global navigation is not crawled.
 
 Scraping backfills contact checkpoints from existing in-scope athletic-provider
 school websites and discovers them when new school pages are parsed. Plain

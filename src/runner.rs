@@ -301,11 +301,12 @@ async fn next_enabled_job(
     sources.sort_by_key(|source| *source != schedule.next_source);
     for source in sources {
         if let Some(job) = database
-            .next_job_with_priority(
+            .next_job_for_cohort(
                 Some(source),
                 config.limits.max_attempts,
                 schedule.preferred(source),
                 &config.states,
+                &config.graduation_years,
             )
             .await?
         {
@@ -348,6 +349,13 @@ async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
     for source in config.enabled_sources() {
         let exhausted: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM scrape_pages p WHERE source=$1 AND status IN ('pending','failed') AND attempts >= $2 \
+             AND NOT (p.cursor->>'kind'='contacts' AND p.url ~ '^https://schools[.]wiaawi[.]org/' \
+               AND split_part(p.url,'?',1) <> 'https://schools.wiaawi.org/Directory/School/GetDirectorySchool') \
+             AND (p.cursor->>'kind' <> 'athlete' OR cardinality($4::integer[]) = 0 OR NOT EXISTS ( \
+               SELECT 1 FROM athlete_sources profile JOIN athletes athlete ON athlete.id=profile.athlete_id \
+               WHERE profile.source=p.source AND profile.source_id=p.cursor->'context'->>'athlete_id' \
+               AND COALESCE(profile.graduation_year,athlete.graduation_year) IS NOT NULL \
+               AND NOT (COALESCE(profile.graduation_year,athlete.graduation_year)=ANY($4)))) \
              AND (cardinality($3::text[]) = 0 OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($3) \
                OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
                  AND p.cursor->'context'->>'state' IS NULL \
@@ -356,6 +364,7 @@ async fn check_exhausted(database: &Database, config: &Config) -> Result<()> {
         .bind(source.as_str())
         .bind(i32::try_from(config.limits.max_attempts).context("converting maximum attempts")?)
         .bind(&config.states)
+        .bind(&config.graduation_years)
         .fetch_one(database.pool())
         .await
         .context("checking exhausted checkpoints")?;

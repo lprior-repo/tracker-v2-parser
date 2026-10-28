@@ -4,13 +4,14 @@ mod publication;
 mod rows;
 mod selection;
 mod single_sheet;
+mod staging;
 mod workbook;
 
 use crate::model::AthleteRecord;
 use anyhow::{Context, Result};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -85,14 +86,7 @@ fn write_parts(
     })?;
     let mut staged = Vec::with_capacity(destinations.len());
     let staging = if selected.is_empty() {
-        stage(
-            path,
-            &[],
-            issues,
-            options,
-            &mut staged,
-            ExportLayout::Detailed,
-        )
+        staging::detailed(path, &[], issues, options, &mut staged)
     } else {
         selected
             .chunks(options.rows_per_file)
@@ -100,14 +94,7 @@ fn write_parts(
             .enumerate()
             .try_for_each(|(index, (chunk, destination))| {
                 let part_issues = if index == 0 { issues } else { &[] };
-                stage(
-                    destination,
-                    chunk,
-                    part_issues,
-                    options,
-                    &mut staged,
-                    ExportLayout::Detailed,
-                )
+                staging::detailed(destination, chunk, part_issues, options, &mut staged)
             })
     };
     let manifest = publication::manifest_path(path);
@@ -137,33 +124,6 @@ fn destination(path: &Path, index: usize, split: bool) -> Result<PathBuf> {
         .checked_add(1)
         .context("workbook part number overflow")?;
     Ok(path.with_file_name(format!("{stem}-{number:04}.xlsx")))
-}
-
-fn stage(
-    path: &Path,
-    records: &[&AthleteRecord],
-    issues: &[ExportIssue],
-    options: &ExportOptions,
-    staged: &mut Vec<PathBuf>,
-    layout: ExportLayout,
-) -> Result<()> {
-    let name = path
-        .file_name()
-        .context("workbook path needs a file name")?
-        .to_string_lossy();
-    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let temporary = path.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    staged.push(temporary);
-    let temporary = staged.last().context("missing staged workbook")?;
-    match layout {
-        ExportLayout::Detailed => workbook::write_and_verify(temporary, records, issues, options)?,
-        ExportLayout::SingleSheet => single_sheet::write_and_verify(temporary, records)?,
-    }
-    file.sync_all().context("syncing verified workbook")
 }
 
 fn validate(path: &Path, options: &ExportOptions) -> Result<()> {
@@ -201,6 +161,8 @@ pub struct StagedExport {
     staged: Vec<PathBuf>,
     destinations: Vec<PathBuf>,
     layout: ExportLayout,
+    started_layout: Option<ExportLayout>,
+    single_sheet: single_sheet::Accumulator,
 }
 
 impl StagedExport {
@@ -212,6 +174,8 @@ impl StagedExport {
             staged: Vec::new(),
             destinations: Vec::new(),
             layout: ExportLayout::Detailed,
+            started_layout: None,
+            single_sheet: single_sheet::Accumulator::default(),
         })
     }
 
@@ -222,9 +186,12 @@ impl StagedExport {
     }
 
     pub fn stage_part(&mut self, records: &[AthleteRecord], issues: &[ExportIssue]) -> Result<()> {
-        if self.layout == ExportLayout::SingleSheet && records.is_empty() {
-            return Ok(());
-        }
+        anyhow::ensure!(
+            self.started_layout
+                .is_none_or(|layout| layout == self.layout),
+            "cannot change export layout after staging"
+        );
+        self.started_layout = Some(self.layout);
         anyhow::ensure!(
             self.staged.len() == self.destinations.len(),
             "cannot continue a failed staged export"
@@ -246,29 +213,30 @@ impl StagedExport {
             .iter()
             .filter(|record| selection::in_scope(record, &self.options))
             .collect::<Vec<_>>();
-        stage(
-            &path,
-            &records,
-            issues,
-            &self.options,
-            &mut self.staged,
-            self.layout,
-        )?;
+        if self.layout == ExportLayout::SingleSheet {
+            return self
+                .single_sheet
+                .append(&records, self.options.rows_per_file);
+        }
+        staging::detailed(&path, &records, issues, &self.options, &mut self.staged)?;
         self.destinations.push(path);
         Ok(())
     }
 
     pub fn finish(mut self) -> Result<Vec<PathBuf>> {
-        if self.destinations.is_empty() {
+        anyhow::ensure!(
+            self.started_layout
+                .is_none_or(|layout| layout == self.layout),
+            "cannot change export layout after staging"
+        );
+        if self.layout == ExportLayout::SingleSheet {
+            staging::with_writer(&self.path, &mut self.staged, |path| {
+                self.single_sheet.write_and_verify(path)
+            })?;
+            self.destinations.push(self.path.clone());
+        } else if self.destinations.is_empty() {
             let path = destination(&self.path, 0, true)?;
-            stage(
-                &path,
-                &[],
-                &[],
-                &self.options,
-                &mut self.staged,
-                self.layout,
-            )?;
+            staging::detailed(&path, &[], &[], &self.options, &mut self.staged)?;
             self.destinations.push(path);
         }
         if self.destinations.len() == 1 {
@@ -316,34 +284,4 @@ fn cleanup_staged(staged: &[PathBuf]) -> Result<()> {
 mod tests;
 
 #[cfg(test)]
-mod publication_tests {
-    use super::{cleanup_staged, publication};
-    use anyhow::Result;
-    use std::fs;
-
-    #[test]
-    fn concurrent_destination_preserves_other_file_and_removes_own_published_links() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let staged = [
-            directory.path().join("stage-1"),
-            directory.path().join("stage-2"),
-        ];
-        let destinations = [
-            directory.path().join("part-1"),
-            directory.path().join("part-2"),
-        ];
-        fs::write(&staged[0], b"first workbook")?;
-        fs::write(&staged[1], b"second workbook")?;
-        fs::write(&destinations[1], b"other user's file")?;
-
-        let error = publication::publish(&staged, &destinations, None)
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("publication unexpectedly succeeded"))?;
-        assert!(error.to_string().contains("publication incomplete"));
-        assert!(!destinations[0].exists());
-        assert_eq!(fs::read(&destinations[1])?, b"other user's file");
-        cleanup_staged(&staged)?;
-        assert_eq!(fs::read_dir(directory.path())?.count(), 1);
-        Ok(())
-    }
-}
+mod publication_tests;

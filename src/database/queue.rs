@@ -96,9 +96,28 @@ pub(super) async fn next(
     preferred: JobClass,
     states: &[String],
 ) -> Result<Option<Job>> {
+    next_for_cohort(pool, source, max_attempts, preferred, states, &[]).await
+}
+
+#[tracing::instrument(skip(pool, states, years))]
+pub(super) async fn next_for_cohort(
+    pool: &PgPool,
+    source: Option<Source>,
+    max_attempts: u32,
+    preferred: JobClass,
+    states: &[String],
+    years: &[i32],
+) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND p.attempts < $2 \
          AND ($1::text IS NULL OR p.source=$1) \
+         AND NOT (p.cursor->>'kind'='contacts' AND p.url ~ '^https://schools[.]wiaawi[.]org/' \
+           AND split_part(p.url,'?',1) <> 'https://schools.wiaawi.org/Directory/School/GetDirectorySchool') \
+         AND (p.cursor->>'kind' <> 'athlete' OR cardinality($5::integer[]) = 0 OR NOT EXISTS ( \
+           SELECT 1 FROM athlete_sources profile JOIN athletes athlete ON athlete.id=profile.athlete_id \
+           WHERE profile.source=p.source AND profile.source_id=p.cursor->'context'->>'athlete_id' \
+           AND COALESCE(profile.graduation_year,athlete.graduation_year) IS NOT NULL \
+           AND NOT (COALESCE(profile.graduation_year,athlete.graduation_year)=ANY($5)))) \
          AND (cardinality($4::text[]) = 0 OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($4) \
            OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
              AND p.cursor->'context'->>'state' IS NULL \
@@ -124,6 +143,7 @@ pub(super) async fn next(
     .bind(attempt_limit(max_attempts)?)
     .bind(preferred.as_str())
     .bind(states)
+    .bind(years)
     .fetch_optional(pool)
     .await?;
     row.map(|(id, target)| {

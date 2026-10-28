@@ -1,6 +1,7 @@
 pub mod athleticnet;
 pub mod contacts;
 pub mod milesplit;
+pub mod wiaa;
 
 use anyhow::Result;
 
@@ -22,6 +23,9 @@ impl std::error::Error for AccessDenied {}
 
 pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
     if target.kind == PageKind::Contacts {
+        if wiaa::is_school_url(&target.url) {
+            return wiaa::parse(target, body);
+        }
         return contacts::parse(target, body);
     }
     let page = match target.source {

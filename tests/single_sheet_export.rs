@@ -40,7 +40,11 @@ fn page() -> ParsedPage {
     .map(|(name, email, sport)| Coach {
         school_id: "school".into(),
         name: Some(name.into()),
-        role: "Head Coach".into(),
+        role: if sport == Some(Sport::CrossCountry) {
+            "Head XC Coach".into()
+        } else {
+            "Head Track Coach".into()
+        },
         email: Some(email.into()),
         sport,
         review_notes: Vec::new(),

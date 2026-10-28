@@ -67,6 +67,11 @@ pub fn targets(source: Source, school: &School, season: i32) -> Result<Vec<Targe
     )])
 }
 
+pub(crate) fn check_public_access(body: &str, url: &str) -> Result<()> {
+    ensure!(body.len() <= MAX_PAGE_BYTES, "contacts page exceeds 8 MiB");
+    access::check(&Html::parse_document(body), url)
+}
+
 pub fn parse(target: &Target, body: &str) -> Result<ParsedPage> {
     ensure!(
         target.kind == PageKind::Contacts,

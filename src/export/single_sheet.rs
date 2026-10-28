@@ -6,10 +6,13 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use rust_xlsxwriter::Workbook;
 
-use super::{capacity, rows};
-use crate::model::{AthleteRecord, Coach, EvidencedPerformance, Sport};
+#[path = "single_sheet_prs.rs"]
+mod prs;
 
-const HEADERS: [&str; 12] = [
+use super::{capacity, rows};
+use crate::model::{AthleteRecord, Coach, Sport};
+
+const HEADERS: [&str; 14] = [
     "Name",
     "Gender",
     "Graduation year",
@@ -22,16 +25,86 @@ const HEADERS: [&str; 12] = [
     "School email",
     "Profile",
     "Athlete ID",
+    "Coach",
+    "Coach email",
 ];
 
-type PublishedPrs = BTreeMap<String, Vec<String>>;
+const MAX_PREPARED_BYTES: usize = 128 * 1024 * 1024;
 
-pub(super) fn write_and_verify(path: &Path, records: &[&AthleteRecord]) -> Result<()> {
-    let prs = records
+struct Prepared {
+    identity: Vec<String>,
+    prs: BTreeMap<String, Vec<String>>,
+}
+
+impl Prepared {
+    fn retained_bytes(&self) -> Result<usize> {
+        let identity = self
+            .identity
+            .capacity()
+            .checked_mul(std::mem::size_of::<String>())
+            .context("prepared identity size overflow")?;
+        let base = self
+            .prs
+            .len()
+            .checked_mul(1024)
+            .and_then(|bytes| bytes.checked_add(identity))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .context("prepared PR size overflow")?;
+        let mut strings = self.identity.iter().chain(
+            self.prs
+                .iter()
+                .flat_map(|(column, values)| std::iter::once(column).chain(values)),
+        );
+        let bytes = strings.try_fold(base, |bytes, value| {
+            bytes
+                .checked_add(value.capacity())
+                .context("prepared string size overflow")
+        })?;
+        self.prs.values().try_fold(bytes, |bytes, values| {
+            values
+                .capacity()
+                .checked_mul(std::mem::size_of::<String>())
+                .and_then(|size| bytes.checked_add(size))
+                .context("prepared values size overflow")
+        })
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Accumulator {
+    rows: Vec<Prepared>,
+    bytes: usize,
+    failed: bool,
+}
+
+impl Accumulator {
+    pub(super) fn append(&mut self, records: &[&AthleteRecord], row_limit: usize) -> Result<()> {
+        ensure!(!self.failed, "cannot continue a failed single-sheet export");
+        self.failed = true;
+        let result = records.iter().try_for_each(|record| {
+            ensure!(self.rows.len() < row_limit, "single-sheet export exceeds configured row capacity; increase rows_per_file within Excel capacity");
+            let row = Prepared { identity: identity(record), prs: prs::prepare(record)? };
+            let bytes = self.bytes.checked_add(row.retained_bytes()?).context("single-sheet storage budget overflow")?;
+            ensure!(bytes <= MAX_PREPARED_BYTES, "single-sheet export exceeds 128 MiB prepared-storage capacity; no complete export was published");
+            self.rows.push(row);
+            self.bytes = bytes;
+            Ok(())
+        });
+        self.failed = result.is_err();
+        result
+    }
+
+    pub(super) fn write_and_verify(&self, path: &Path) -> Result<()> {
+        ensure!(!self.failed, "cannot publish a failed single-sheet export");
+        write_prepared(path, &self.rows)
+    }
+}
+
+fn write_prepared(path: &Path, records: &[Prepared]) -> Result<()> {
+    let columns = records
         .iter()
-        .map(|record| published_prs(record))
-        .collect::<Vec<_>>();
-    let columns = prs.iter().flat_map(BTreeMap::keys).collect::<BTreeSet<_>>();
+        .flat_map(|row| row.prs.keys())
+        .collect::<BTreeSet<_>>();
     ensure!(
         columns.len().saturating_add(HEADERS.len()) <= 16_384,
         "single-sheet export exceeds Excel column capacity; select a narrower scope"
@@ -43,11 +116,15 @@ pub(super) fn write_and_verify(path: &Path, records: &[&AthleteRecord]) -> Resul
         .collect::<Vec<_>>();
     let mut workbook = Workbook::new();
     let mut expected = Vec::new();
-    let values = records.iter().zip(&prs).map(|(record, prs)| {
-        let cells = identity(record)
-            .into_iter()
+    let values = records.iter().map(|record| {
+        let cells = record
+            .identity
+            .iter()
+            .cloned()
             .chain(columns.iter().map(|column| {
-                prs.get(*column)
+                record
+                    .prs
+                    .get(*column)
                     .map_or_else(String::new, |values| values.join("; "))
             }))
             .collect::<Vec<_>>();
@@ -83,52 +160,6 @@ pub(super) fn write_and_verify(path: &Path, records: &[&AthleteRecord]) -> Resul
     capacity::verify(path, &expected)
 }
 
-fn published_prs(record: &AthleteRecord) -> PublishedPrs {
-    record
-        .performances
-        .iter()
-        .filter(|evidence| evidence.performance.is_personal_record)
-        .fold(BTreeMap::new(), |mut columns, evidence| {
-            let row = &evidence.performance;
-            let date = row
-                .date
-                .as_deref()
-                .map_or(String::new(), |date| format!(" ({date})"));
-            columns
-                .entry(pr_column(evidence))
-                .or_insert_with(Vec::new)
-                .push(format!("{}{date}", row.mark));
-            columns
-        })
-        .into_iter()
-        .map(|(key, mut values)| {
-            values.sort_unstable();
-            (key, values)
-        })
-        .collect()
-}
-
-fn pr_column(evidence: &EvidencedPerformance) -> String {
-    let row = &evidence.performance;
-    let sport = match row.sport {
-        Sport::Indoor => "Indoor",
-        Sport::Outdoor => "Outdoor",
-        Sport::CrossCountry => "XC",
-    };
-    let level = row
-        .source_values
-        .as_ref()
-        .and_then(|v| v.get("level"))
-        .and_then(serde_json::Value::as_str)
-        .map_or("unspecified", |level| level);
-    let level = if level == "all" { "all levels" } else { level };
-    format!(
-        "{sport} {} PR [{level}; {}]",
-        row.event,
-        evidence.source.as_str()
-    )
-}
-
 fn identity(record: &AthleteRecord) -> Vec<String> {
     vec![
         record.name.clone(),
@@ -153,6 +184,8 @@ fn identity(record: &AthleteRecord) -> Vec<String> {
         ),
         rows::joined(record.profiles.iter().map(String::as_str)),
         record.id.to_string(),
+        coach_field(record, Program::Unspecified, CoachField::Name),
+        coach_field(record, Program::Unspecified, CoachField::Email),
     ]
 }
 
@@ -160,6 +193,7 @@ fn identity(record: &AthleteRecord) -> Vec<String> {
 enum Program {
     Track,
     CrossCountry,
+    Unspecified,
 }
 
 #[derive(Clone, Copy)]
@@ -169,21 +203,41 @@ enum CoachField {
 }
 
 fn coach_field(record: &AthleteRecord, program: Program, field: CoachField) -> String {
-    rows::joined(
-        record
-            .coaches
-            .iter()
-            .filter(|coach| matches_program(coach, program))
-            .filter_map(|coach| match field {
-                CoachField::Name => coach.name.as_deref(),
-                CoachField::Email => coach.email.as_deref(),
-            }),
-    )
+    record
+        .coaches
+        .iter()
+        .filter(|coach| matches_program(coach, program))
+        .map(|coach| {
+            (
+                coach.name.as_deref().map_or("", str::trim),
+                coach.email.as_deref().map_or("", str::trim),
+            )
+        })
+        .filter(|(name, email)| !name.is_empty() || !email.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(name, email)| match field {
+            CoachField::Name => name,
+            CoachField::Email => email,
+        })
+        .map(|value| if value.is_empty() { "—" } else { value })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn matches_program(coach: &Coach, program: Program) -> bool {
+    let role = coach.role.to_ascii_lowercase();
+    let xc = coach.sport == Some(Sport::CrossCountry)
+        || (coach.sport.is_none()
+            && (role.replace([' ', '-'], "").contains("crosscountry")
+                || role
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == "xc")));
+    let track = matches!(coach.sport, Some(Sport::Indoor | Sport::Outdoor))
+        || (coach.sport.is_none() && role.contains("track"));
     match program {
-        Program::Track => coach.sport != Some(Sport::CrossCountry),
-        Program::CrossCountry => coach.sport == Some(Sport::CrossCountry),
+        Program::Track => track,
+        Program::CrossCountry => xc,
+        Program::Unspecified => !track && !xc,
     }
 }

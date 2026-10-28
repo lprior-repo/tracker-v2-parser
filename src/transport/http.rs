@@ -123,6 +123,8 @@ impl Transport {
         });
         if let Some(body) = &target.body {
             request = request.json(body);
+        } else if *method == Method::POST {
+            request = request.header(header::CONTENT_LENGTH, "0");
         }
         request.send().await.context("fetching source response")
     }
@@ -155,6 +157,9 @@ impl Transport {
 
 #[cfg(test)]
 mod review_tests;
+
+#[cfg(test)]
+mod empty_post_tests;
 
 #[cfg(test)]
 mod deadline_tests {

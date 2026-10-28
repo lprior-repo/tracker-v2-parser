@@ -54,6 +54,8 @@ enum SportArg {
 struct ScrapeArgs {
     #[arg(long, default_value = "config.toml")]
     config: PathBuf,
+    #[arg(long, conflicts_with_all = ["input", "refresh", "school_directory", "school_directory_manifest", "school_addresses", "school_addresses_sha256", "download_school_addresses", "private_school_addresses"])]
+    wiaa_directory: bool,
     #[arg(long, requires_all = ["source", "kind", "url"])]
     input: Option<PathBuf>,
     #[arg(long, requires = "input")]
@@ -115,13 +117,12 @@ struct ExportArgs {
 impl Cli {
     async fn run(self) -> Result<()> {
         let runner = Runner::new();
-        let database_url = match self.database_url {
-            Some(url) if !url.is_empty() => url,
-            Some(_) => return Err(anyhow!("database URL is empty")),
-            None => database_url()?,
-        };
+        let database_url = resolve_database_url(self.database_url)?;
         match self.command {
             Command::Scrape(args) => {
+                if args.wiaa_directory {
+                    return enrich_wiaa(&args.config, &database_url).await;
+                }
                 if let Some(path) = args.private_school_addresses {
                     let expected = args.school_addresses_sha256.ok_or_else(|| {
                         anyhow!("private school import requires --school-addresses-sha256")
@@ -211,6 +212,29 @@ impl Cli {
             }
         }
     }
+}
+
+fn resolve_database_url(argument: Option<String>) -> Result<String> {
+    match argument {
+        Some(url) if !url.is_empty() => Ok(url),
+        Some(_) => Err(anyhow!("database URL is empty")),
+        None => database_url(),
+    }
+}
+
+async fn enrich_wiaa(path: &std::path::Path, database_url: &str) -> Result<()> {
+    let config = Config::load(path)?;
+    let report = crate::wiaa_enrichment::enrich(&config, database_url).await?;
+    println!(
+        "WIAA: {} directory schools; {} matched; {} contact pages enqueued; {} missing, {} uncorroborated, {} ambiguous",
+        report.directory_schools,
+        report.matched,
+        report.enqueued,
+        report.missing,
+        report.uncorroborated,
+        report.ambiguous
+    );
+    Ok(())
 }
 
 async fn import_private_schools(path: PathBuf, expected: String, database_url: &str) -> Result<()> {
