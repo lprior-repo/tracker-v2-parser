@@ -62,13 +62,6 @@ fn options() -> ExportOptions {
     }
 }
 
-fn path(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "track-scrapper-export-{}-{name}.xlsx",
-        std::process::id()
-    ))
-}
-
 fn range(path: &std::path::Path, sheet: &str) -> anyhow::Result<calamine::Range<Data>> {
     let mut workbook: Xlsx<_> = open_workbook(path)?;
     Ok(workbook.worksheet_range(sheet)?)
@@ -92,7 +85,8 @@ fn row(range: &calamine::Range<Data>) -> anyhow::Result<BTreeMap<String, String>
 #[test]
 fn given_many_events_when_exporting_then_one_literal_string_row_contains_bests_and_sources()
 -> anyhow::Result<()> {
-    let destination = path("events");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("events.xlsx");
     assert_eq!(
         write_spreadsheets(&destination, &[athlete()], &options())?,
         vec![destination.clone()]
@@ -133,14 +127,14 @@ fn given_many_events_when_exporting_then_one_literal_string_row_contains_bests_a
         values["source_profiles"],
         "https://www.athletic.net/athlete/123; https://www.milesplit.com/athletes/456"
     );
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
 #[test]
 fn given_uncertain_year_state_or_identity_when_exporting_then_source_rows_remain_visible_and_flagged()
 -> anyhow::Result<()> {
-    let destination = path("issues");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("issues.xlsx");
     let mut unknown = athlete();
     unknown.graduation_year = None;
     let mut unresolved = athlete();
@@ -204,28 +198,28 @@ fn given_uncertain_year_state_or_identity_when_exporting_then_source_rows_remain
             .flatten()
             .any(|cell| cell.to_string().contains("unresolved identity"))
     );
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
 #[test]
 fn given_existing_target_when_exporting_then_original_bytes_are_not_overwritten()
 -> anyhow::Result<()> {
-    let destination = path("existing");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("existing.xlsx");
     std::fs::write(&destination, "original user artifact")?;
     assert!(write_spreadsheets(&destination, &[athlete()], &options()).is_err());
     assert_eq!(
         std::fs::read_to_string(&destination)?,
         "original user artifact"
     );
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
 #[test]
 fn given_split_and_detail_options_when_exporting_then_each_file_uses_same_queried_records()
 -> anyhow::Result<()> {
-    let destination = path("split");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("split.xlsx");
     let mut second = athlete();
     second.id = 43;
     let mut options = options();
@@ -237,7 +231,6 @@ fn given_split_and_detail_options_when_exporting_then_each_file_uses_same_querie
     files.iter().enumerate().try_for_each(|(index, file)| {
         assert_eq!(range(file, "Athletes")?.height(), 2);
         assert_eq!(range(file, &format!("Athlete_{}", 42 + index))?.height(), 7);
-        std::fs::remove_file(file)?;
         Ok::<(), anyhow::Error>(())
     })?;
     Ok(())
@@ -246,21 +239,22 @@ fn given_split_and_detail_options_when_exporting_then_each_file_uses_same_querie
 #[test]
 fn given_empty_snapshot_when_exporting_then_both_required_sheets_still_exist() -> anyhow::Result<()>
 {
-    let destination = path("empty");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("empty.xlsx");
     assert_eq!(
         write_spreadsheets(&destination, &[], &options())?,
         vec![destination.clone()]
     );
     assert_eq!(range(&destination, "Athletes")?.height(), 1);
     assert_eq!(range(&destination, "Issues")?.height(), 1);
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
 #[test]
 fn given_numeric_disqualified_result_when_exported_then_published_status_and_mark_remain_visible()
 -> anyhow::Result<()> {
-    let destination = path("reported-status");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("reported-status.xlsx");
     let mut record = athlete();
     let mut disqualified = evidence("100m", "9.99a");
     disqualified.performance.reported_status = Some("DQ".to_owned());
@@ -299,14 +293,14 @@ fn given_numeric_disqualified_result_when_exported_then_published_status_and_mar
         .ok_or_else(|| anyhow::anyhow!("missing disqualified observation"))?;
     assert_eq!(fields["reported_status"], "DQ");
     assert!(fields["comparison_context"].contains("disqualification"));
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
 #[test]
 fn given_complete_contact_when_review_annotations_exported_then_identity_is_preserved_and_review_is_required()
 -> anyhow::Result<()> {
-    let destination = path("contact-annotations");
+    let directory = tempfile::tempdir()?;
+    let destination = directory.path().join("contact-annotations.xlsx");
     let mut record = athlete();
     record.performances.clear();
     record.coaches[0].name = Some("Ada Runner".into());
@@ -350,7 +344,6 @@ fn given_complete_contact_when_review_annotations_exported_then_identity_is_pres
         .map(|row| row[3].to_string())
         .collect::<String>();
     assert!(complete_notes.contains(&long_note));
-    std::fs::remove_file(destination)?;
     Ok(())
 }
 
