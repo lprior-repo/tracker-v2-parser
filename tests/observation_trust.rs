@@ -355,7 +355,7 @@ fn assert_affiliation_workbook(
         path,
         records,
         &ExportOptions {
-            states: vec![],
+            states: vec!["AL".to_owned(), "OH".to_owned(), "WI".to_owned()],
             graduation_years: vec![2026],
             rows_per_file: 100,
             per_athlete_sheets: false,
@@ -411,7 +411,12 @@ async fn given_pre_fix_contaminated_affiliation_when_profile_replayed_then_workb
                 body: body.as_bytes().to_vec(),
             };
             database.persist(None, &target, &capture, &legacy).await?;
-            let (before, _) = database.export_snapshot(&[], &[2026]).await?;
+            let (before, _) = database
+                .export_snapshot(
+                    &["AL".to_owned(), "OH".to_owned(), "WI".to_owned()],
+                    &[2026],
+                )
+                .await?;
             assert_eq!(before[0].schools[0].id, historical);
             assert_eq!(before[0].coaches.len(), 1);
             let mut next = legacy.next[0].clone();
@@ -423,7 +428,12 @@ async fn given_pre_fix_contaminated_affiliation_when_profile_replayed_then_workb
             ] {
                 persist(&database, &next, &profile(&next, &school, "")).await?;
                 persist(&database, &next, &profile(&next, &school, "")).await?;
-                let (records, _) = database.export_snapshot(&[], &[2026]).await?;
+                let (records, _) = database
+                    .export_snapshot(
+                        &["AL".to_owned(), "OH".to_owned(), "WI".to_owned()],
+                        &[2026],
+                    )
+                    .await?;
                 assert!(records[0].coaches.is_empty());
                 assert!(records[0].schools.iter().all(|school| school.id == "999"
                     && school.address.is_none()
@@ -463,7 +473,7 @@ async fn given_authoritative_empty_profile_when_roster_arrives_then_context_cann
         persist(&database, &roster_target, &roster).await?;
         let observed: (Option<i64>, Option<String>) = sqlx::query_as("SELECT school_id,state FROM athlete_sources").fetch_one(&test.pool).await?;
         assert_eq!(observed, (None, None));
-        let (records, _) = database.export_snapshot(&[], &[2026]).await?;
+        let (records, _) = database.export_snapshot(&["AL".to_owned(), "OH".to_owned(), "WI".to_owned()], &[2026]).await?;
         assert_eq!(records.len(), 1);
         assert!(records[0].schools.is_empty());
         assert_affiliation_workbook(&test.directory().join("profile-then-roster.xlsx"), &records, "")?;
@@ -498,12 +508,12 @@ async fn legacy_school_state(stored_state: &str, expected: Option<&str>) -> Resu
             persist(&database, &target, &body).await?;
         }
         persist(&database, &target, &profile(&target, "", "")).await?;
-        let (absent, _) = database.export_snapshot(&[], &[2026]).await?;
+        let (absent, _) = database.export_snapshot(&["AL".to_owned(), "OH".to_owned(), "WI".to_owned()], &[2026]).await?;
         assert!(absent[0].schools.is_empty());
         persist(&database, &target, &body).await?;
         let global: String = sqlx::query_scalar("SELECT state FROM schools WHERE source_id='999'").fetch_one(&test.pool).await?;
         assert_eq!(global, stored_state);
-        let (records, _) = database.export_snapshot(&[], &[2026]).await?;
+        let (records, _) = database.export_snapshot(&["AL".to_owned(), "OH".to_owned(), "WI".to_owned()], &[2026]).await?;
         assert_eq!(records[0].schools[0].state, expected);
         let marker = &records[0].profile_details[0].source_values["current_affiliation"];
         assert_eq!(marker["school_state_unverified"], json!(expected.is_none()));
