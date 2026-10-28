@@ -672,6 +672,10 @@ async fn given_oversized_challenge_when_chromium_captures_then_access_stop_survi
             .downcast_ref::<crate::transport::AccessStopCaptureError>()
             .context("challenge status must remain typed")?;
         assert_eq!(stop.status, 403);
+        assert_eq!(
+            crate::transport::failure(&error).stopped_origin.as_deref(),
+            Some(safe.origin.as_str())
+        );
         assert_eq!(browser.chromium.pages().await?.len(), initial_pages);
         Ok::<_, anyhow::Error>(())
     }

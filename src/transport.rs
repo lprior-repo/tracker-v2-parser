@@ -68,8 +68,23 @@ impl std::error::Error for AccessStop {}
 
 #[derive(Debug)]
 pub(crate) struct AccessStopCaptureError {
+    pub(crate) origin: Option<String>,
     pub(crate) status: u16,
     pub(crate) error: anyhow::Error,
+}
+
+impl AccessStopCaptureError {
+    pub(crate) fn new(status: u16, error: anyhow::Error, address: &str) -> Self {
+        let origin = url::Url::parse(address)
+            .ok()
+            .filter(|url| matches!(url.scheme(), "http" | "https"))
+            .map(|url| url.origin().ascii_serialization());
+        Self {
+            origin,
+            status,
+            error,
+        }
+    }
 }
 
 impl fmt::Display for AccessStopCaptureError {
@@ -378,7 +393,14 @@ pub(crate) fn failure(error: &anyhow::Error) -> Failure {
         .iter()
         .any(|marker| lower.contains(marker));
     Failure {
-        stopped_origin: stopped.map(|stop| stop.origin.clone().into_boxed_str()),
+        stopped_origin: stopped
+            .map(|stop| stop.origin.as_str())
+            .or_else(|| {
+                error
+                    .downcast_ref::<AccessStopCaptureError>()
+                    .and_then(|stop| stop.origin.as_deref())
+            })
+            .map(|origin| origin.to_owned().into_boxed_str()),
         capture: None,
         blocked,
         detail: detail.into_boxed_str(),

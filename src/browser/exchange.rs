@@ -257,11 +257,12 @@ async fn capture(
     response: reqwest::Response,
 ) -> Result<Response> {
     let status = response.status().as_u16();
+    let address = response.url().as_str().to_owned();
     capture_response(policy, request, response)
         .await
         .map_err(|error| {
             if access_stop_status(status) {
-                AccessStopCaptureError { status, error }.into()
+                AccessStopCaptureError::new(status, error, &address).into()
             } else {
                 error
             }

@@ -113,6 +113,10 @@ async fn denied_body(status: u16) -> Result<()> {
         .context("fixture watchdog expired")?
         .expect_err("stalled body");
     assert!(failure.blocked, "{}", failure.detail);
+    assert_eq!(
+        failure.stopped_origin.as_deref(),
+        Some("http://www.milesplit.com")
+    );
     assert!(
         failure.detail.contains(&format!("HTTP {status}")),
         "{}",

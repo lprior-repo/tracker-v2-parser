@@ -399,11 +399,7 @@ async fn browser_fetch(
     }
     .map_err(|error| {
         if access_stop_status(value.status) || denied_url(&value.url) {
-            AccessStopCaptureError {
-                status: value.status,
-                error,
-            }
-            .into()
+            AccessStopCaptureError::new(value.status, error, &value.url).into()
         } else {
             error
         }
@@ -635,10 +631,11 @@ mod tests {
             )?;
             let failure = check_response(preserved).expect_err("challenge must remain blocked");
             assert!(failure.blocked);
-            let original = anyhow::Error::new(crate::transport::AccessStopCaptureError {
-                status: 403,
-                error: anyhow::anyhow!("capture failed"),
-            });
+            let original = anyhow::Error::new(crate::transport::AccessStopCaptureError::new(
+                403,
+                anyhow::anyhow!("capture failed"),
+                &origin,
+            ));
             let combined =
                 finish_page_fetch(Err(original), Err(anyhow::anyhow!("page close failed")))
                     .expect_err("capture failure must survive cleanup failure");

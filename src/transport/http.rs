@@ -96,7 +96,7 @@ impl Transport {
         if access_stop_status(status) {
             return captured
                 .map(Hop::Complete)
-                .map_err(|error| AccessStopCaptureError { status, error }.into());
+                .map_err(|error| AccessStopCaptureError::new(status, error, url.as_str()).into());
         }
         captured.map(Hop::Complete)
     }
