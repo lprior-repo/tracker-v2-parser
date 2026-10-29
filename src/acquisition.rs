@@ -80,6 +80,25 @@ impl From<ReviewedMediaStop> for String {
 }
 
 impl AcquisitionPolicy {
+    pub(crate) fn set_profile_coverage_only(&mut self, enabled: bool) -> Result<()> {
+        match self {
+            Self::PublicResults {
+                profile_coverage_only,
+                ..
+            } => {
+                *profile_coverage_only = enabled;
+                Ok(())
+            }
+            Self::Complete => {
+                ensure!(
+                    !enabled,
+                    "focused coverage requires public-results acquisition"
+                );
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) const fn profile_coverage_only(&self) -> bool {
         matches!(
             self,

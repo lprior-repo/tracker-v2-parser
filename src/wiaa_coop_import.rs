@@ -44,7 +44,9 @@ async fn locked(database: &Database, pages: &[preparation::Prepared]) -> Result<
     )
     .fetch_one(&mut *transaction)
     .await?;
-    ensure!(acquired, "another scraper owns the acquisition session");
+    if !acquired {
+        return Err(crate::durable::AcquisitionBusy.into());
+    }
     let result = persist(database, pages).await;
     let cleanup = transaction
         .rollback()
@@ -93,4 +95,63 @@ async fn persist(database: &Database, pages: &[preparation::Prepared]) -> Result
             Ok(())
         })
         .await
+}
+
+pub(crate) async fn import_transaction(
+    connection: &mut sqlx::PgConnection,
+    path: &Path,
+    expected: &str,
+) -> Result<Report> {
+    let path = path.to_path_buf();
+    let (pages, report) =
+        tokio::task::spawn_blocking(move || preparation::prepare(&path)).await??;
+    ensure!(
+        report.manifest_sha256 == expected,
+        "co-op manifest operation binding changed"
+    );
+    let acquired: bool = sqlx::query_scalar(
+        "SELECT pg_try_advisory_xact_lock(hashtext(current_schema()),194832741)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !acquired {
+        return Err(crate::durable::AcquisitionBusy.into());
+    }
+    let stopped: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM scrape_pages p CROSS JOIN LATERAL unnest(ARRAY[p.url,p.cursor->>'access_stop_url']) AS stop(url) WHERE p.status='blocked' AND p.cursor->>'kind'='contacts' AND lower(substring(stop.url from '(?i)^https?://([^/?#]+)')) IN ('schools.wiaawi.org','schools.wiaawi.org:443','schools.wiaawi.org:80'))").fetch_one(&mut *connection).await?;
+    ensure!(
+        !stopped,
+        "WIAA contact authority has a preserved access stop requiring human review"
+    );
+    let connection = stream::iter(pages.iter().map(Ok::<_, anyhow::Error>))
+        .try_fold(connection, |connection, page| async move {
+            let identity: Option<(String, Option<String>)> =
+                sqlx::query_as("SELECT name,state FROM schools WHERE source=$1 AND source_id=$2")
+                    .bind(page.source.as_str())
+                    .bind(&page.school_id)
+                    .fetch_optional(&mut *connection)
+                    .await?;
+            let (name, state) =
+                identity.context("co-op provider identity is absent from database")?;
+            ensure!(
+                proof::normalized(&name) == proof::normalized(&page.school_name)
+                    && state.as_deref() == Some("WI"),
+                "co-op manifest conflicts with existing provider school identity"
+            );
+            Ok(connection)
+        })
+        .await?;
+    stream::iter(pages.iter().map(Ok::<_, anyhow::Error>))
+        .try_fold(connection, |connection, page| async move {
+            Database::persist_transaction(
+                connection,
+                None,
+                &page.target,
+                &page.capture,
+                &page.page,
+            )
+            .await?;
+            Ok(connection)
+        })
+        .await?;
+    Ok(report)
 }

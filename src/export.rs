@@ -1,4 +1,5 @@
 mod capacity;
+mod prepared;
 mod profiles;
 mod publication;
 mod rows;
@@ -6,6 +7,8 @@ mod selection;
 mod single_sheet;
 mod staging;
 mod workbook;
+
+pub use prepared::{PreparedChunk, prepare_chunk, verify_chunks};
 
 use crate::model::AthleteRecord;
 use anyhow::{Context, Result};

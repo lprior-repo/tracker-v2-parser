@@ -1,4 +1,7 @@
 mod acquisition;
+pub(crate) async fn check_stops(database: &crate::database::Database) -> anyhow::Result<()> {
+    acquisition::check_stops(database).await
+}
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
@@ -82,7 +85,10 @@ async fn collect(config: &Config, database: &Database) -> Result<Report> {
     Ok(report)
 }
 
-async fn schools(database: &Database, providers: &[Source]) -> Result<Vec<(Source, School)>> {
+pub(crate) async fn schools(
+    database: &Database,
+    providers: &[Source],
+) -> Result<Vec<(Source, School)>> {
     let sources = providers
         .iter()
         .map(|source| source.as_str())
@@ -104,7 +110,7 @@ async fn schools(database: &Database, providers: &[Source]) -> Result<Vec<(Sourc
         .collect()
 }
 
-fn prepare(
+pub(crate) fn prepare(
     schools: &[(Source, School)],
     entries: &[DirectorySchool],
     season: i32,

@@ -108,7 +108,7 @@ WITH cohort AS (
     SELECT p.id,p.cursor,p.attempts,p.source,p.school_id,p.stage,0::bigint,
            CASE WHEN p.stage=3 AND p.url ~ '^https://schools[.]wiaawi[.]org/Directory/School/GetDirectorySchool[?]orgID=[1-9][0-9]{0,9}$' THEN 0 ELSE 1 END
     FROM parents p WHERE p.status IN ('pending','failed')
-      AND (p.stage<>3 OR p.attempts<$2)
+      AND (p.stage<>3 OR p.attempts<$2 OR $8::text IS NOT NULL)
       AND (p.stage<>3 OR p.url ~ '^https://schools[.]wiaawi[.]org/Directory/School/GetDirectorySchool[?]orgID=[1-9][0-9]{0,9}$'
         OR (p.source,p.school_id) NOT IN (SELECT source,school_id FROM official_school_coverage))
       AND CASE WHEN p.stage=3 THEN
@@ -117,8 +117,9 @@ WITH cohort AS (
 ), first_job AS (
     SELECT j.id,j.cursor,j.attempts FROM jobs j
     JOIN school_anchors s ON s.source=j.source AND s.school_id=j.school_id
+    WHERE ($8::text IS NULL OR NOT EXISTS (SELECT 1 FROM durable_page_operations d WHERE d.page_id=j.id AND d.run_generation=$8 AND (d.state IN ('completed','blocked','rejected','exhausted') OR (d.state='deferred' AND d.retry_at_ms > $9))))
     ORDER BY s.school_order,j.stage,j.athlete_order,j.section,(j.attempts=0) DESC,j.id
     LIMIT 1
 )
 SELECT id,cursor FROM first_job
-WHERE CASE WHEN $5::boolean THEN attempts >= $2 ELSE attempts < $2 END
+WHERE $8::text IS NOT NULL OR CASE WHEN $5::boolean THEN attempts >= $2 ELSE attempts < $2 END

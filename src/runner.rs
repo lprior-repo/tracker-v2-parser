@@ -7,6 +7,8 @@ use anyhow::{Context, Result, anyhow, ensure};
 use tokio::io::AsyncReadExt;
 use tracing::info;
 
+pub mod durable;
+
 use crate::{
     config::{Config, TransportMode},
     database::{Database, Job, JobClass},

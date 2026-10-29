@@ -145,9 +145,17 @@ async fn import_rows(
 
 pub async fn import(pool: &PgPool, directory: &PrivateDirectory) -> Result<ImportReport> {
     let mut transaction = pool.begin().await?;
-    let enrichment = enrich_transaction(&mut transaction, &directory.directory).await?;
-    let counts = import_rows(&mut transaction, directory).await?;
+    let report = import_transaction(&mut transaction, directory).await?;
     transaction.commit().await?;
+    Ok(report)
+}
+
+pub(crate) async fn import_transaction(
+    connection: &mut PgConnection,
+    directory: &PrivateDirectory,
+) -> Result<ImportReport> {
+    let enrichment = enrich_transaction(connection, &directory.directory).await?;
+    let counts = import_rows(connection, directory).await?;
     Ok(ImportReport {
         inserted: counts.inserted,
         updated: counts.updated,

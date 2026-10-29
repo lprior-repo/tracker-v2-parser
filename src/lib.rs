@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![recursion_limit = "256"]
 
 pub mod acquisition;
 mod athlete_identity_import;
@@ -6,6 +7,7 @@ mod browser;
 pub mod cli;
 pub mod config;
 pub mod database;
+pub mod durable;
 pub mod export;
 pub mod marks;
 pub mod model;

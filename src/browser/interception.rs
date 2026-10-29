@@ -86,6 +86,7 @@ impl Interception {
         headers: &BTreeMap<String, String>,
         endpoint: &str,
         interval: std::time::Duration,
+        persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
         #[cfg(test)] local_origin: Option<url::Origin>,
         #[cfg(test)] additional_origin: Option<url::Origin>,
     ) -> Result<Self> {
@@ -97,7 +98,8 @@ impl Interception {
         page.execute(SetLifecycleEventsEnabledParams::new(true))
             .await?;
         page.execute(fetch::EnableParams::default()).await?;
-        let policy = DestinationPolicy::new(target, headers, interval);
+        let policy = DestinationPolicy::new(target, headers, interval)
+            .with_persistent_pacing(persistent_pacing);
         #[cfg(test)]
         let policy = {
             let mut policy = policy;

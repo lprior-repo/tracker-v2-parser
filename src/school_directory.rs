@@ -341,7 +341,7 @@ pub async fn enrich(pool: &PgPool, directory: &Directory) -> Result<EnrichmentRe
     Ok(result)
 }
 
-async fn enrich_transaction(
+pub(crate) async fn enrich_transaction(
     connection: &mut PgConnection,
     directory: &Directory,
 ) -> Result<EnrichmentReport> {

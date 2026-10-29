@@ -1,9 +1,13 @@
 # Track scrapper v2
 
 A Rust CLI for collecting published athletics data into PostgreSQL and exporting
-observed, comparable results to XLSX. The reference `athletic-rust-pipeline` uses
-Fjall and Restate; this application uses neither for its runtime storage or
-orchestration.
+observed, comparable results to XLSX. PostgreSQL stores business facts and atomic
+effect receipts; native Restate orchestrates production acquisition, imports and
+verified single-sheet exports. The integration adapts the reference
+`athletic-rust-pipeline` attempt/receipt patterns to PostgreSQL.
+
+See [native Restate setup and recovery](docs/restate-native.md) for the durable
+entry point, restart semantics, fixed workbook delivery and native recovery test.
 
 ## Prerequisites
 
@@ -11,6 +15,8 @@ orchestration.
   Export requires SELECT access to a compatible schema and `_sqlx_migrations`;
   it does not apply migrations or repair the database.
 - The Rust toolchain pinned in `rust-toolchain.toml`.
+- Native Restate server/CLI 1.8.1 for durable production workflows; the application
+  pins Rust SDK 0.13.0. Docker is not needed for the native deployment.
 - Moon 2.2.4 for the project tasks.
 - For integration tests, `TEST_DATABASE_URL` pointing to a disposable PostgreSQL
   database where the test user may create and drop schemas.
@@ -27,6 +33,18 @@ Edit `config.toml` to select states, graduation years, source transports, reques
 limits, and export settings. Set `DATABASE_URL` to a PostgreSQL URL, or supply
 `--database-url` on the command line. The CLI also loads a local `.env` file if
 one exists; keep credentials out of version control.
+
+Production uses `durable serve`, a registered native endpoint and `durable crawl`:
+
+```sh
+track-scrapper-v2 durable serve --bind 127.0.0.1:9085 --artifacts /absolute/private/artifacts
+restate deployments register http://127.0.0.1:9085 --yes
+track-scrapper-v2 durable crawl --config config.toml --generation unique-statewide-run
+track-scrapper-v2 durable export --config config.toml --operation-id unique-export
+```
+
+The direct commands below remain available for isolated diagnostics and fixture
+replay. Keep one production acquisition owner.
 
 ```sh
 cargo run -- scrape --config config.toml

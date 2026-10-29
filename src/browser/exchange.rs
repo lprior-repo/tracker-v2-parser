@@ -26,6 +26,8 @@ pub(super) struct DestinationPolicy {
     pacing: super::pacing::Pacing,
     target: Target,
     caller_headers: BTreeSet<String>,
+    persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
+    interval: Duration,
     #[cfg(test)]
     local_origins: Vec<url::Origin>,
 }
@@ -52,6 +54,8 @@ impl DestinationPolicy {
         Self {
             pacing: super::pacing::Pacing::new(interval),
             target: target.clone(),
+            persistent_pacing: None,
+            interval,
             caller_headers: headers
                 .keys()
                 .map(|name| name.to_ascii_lowercase())
@@ -59,6 +63,14 @@ impl DestinationPolicy {
             #[cfg(test)]
             local_origins: Vec::new(),
         }
+    }
+
+    pub fn with_persistent_pacing(
+        mut self,
+        pacing: Option<crate::durable::pacing::PersistentPacing>,
+    ) -> Self {
+        self.persistent_pacing = pacing;
+        self
     }
 
     #[cfg(test)]
@@ -135,14 +147,18 @@ pub(super) async fn request(
         .await
         .context("browser DNS resolution timed out")??;
     let host = url.host_str().context("browser destination has no host")?;
-    let client = Client::builder()
+    let builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(40))
         .connect_timeout(Duration::from_secs(15))
-        .resolve_to_addrs(host, &addresses)
-        .build()
-        .context("building pinned browser request")?;
+        .resolve_to_addrs(host, &addresses);
+    let builder = if policy.persistent_pacing.is_some() {
+        builder.retry(reqwest::retry::never())
+    } else {
+        builder
+    };
+    let client = builder.build().context("building pinned browser request")?;
     let method = Method::from_bytes(request.method.as_bytes())?;
     ensure!(
         matches!(
@@ -153,13 +169,47 @@ pub(super) async fn request(
     );
     let headers = request_headers(policy, request, &url)?;
     let body = request_body(page, event).await?;
-    policy.pacing.admit().await?;
-    let response = client
-        .request(method, url.clone())
-        .headers(headers)
-        .body(body)
-        .send()
-        .await?;
+    let wire_request = policy
+        .persistent_pacing
+        .as_ref()
+        .map(|_| {
+            crate::durable::pacing::WireRequest::new(
+                policy.target.source,
+                url.as_str(),
+                method.as_str(),
+                &body,
+            )
+        })
+        .transpose()?;
+    let operation = async {
+        client
+            .request(method, url.clone())
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(anyhow::Error::from)
+    };
+    policy.pacing.check_stop()?;
+    let response = if let Some(pacing) = &policy.persistent_pacing {
+        pacing
+            .send(
+                wire_request.context("durable browser wire identity missing")?,
+                policy.interval,
+                async {
+                    policy.pacing.check_stop()?;
+                    operation.await
+                },
+            )
+            .await?
+    } else {
+        let lease = policy.pacing.admit().await?;
+        let result = operation.await;
+        policy
+            .pacing
+            .complete_response(lease, result, url.as_str())
+            .await?
+    };
     if access_stop_status(response.status().as_u16()) {
         policy.pacing.stop(
             url.origin().ascii_serialization(),

@@ -10,6 +10,9 @@ mod pacing;
 #[cfg(test)]
 mod review_tests;
 
+#[cfg(test)]
+mod durable_tests;
+
 use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
 use crate::{
@@ -64,6 +67,7 @@ pub struct Browser {
     native_sink: native::NativeSink,
     fetches: Mutex<JoinSet<Result<()>>>,
     handler: JoinHandle<Result<()>>,
+    persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
     #[cfg(test)]
     capture_ready: Option<Arc<tokio::sync::Notify>>,
     #[cfg(test)]
@@ -135,6 +139,7 @@ impl Browser {
             native_sink,
             fetches: Mutex::new(JoinSet::new()),
             handler,
+            persistent_pacing: None,
             #[cfg(test)]
             local_origin: None,
             #[cfg(test)]
@@ -172,6 +177,14 @@ impl Browser {
         }
     }
 
+    pub(crate) fn with_persistent_pacing(
+        mut self,
+        pacing: Option<crate::durable::pacing::PersistentPacing>,
+    ) -> Self {
+        self.persistent_pacing = pacing;
+        self
+    }
+
     #[tracing::instrument(skip_all)]
     pub async fn fetch(
         &self,
@@ -193,6 +206,7 @@ impl Browser {
             target: target.clone(),
             headers: headers.clone(),
             interval,
+            persistent_pacing: self.persistent_pacing.clone(),
             deadline,
             native_status: self.native_sink.status(),
             #[cfg(test)]

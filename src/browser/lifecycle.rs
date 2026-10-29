@@ -26,6 +26,7 @@ pub(super) struct Acquisition {
     pub target: Target,
     pub headers: BTreeMap<String, String>,
     pub interval: Duration,
+    pub persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
     pub deadline: Duration,
     pub native_status: Arc<NativeStatus>,
     #[cfg(test)]
@@ -147,6 +148,7 @@ impl Acquisition {
             &self.headers,
             self.chromium.endpoint(),
             self.interval,
+            self.persistent_pacing.clone(),
             #[cfg(test)]
             self.local_origin.clone(),
             #[cfg(test)]

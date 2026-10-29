@@ -3,7 +3,7 @@ mod manifest;
 
 use std::path::Path;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use serde::Serialize;
 
 use crate::database::Database;
@@ -38,11 +38,32 @@ async fn locked(database: &Database, reviewed: &manifest::Reviewed) -> Result<Re
     )
     .fetch_one(&mut *transaction)
     .await?;
-    ensure!(acquired, "another scraper owns the acquisition session");
+    if !acquired {
+        return Err(crate::durable::AcquisitionBusy.into());
+    }
     let report = link::apply(&mut transaction, reviewed).await?;
     transaction
         .commit()
         .await
         .context("committing reviewed identity link")?;
     Ok(report)
+}
+
+pub async fn import_transaction(
+    connection: &mut sqlx::PgConnection,
+    path: &Path,
+    expected: &str,
+) -> Result<Report> {
+    let path = path.to_path_buf();
+    let expected = expected.to_owned();
+    let reviewed = tokio::task::spawn_blocking(move || manifest::load(&path, &expected)).await??;
+    let acquired: bool = sqlx::query_scalar(
+        "SELECT pg_try_advisory_xact_lock(hashtext(current_schema()),194832741)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !acquired {
+        return Err(crate::durable::AcquisitionBusy.into());
+    }
+    link::apply(connection, &reviewed).await
 }

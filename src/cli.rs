@@ -24,6 +24,7 @@ pub struct Cli {
 enum Command {
     Scrape(Box<ScrapeArgs>),
     Export(ExportArgs),
+    Durable(crate::durable::cli::DurableArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -129,6 +130,7 @@ impl Cli {
         let runner = Runner::new();
         let database_url = resolve_database_url(self.database_url)?;
         match self.command {
+            Command::Durable(args) => args.run(database_url).await,
             Command::Scrape(args) => {
                 if args.athlete_identity_manifest.is_some() {
                     return import_reviewed_identity(&args, &database_url).await;

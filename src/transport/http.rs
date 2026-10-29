@@ -126,7 +126,8 @@ impl Transport {
         } else if *method == Method::POST {
             request = request.header(header::CONTENT_LENGTH, "0");
         }
-        request.send().await.context("fetching source response")
+        let request = request.build().context("building source HTTP request")?;
+        self.send_wire(target, url.as_str(), client, request).await
     }
 
     #[tracing::instrument(skip_all)]
@@ -141,13 +142,19 @@ impl Transport {
         }
         let addresses = policy::public_addresses(url).await?;
         let host = url.host_str().context("source URL has no host")?;
-        let client = Client::builder()
+        let builder = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(45))
             .connect_timeout(Duration::from_secs(15))
             .user_agent("track-scrapper-v2/0.1 public athletics research")
-            .resolve_to_addrs(host, &addresses)
+            .resolve_to_addrs(host, &addresses);
+        let builder = if self.persistent_pacing.is_some() {
+            builder.retry(reqwest::retry::never())
+        } else {
+            builder
+        };
+        let client = builder
             .build()
             .context("building pinned public HTTP client")?;
         self.clients.insert(origin, client.clone());
@@ -163,6 +170,9 @@ mod empty_post_tests;
 
 #[cfg(test)]
 mod rate_tests;
+
+#[cfg(test)]
+mod durable_tests;
 
 #[cfg(test)]
 mod deadline_tests {

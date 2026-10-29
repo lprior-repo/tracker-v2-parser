@@ -5,7 +5,8 @@
 This is a single-crate Rust scraper and XLSX exporter using SQLx and PostgreSQL.
 The CLI provides `scrape` and `export`. Configuration selects states, graduation
 years, sources and bounded limits. The application loads `.env` when present.
-The application schema has six tables; SQLx migration metadata is separate.
+The application schema has six business tables and six durability ledger tables;
+SQLx migration metadata is separate.
 Browser transport uses Chromiumoxide; access challenges require human handling.
 
 Read local skills matching the task before editing, plus their applicable linked

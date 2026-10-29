@@ -1,4 +1,5 @@
 mod http;
+mod persistent;
 pub(crate) mod policy;
 mod redact;
 pub(crate) mod robots;
@@ -6,6 +7,7 @@ pub(crate) mod robots;
 use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, ensure};
+use futures::future::BoxFuture;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::time::Instant;
@@ -109,6 +111,7 @@ pub struct Transport {
     browser: Option<Browser>,
     clients: BTreeMap<String, Client>,
     next_request: BTreeMap<Source, Instant>,
+    persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
     #[cfg(test)]
     stall_dns: bool,
     #[cfg(test)]
@@ -128,6 +131,7 @@ impl Transport {
             browser: None,
             clients: BTreeMap::new(),
             next_request: BTreeMap::new(),
+            persistent_pacing: None,
             #[cfg(test)]
             stall_dns: false,
             #[cfg(test)]
@@ -137,8 +141,14 @@ impl Transport {
         })
     }
 
+    pub fn fetch<'a>(&'a mut self, target: &'a Target) -> BoxFuture<'a, Result<Capture, Failure>> {
+        Box::pin(self.fetch_inner(target))
+    }
+
     #[tracing::instrument(skip_all)]
-    pub async fn fetch(&mut self, target: &Target) -> Result<Capture, Failure> {
+    async fn fetch_inner(&mut self, target: &Target) -> Result<Capture, Failure> {
+        self.reset_wire_sequence()
+            .map_err(|error| failure(&error))?;
         robots::check(&target.url, &target.url).map_err(|error| failure(&error))?;
         let headers = self.token_headers(target).await?;
         let response = self
@@ -198,7 +208,8 @@ impl Transport {
                     &self.options.profile,
                     self.options.headless,
                 )
-                .await?,
+                .await?
+                .with_persistent_pacing(self.persistent_pacing.clone()),
             );
         }
         self.pace(target).await?;
@@ -229,6 +240,9 @@ impl Transport {
 
     #[tracing::instrument(skip_all)]
     async fn pace(&mut self, target: &Target) -> Result<()> {
+        if self.persistent_pacing.is_some() {
+            return Ok(());
+        }
         let interval = request_interval(target, self.options.rps)?;
         let now = Instant::now();
         let start = self

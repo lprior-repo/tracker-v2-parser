@@ -11,6 +11,10 @@ use futures::TryStreamExt;
 use reqwest::{Client, Response, redirect::Policy};
 use sha2::{Digest, Sha256};
 
+mod durable;
+
+pub use durable::{DownloadTransient, download_durable};
+
 pub const SOURCE: &str = "https://raw.githubusercontent.com/lprior-repo/rust-athletic-school-addresses/b7058732f05ab59105aa042e66d8a8cad467bf3c/output/all_us_high_schools.csv";
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);

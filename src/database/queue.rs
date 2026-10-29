@@ -1,9 +1,12 @@
+mod selection;
+pub(super) use selection::{next, next_for_cohort, next_for_cohort_in};
+
 use anyhow::{Context, Result, bail};
 use futures::{TryStreamExt, stream};
 use sqlx::{PgConnection, PgPool};
 
 use crate::{
-    model::{Capture, Source, Target},
+    model::{Capture, Target},
     transport::validate_target,
 };
 
@@ -86,73 +89,6 @@ fn attempt_limit(value: u32) -> Result<i32> {
         bail!("maximum page attempts must be between 1 and 3");
     }
     i32::try_from(value).context("converting maximum attempts")
-}
-
-#[tracing::instrument(skip(pool, states))]
-pub(super) async fn next(
-    pool: &PgPool,
-    source: Option<Source>,
-    max_attempts: u32,
-    preferred: JobClass,
-    states: &[String],
-) -> Result<Option<Job>> {
-    next_for_cohort(pool, source, max_attempts, preferred, states, &[]).await
-}
-
-#[tracing::instrument(skip(pool, states, years))]
-pub(super) async fn next_for_cohort(
-    pool: &PgPool,
-    source: Option<Source>,
-    max_attempts: u32,
-    preferred: JobClass,
-    states: &[String],
-    years: &[i32],
-) -> Result<Option<Job>> {
-    let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
-        "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND p.attempts < $2 \
-         AND ($1::text IS NULL OR p.source=$1) \
-         AND NOT (p.cursor->>'kind'='contacts' AND p.url ~ '^https://schools[.]wiaawi[.]org/' \
-           AND split_part(p.url,'?',1) <> 'https://schools.wiaawi.org/Directory/School/GetDirectorySchool') \
-         AND (p.cursor->>'kind' <> 'athlete' OR cardinality($5::integer[]) = 0 OR NOT EXISTS ( \
-           SELECT 1 FROM athlete_sources profile JOIN athletes athlete ON athlete.id=profile.athlete_id \
-           WHERE profile.source=p.source AND profile.source_id=p.cursor->'context'->>'athlete_id' \
-           AND COALESCE(profile.graduation_year,athlete.graduation_year) IS NOT NULL \
-           AND NOT (COALESCE(profile.graduation_year,athlete.graduation_year)=ANY($5)))) \
-         AND (cardinality($4::text[]) = 0 OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($4) \
-           OR (p.source='athleticnet' AND p.cursor->>'kind'='directory' \
-             AND p.cursor->'context'->>'state' IS NULL \
-             AND p.cursor->'context'->>'subject_id'=array_to_string($4,','))) \
-         AND (p.cursor->>'kind' <> 'contacts' OR NOT EXISTS ( \
-           SELECT 1 FROM scrape_pages blocked CROSS JOIN LATERAL unnest(ARRAY[blocked.url,blocked.cursor->>'access_stop_url']) AS stop(url) WHERE blocked.status='blocked' AND blocked.cursor->>'kind'='contacts' \
-           AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
-             CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = \
-           regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
-             CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))) \
-         ORDER BY (p.attempts = 0) DESC, \
-         CASE p.cursor->>'kind' \
-           WHEN 'athlete' THEN ($3 <> 'profile')::int \
-           WHEN 'roster' THEN ($3 <> 'roster')::int \
-           WHEN 'contacts' THEN ($3 <> 'contacts')::int \
-           ELSE ($3 <> 'bulk')::int END, \
-         CASE p.cursor->>'kind' WHEN 'athlete' THEN 0 WHEN 'roster' THEN 1 WHEN 'contacts' THEN 2 ELSE 3 END, \
-         CASE WHEN p.cursor->>'kind'='contacts' THEN \
-           CASE p.cursor->'context'->>'subject_id' WHEN 'contacts-depth:2' THEN 0 WHEN 'contacts-depth:1' THEN 1 ELSE 2 END \
-           ELSE 0 END, p.id LIMIT 1",
-    )
-    .bind(source.map(Source::as_str))
-    .bind(attempt_limit(max_attempts)?)
-    .bind(preferred.as_str())
-    .bind(states)
-    .bind(years)
-    .fetch_optional(pool)
-    .await?;
-    row.map(|(id, target)| {
-        Ok(Job {
-            id,
-            target: serde_json::from_value(target).context("decoding checkpoint target")?,
-        })
-    })
-    .transpose()
 }
 
 #[tracing::instrument(skip(pool))]

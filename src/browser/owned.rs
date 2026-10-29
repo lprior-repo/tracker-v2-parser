@@ -466,6 +466,7 @@ mod inventory_tests {
             std::time::Duration::ZERO,
             None,
             None,
+            None,
         )
         .await?;
         page.close().await?;

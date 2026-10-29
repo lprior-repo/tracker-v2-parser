@@ -12,9 +12,11 @@ mod acquisition_scope;
 mod cohort_queue;
 mod contact_discovery;
 mod contacts;
+pub mod durable;
 mod export_snapshot;
 mod identity;
 mod keys;
+pub mod operation_receipts;
 mod profile_coverage;
 mod queue;
 mod records;
@@ -158,6 +160,17 @@ impl Database {
         let mut transaction = self.pool.begin().await?;
         let result = records::persist(&mut transaction, job_id, target, capture, page).await;
         finish(transaction, result).await
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub async fn persist_transaction(
+        connection: &mut sqlx::PgConnection,
+        job_id: Option<i64>,
+        target: &Target,
+        capture: &Capture,
+        page: &ParsedPage,
+    ) -> Result<i64> {
+        records::persist(connection, job_id, target, capture, page).await
     }
 
     #[tracing::instrument(skip(self, job, capture, detail))]
