@@ -60,7 +60,17 @@ interruption. If the initial freeze was incomplete, a new recorded freeze
 generation starts; old partial chunks remain evidence and are not mixed into
 the new snapshot. XLSX assembly may restart using the completed prepared chunks.
 
-Verification compares the final single `Athletes` sheet with the frozen rows.
+Verification compares every `Athletes` cell with frozen rows. With
+`[export] review_sheet = true`, the same database snapshot freezes failed/blocked
+checkpoint rows for a second `Review` sheet, including durable state and retry UTC.
+Every Review header/cell is also verified before publication; zero failures still
+produces its header row. The default remains a single Athletes sheet. Review is
+bounded to 10,000 rows and 16 MiB with explicit cell limits, excludes unrelated
+states, and includes unscoped discovery roots and existing disabled-provider stops.
+URLs/errors omit credentials and raw response payloads. Deferred rows advise
+waiting for automatic retry; blocked rows require human handling and prohibit bypass.
+The Review presentation flag does not change acquisition identity or retry counters;
+full export operation bindings still distinguish the selected workbook layout.
 Only a verified workbook is published. An atomic canonical JSON pointer selects
 the immutable generation. Optional `--published-workbook` delivery updates a
 fixed local XLSX copy and manifest copy under the same publication lock. Replayed
@@ -76,7 +86,7 @@ local storage. Bind the server, ingress, administration and worker to loopback.
 Use fixed node/cluster names and preserve them with the data directory.
 
 The installed machine uses ingress `127.0.0.1:18095`, admin `127.0.0.1:19095`,
-fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9088`. Both the server
+fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9089`. Both the server
 and worker run as user LaunchAgents with KeepAlive and restrictive permissions.
 They resume at login independently of the chat. A sleeping or powered-off Mac
 does not execute work; persisted work remains available after it returns.
@@ -117,7 +127,7 @@ Before deploying export changes, qualify a representative database snapshot with
 credentials in the private environment and a separate existing empty artifact
 directory. Pause and drain acquisition for this comparison. The example reads
 the database through the export-only path, writes an unprojected baseline and a
-durable frozen export, and requires every single-sheet cell to match:
+durable frozen export, and requires every cell in all configured worksheets to match, including Review when enabled:
 
 ```sh
 cargo run --example qualify_durable_export --locked -- \

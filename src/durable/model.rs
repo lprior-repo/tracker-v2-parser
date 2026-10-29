@@ -105,7 +105,7 @@ impl CrawlRequest {
     pub fn page_scope(&self) -> Result<PageScope> {
         Ok(PageScope {
             run_generation: format!("{}-{}", self.generation, self.phase.scope_name()),
-            config_sha256: digest(&self.config)?,
+            config_sha256: page_config_digest(&self.config)?,
             deadline_ms: self.deadline_ms,
             cooldown_ms: self.cooldown_ms,
         })
@@ -175,7 +175,30 @@ pub fn digest<T: Serialize>(value: &T) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 
+pub fn page_config_digest(config: &Config) -> Result<String> {
+    let mut acquisition = config.clone();
+    acquisition.export.review_sheet = false;
+    digest(&acquisition)
+}
+
 pub fn delay_until(now_ms: i64, due_ms: i64) -> Result<Duration> {
     let delay = due_ms.saturating_sub(now_ms).max(0);
     Ok(Duration::from_millis(u64::try_from(delay)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, page_config_digest};
+    use anyhow::Result;
+
+    #[test]
+    fn review_false_page_digest_matches_the_preexisting_page_value_digest() -> Result<()> {
+        let mut config = Config::default();
+        let original = crate::durable::page::value_digest(&config)?;
+        assert_eq!(page_config_digest(&config)?, original);
+        config.export.review_sheet = true;
+        assert_ne!(crate::durable::page::value_digest(&config)?, original);
+        assert_eq!(page_config_digest(&config)?, original);
+        Ok(())
+    }
 }

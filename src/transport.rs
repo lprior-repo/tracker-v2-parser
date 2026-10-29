@@ -320,8 +320,12 @@ pub(crate) fn check_response(capture: Capture) -> Result<Capture, Failure> {
     finish_response(capture, denied)
 }
 
-fn finish_response(mut capture: Capture, denied: bool) -> Result<Capture, Failure> {
-    let blocked = access_stop_status(capture.status) || denied;
+fn finish_response(capture: Capture, denied: bool) -> Result<Capture, Failure> {
+    finish_status(sanitize_response(capture)?, denied)
+}
+
+pub(crate) fn sanitize_response(mut capture: Capture) -> Result<Capture, Failure> {
+    let blocked = access_stop_status(capture.status) || denied_capture(&capture);
     capture.body = redact::body(&capture.body).map_err(|error| {
         let mut failure = failure(&error);
         if blocked {
@@ -334,7 +338,7 @@ fn finish_response(mut capture: Capture, denied: bool) -> Result<Capture, Failur
         }
         failure
     })?;
-    finish_status(capture, denied)
+    Ok(capture)
 }
 
 fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {

@@ -1,10 +1,20 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{ExportLayout, ExportOptions, StagedExport, selection, single_sheet};
+use super::{
+    ExportLayout, ExportOptions, ReviewRow, StagedExport, review, selection, single_sheet,
+};
 use crate::model::AthleteRecord;
 
 pub fn verify_chunks(path: &std::path::Path, chunks: &[PreparedChunk]) -> Result<(usize, usize)> {
+    verify_chunks_with_review(path, chunks, None)
+}
+
+pub fn verify_chunks_with_review(
+    path: &std::path::Path,
+    chunks: &[PreparedChunk],
+    review_rows: Option<&[ReviewRow]>,
+) -> Result<(usize, usize)> {
     use calamine::{Reader, open_workbook_auto};
     let columns = chunks
         .iter()
@@ -21,10 +31,18 @@ pub fn verify_chunks(path: &std::path::Path, chunks: &[PreparedChunk]) -> Result
             .ok_or_else(|| anyhow::anyhow!("prepared row count overflow"))
     })?;
     let mut workbook = open_workbook_auto(path)?;
+    let names = if review_rows.is_some() {
+        vec!["Athletes", "Review"]
+    } else {
+        vec!["Athletes"]
+    };
     ensure!(
-        workbook.sheet_names() == ["Athletes"],
-        "verified export must contain exactly one Athletes sheet"
+        workbook.sheet_names() == names,
+        "verified export worksheet set/order differs from frozen contract"
     );
+    if let Some(rows) = review_rows {
+        review::verify(path, rows)?;
+    }
     let range = workbook.worksheet_range("Athletes")?;
     ensure!(
         range.height() == count.saturating_add(1) && range.width() == headers.len(),

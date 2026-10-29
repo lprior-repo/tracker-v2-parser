@@ -122,6 +122,35 @@ fn append(workspace: &Workspace, mut plan: FrozenPlan, batch: &Batch) -> Result<
         .checked_add(ids.len())
         .context("frozen export row overflow")?;
     plan.bytes = total;
+    if let Some(count) = plan.review_rows {
+        let count = count
+            .checked_add(batch.review.len())
+            .context("frozen review row counter overflow")?;
+        ensure!(
+            count <= crate::export::review::MAX_ROWS,
+            "frozen review exceeds 10000 rows"
+        );
+        plan.review_rows = Some(count);
+        let bytes = batch.review.iter().try_fold(
+            plan.review_bytes
+                .context("missing frozen review byte count")?,
+            |bytes, row| -> Result<_> {
+                bytes
+                    .checked_add(serde_json::to_vec(row)?.len())
+                    .context("frozen review storage overflow")
+            },
+        )?;
+        ensure!(
+            bytes <= crate::export::review::MAX_BYTES,
+            "frozen review exceeds 16 MiB"
+        );
+        plan.review_bytes = Some(bytes);
+    } else {
+        ensure!(
+            batch.review.is_empty(),
+            "review rows require enabled frozen export config"
+        );
+    }
     plan.chunks.push(FrozenChunk {
         artifact,
         athlete_ids: ids,
@@ -134,32 +163,52 @@ async fn collect(
     workspace: &Workspace,
     plan: FrozenPlan,
 ) -> Result<FrozenPlan> {
-    let batches = stream::try_unfold(snapshot, |mut snapshot| async move {
-        if let Some(records) = snapshot.next_records(1000).await? {
-            return Ok(Some((
-                Batch {
-                    records: records.into_iter().map(record_for_sheet).collect(),
-                    issues: Vec::new(),
-                },
-                snapshot,
-            )));
-        }
-        if let Some(issues) = snapshot.next_issues().await? {
-            let issues = issues
-                .into_iter()
-                .map(|issue| (issue.source, issue.url, issue.detail))
-                .collect();
-            return Ok(Some((
-                Batch {
-                    records: Vec::new(),
-                    issues,
-                },
-                snapshot,
-            )));
-        }
-        snapshot.finish().await?;
-        Ok::<_, anyhow::Error>(None)
-    });
+    let review_enabled = plan.config.export.review_sheet;
+    let batches = stream::try_unfold(
+        (snapshot, 0_i64),
+        move |(mut snapshot, review_cursor)| async move {
+            if let Some(records) = snapshot.next_records(1000).await? {
+                return Ok(Some((
+                    Batch {
+                        records: records.into_iter().map(record_for_sheet).collect(),
+                        issues: Vec::new(),
+                        review: Vec::new(),
+                    },
+                    (snapshot, review_cursor),
+                )));
+            }
+            if let Some(issues) = snapshot.next_issues().await? {
+                let issues = issues
+                    .into_iter()
+                    .map(|issue| (issue.source, issue.url, issue.detail))
+                    .collect();
+                return Ok(Some((
+                    Batch {
+                        records: Vec::new(),
+                        issues,
+                        review: Vec::new(),
+                    },
+                    (snapshot, review_cursor),
+                )));
+            }
+            if review_enabled {
+                let review = snapshot.review_records(review_cursor, 1000).await?;
+                if let Some(last) = review.last() {
+                    let cursor = last.checkpoint_id;
+                    return Ok(Some((
+                        Batch {
+                            records: Vec::new(),
+                            issues: Vec::new(),
+                            review,
+                        },
+                        (snapshot, cursor),
+                    )));
+                }
+            }
+            snapshot.finish().await?;
+            Ok::<_, anyhow::Error>(None)
+        },
+    );
     batches.try_fold(plan, |plan, batch| {
         let workspace = workspace.clone();
         async move { tokio::task::spawn_blocking(move || append(&workspace, plan, &batch)).await? }
@@ -202,10 +251,12 @@ pub async fn freeze_export(
         let plan = FrozenPlan {
             binding: workspace.binding().into(),
             generation,
-            config,
+            config: config.clone(),
             chunks: Vec::new(),
             rows: 0,
             bytes: 0,
+            review_rows: config.export.review_sheet.then_some(0),
+            review_bytes: config.export.review_sheet.then_some(0),
         };
         collect(snapshot, workspace, plan).await
     }

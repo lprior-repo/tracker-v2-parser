@@ -2,7 +2,9 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{Artifact, Batch, FrozenExport, VerifiedExport, Workspace, frozen_plan, options};
-use crate::export::{ExportLayout, PreparedChunk, StagedExport, prepare_chunk, verify_chunks};
+use crate::export::{
+    ExportLayout, PreparedChunk, StagedExport, prepare_chunk, verify_chunks_with_review,
+};
 
 #[derive(Serialize, Deserialize)]
 struct ChunkReceipt {
@@ -96,8 +98,12 @@ pub fn render_export(workspace: &Workspace, frozen: &FrozenExport) -> Result<Art
         &serde_json::json!({"snapshot":frozen.manifest.sha256}),
     )?;
     let name = format!("assembly-{generation}.xlsx");
+    let review_rows = super::review::rows(workspace, &plan)?;
     let mut export = StagedExport::new(&workspace.path(&name)?, &options(&plan.config))?
         .with_layout(ExportLayout::SingleSheet);
+    if let Some(rows) = review_rows {
+        export = export.with_review(rows)?;
+    }
     plan.chunks
         .iter()
         .enumerate()
@@ -134,13 +140,17 @@ pub fn verify_export(
         return Ok(verified);
     }
     let chunks = prepared_chunks(workspace, frozen)?;
-    let (rows, columns) = verify_chunks(&workbook.path, &chunks)?;
+    let plan = frozen_plan(workspace, frozen)?;
+    let review_rows = super::review::rows(workspace, &plan)?;
+    let (rows, columns) =
+        verify_chunks_with_review(&workbook.path, &chunks, review_rows.as_deref())?;
     let verified = VerifiedExport {
         binding: workspace.binding().into(),
         frozen_manifest: frozen.manifest.clone(),
         workbook: workbook.clone(),
         rows,
         columns,
+        review_rows: plan.review_rows,
     };
     workspace.record("verification-receipt.json", &verified)?;
     Ok(verified)

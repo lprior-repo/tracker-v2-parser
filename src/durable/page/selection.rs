@@ -11,7 +11,7 @@ pub async fn select(
 ) -> Result<Option<PageRequest>> {
     super::binding::validate_scope(scope)?;
     ensure!(
-        super::binding::digest(config)? == scope.config_sha256,
+        crate::durable::model::page_config_digest(config)? == scope.config_sha256,
         "durable configuration binding mismatch"
     );
     if now_ms >= scope.deadline_ms {

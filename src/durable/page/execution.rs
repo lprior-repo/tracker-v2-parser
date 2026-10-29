@@ -61,12 +61,25 @@ pub async fn fetch(
     let fetched = transport.fetch(&reservation.request.target).await;
     let completed_at_ms = completion_time(now_ms, started.elapsed())?;
     match fetched {
-        Ok(capture) => retain(database, root, reservation, capture, completed_at_ms)
-            .await
-            .map(|capture| FetchDecision::Captured { capture }),
+        Ok(capture) => retain_response(database, root, reservation, capture, completed_at_ms).await,
         Err(failure) => {
             super::failures::record(database, root, reservation, failure, completed_at_ms).await
         }
+    }
+}
+
+pub(super) async fn retain_response(
+    database: &Database,
+    root: &Path,
+    reservation: &PageReservation,
+    capture: Capture,
+    now_ms: i64,
+) -> Result<FetchDecision> {
+    match crate::transport::sanitize_response(capture) {
+        Ok(capture) => retain(database, root, reservation, capture, now_ms)
+            .await
+            .map(|capture| FetchDecision::Captured { capture }),
+        Err(failure) => super::failures::record(database, root, reservation, failure, now_ms).await,
     }
 }
 

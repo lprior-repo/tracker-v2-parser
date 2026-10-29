@@ -64,6 +64,7 @@ def domain(database):
         'relay', (SELECT count(*) FROM results WHERE is_relay),
         'page_receipts', (SELECT count(*) FROM durable_page_receipts),
         'completed_operations', (SELECT count(*) FROM durable_page_operations WHERE state='completed'),
+        'source_wire_requests', (SELECT count(*) FROM durable_wire_requests),
         'succeeded_pages', (SELECT count(*) FROM scrape_pages WHERE status='succeeded'),
         'fixture_profile', (SELECT count(*) FROM athlete_sources WHERE source='athleticnet' AND source_id='28872883'),
         'specific_mark', (SELECT count(*) FROM results WHERE source='athleticnet' AND source_result_id='258445410' AND raw_mark='23.33a'),
@@ -88,7 +89,8 @@ def domain(database):
 def verify_domain(value):
     expected = {"athletes": 2, "profiles": 2, "results": 81,
         "individual": 69, "relay": 12, "page_receipts": 2,
-        "completed_operations": 2, "succeeded_pages": 2, "fixture_profile": 1,
+        "completed_operations": 2, "source_wire_requests": 0,
+        "succeeded_pages": 2, "fixture_profile": 1,
         "specific_mark": 1, "attempts": 5, "fixture_replay_attempts": 2,
         "seeded_legacy_attempts": 3, "athleticnet_results": 53,
         "milesplit_results": 28, "milesplit_prs": 28, "unknown_year_profile": 1,
@@ -119,7 +121,7 @@ def verify_retained(counts, requests, root):
             raise RuntimeError("retained capture or parsed artifact changed after receipt")
 
 
-def verify_export(result, root, delivery):
+def verify_export(result, root, delivery, review_rows):
     _, receipt_bytes = artifact(result["receipt"], root)
     publication = json.loads(receipt_bytes)["publication"]
     path, data = artifact(publication["workbook"], root)
@@ -145,7 +147,7 @@ def verify_export(result, root, delivery):
             raise RuntimeError("delivered copy must have a different inode from immutable artifact")
         if sha256(destination.read_bytes()) != sha256(expected):
             raise RuntimeError("delivered copy hash differs from verified immutable artifact")
-    return {"workbook": workbook(path), "delivery": str(delivery), "delivery_kind": "regular_copies",
+    return {"workbook": workbook(path, review_rows), "delivery": str(delivery), "delivery_kind": "regular_copies",
         "sha256": sha256(data),
         "canonical_pointer_sha256": sha256(pointer_bytes),
         "frozen_manifest_sha256": manifest["frozen_manifest"]["sha256"],
@@ -175,7 +177,8 @@ def prove_delivery_isolation(verified, root, delivery):
     pointer = Path(publication["canonical_pointer"])
     if sha256(pointer.read_bytes()) != verified["canonical_pointer_sha256"]:
         raise RuntimeError("user delivery edit changed canonical export pointer")
-    proof["immutable_workbook_reopened"] = workbook(Path(publication["workbook"]["path"]))
+    proof["immutable_workbook_reopened"] = workbook(Path(publication["workbook"]["path"]),
+        verified["workbook"]["review"]["checkpoints"])
     proof["canonical_pointer_unchanged"] = True
     return proof
 

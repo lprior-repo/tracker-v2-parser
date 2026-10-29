@@ -202,13 +202,15 @@ def artifact(descriptor, root):
     return path, data
 
 
-def workbook(path):
+def workbook(path, review_rows):
+    from recovery_review import verify_review
+
     namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     with zipfile.ZipFile(path) as archive:
         book = ET.fromstring(archive.read("xl/workbook.xml"))
         names = [sheet.attrib["name"] for sheet in book.findall(namespace + "sheets/" + namespace + "sheet")]
-        if names != ["Athletes"]:
-            raise RuntimeError("export does not contain exactly one Athletes sheet")
+        if names != ["Athletes", "Review"]:
+            raise RuntimeError("export must contain exactly Athletes then Review sheets")
         strings = []
         if "xl/sharedStrings.xml" in archive.namelist():
             shared = ET.fromstring(archive.read("xl/sharedStrings.xml"))
@@ -231,7 +233,10 @@ def workbook(path):
         for column, mark in expected.items():
             if not cells.get(column, "").startswith(mark):
                 raise RuntimeError("export lost the published PR in " + column)
-        return {"sheets": names, "rows_including_header": len(rows),
+        review = ET.fromstring(archive.read("xl/worksheets/sheet2.xml"))
+        review = verify_review(review.findall(namespace + "sheetData/" + namespace + "row"),
+            namespace, strings, decode_row, review_rows)
+        return {"sheets": names, "rows_including_header": len(rows), "review": review,
             "athlete": "Brice Fuller", "published_graduation_year": 2028,
             "unknown_cohort_excluded": "Kingston Penn", "verified_pr_cells": expected}
 

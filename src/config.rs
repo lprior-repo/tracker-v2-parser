@@ -60,6 +60,8 @@ impl Default for Limits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExportSettings {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub review_sheet: bool,
     pub rows_per_file: usize,
     pub per_athlete_sheets: bool,
     pub layout: crate::export::ExportLayout,
@@ -68,6 +70,7 @@ pub struct ExportSettings {
 impl Default for ExportSettings {
     fn default() -> Self {
         Self {
+            review_sheet: false,
             rows_per_file: 100_000,
             per_athlete_sheets: false,
             layout: crate::export::ExportLayout::default(),
@@ -117,6 +120,11 @@ impl Config {
     pub fn validate(&mut self) -> Result<()> {
         self.acquisition.validate()?;
         self.validate_limits()?;
+        ensure!(
+            !self.export.review_sheet
+                || self.export.layout == crate::export::ExportLayout::SingleSheet,
+            "review_sheet requires single_sheet export layout"
+        );
         ensure!(
             !self.acquisition.profile_coverage_only()
                 || (!self.sources.athleticnet.enabled && self.sources.milesplit.enabled),

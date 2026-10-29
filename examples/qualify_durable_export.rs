@@ -22,13 +22,21 @@ struct Arguments {
     operation_id: String,
 }
 
-fn sheet(path: &std::path::Path) -> Result<Range<Data>> {
+fn sheets(path: &std::path::Path, review: bool) -> Result<Vec<Range<Data>>> {
     let mut workbook = open_workbook_auto(path)?;
+    let names = if review {
+        vec!["Athletes", "Review"]
+    } else {
+        vec!["Athletes"]
+    };
     ensure!(
-        workbook.sheet_names() == ["Athletes"],
-        "qualification requires exactly one Athletes sheet"
+        workbook.sheet_names() == names,
+        "qualification worksheet set differs from config"
     );
-    workbook.worksheet_range("Athletes").map_err(Into::into)
+    names
+        .into_iter()
+        .map(|name| workbook.worksheet_range(name).map_err(Into::into))
+        .collect()
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -51,6 +59,7 @@ async fn main() -> Result<()> {
     )?;
     let frozen = freeze_export(&workspace, &config, &database).await?;
     let plan = frozen_plan(&workspace, &frozen)?;
+    let review_enabled = config.export.review_sheet;
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
         plan.chunks.iter().enumerate().try_for_each(|(index, _)| {
             prepare_export_chunk(&workspace, &frozen, index).map(|_| ())
@@ -58,13 +67,14 @@ async fn main() -> Result<()> {
         let workbook = render_export(&workspace, &frozen)?;
         let verified = verify_export(&workspace, &frozen, &workbook)?;
         ensure!(
-            sheet(&baseline)? == sheet(&workbook.path)?,
+            sheets(&baseline, review_enabled)? == sheets(&workbook.path, review_enabled)?,
             "projected durable export differs from unprojected native export"
         );
         let publication = publish_export(&workspace, &verified)?;
         Ok(serde_json::json!({
             "rows": verified.rows,
             "columns": verified.columns,
+            "review_rows": verified.review_rows,
             "chunks": plan.chunks.len(),
             "frozen_bytes": plan.bytes,
             "unprojected_cell_parity": "every cell matched",

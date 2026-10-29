@@ -1,18 +1,15 @@
-use std::{
-    error::Error,
-    fmt,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+mod review;
+mod writer;
+
+pub(super) use writer::write;
+
+use std::{error::Error, fmt, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::{
-    export::{ExportIssue, ExportOptions, StagedExport},
-    model::AthleteRecord,
-};
+use crate::{export::ExportIssue, model::AthleteRecord};
 
 pub const EXPORT_BATCH_ROWS: usize = 1_000;
 pub const EXPORT_BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -539,27 +536,4 @@ fn parts(
         snapshot.finish().await?;
         Ok(None)
     })
-}
-
-pub(super) async fn write(
-    snapshot: ExportSnapshot<'_>,
-    output: &Path,
-    options: &ExportOptions,
-    layout: crate::export::ExportLayout,
-) -> Result<Vec<PathBuf>> {
-    let staged = StagedExport::new(output, options)?.with_layout(layout);
-    let rows = options.rows_per_file.min(EXPORT_BATCH_ROWS);
-    let staged = parts(snapshot, rows)
-        .try_fold(staged, |mut staged, (records, issues)| async move {
-            tokio::task::spawn_blocking(move || {
-                staged.stage_part(&records, &issues)?;
-                Ok::<_, anyhow::Error>(staged)
-            })
-            .await
-            .context("joining bounded workbook staging")?
-        })
-        .await?;
-    tokio::task::spawn_blocking(move || staged.finish())
-        .await
-        .context("joining export publication")?
 }

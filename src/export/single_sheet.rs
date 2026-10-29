@@ -12,7 +12,7 @@ mod prs;
 #[path = "single_sheet_identity.rs"]
 mod identity;
 
-use super::capacity;
+use super::{ReviewRow, capacity, review};
 use crate::model::AthleteRecord;
 
 pub(super) const HEADERS: [&str; 14] = [
@@ -107,9 +107,9 @@ impl Accumulator {
         result
     }
 
-    pub(super) fn write_and_verify(&self, path: &Path) -> Result<()> {
+    pub(super) fn write_and_verify(&self, path: &Path, review: Option<&[ReviewRow]>) -> Result<()> {
         ensure!(!self.failed, "cannot publish a failed single-sheet export");
-        write_prepared(path, &self.rows)
+        write_prepared(path, &self.rows, review)
     }
 }
 
@@ -120,7 +120,7 @@ pub(super) fn prepare(record: &AthleteRecord) -> Result<Prepared> {
     })
 }
 
-fn write_prepared(path: &Path, records: &[Prepared]) -> Result<()> {
+fn write_prepared(path: &Path, records: &[Prepared], review: Option<&[ReviewRow]>) -> Result<()> {
     let columns = records
         .iter()
         .flat_map(|row| row.prs.keys())
@@ -175,6 +175,13 @@ fn write_prepared(path: &Path, records: &[Prepared]) -> Result<()> {
     sheet.set_column_width(6, 38)?;
     sheet.set_column_width(8, 38)?;
     sheet.set_column_width(10, 48)?;
+    if let Some(rows) = review {
+        review::write(&mut workbook, rows, &mut expected)?;
+        ensure!(
+            expected.len() == 2,
+            "review export must contain exactly two worksheets"
+        );
+    }
     workbook.save(path).context("saving single-sheet XLSX")?;
     drop(workbook);
     capacity::verify(path, &expected)

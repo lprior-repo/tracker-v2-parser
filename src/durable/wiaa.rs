@@ -35,7 +35,7 @@ impl AthleticOperations {
         let now = effects::now!(ctx)?;
         let scope = PageScope {
             run_generation: model::digest(&(workspace.binding(), "wiaa-directory")).terminal()?,
-            config_sha256: model::digest(&config).terminal()?,
+            config_sha256: model::page_config_digest(&config).terminal()?,
             deadline_ms: now
                 .checked_add(86_400_000)
                 .ok_or_else(|| TerminalError::new("WIAA deadline overflow"))?,

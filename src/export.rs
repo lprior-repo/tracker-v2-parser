@@ -2,13 +2,17 @@ mod capacity;
 mod prepared;
 mod profiles;
 mod publication;
+pub(crate) mod review;
 mod rows;
 mod selection;
 mod single_sheet;
 mod staging;
+mod types;
 mod workbook;
 
-pub use prepared::{PreparedChunk, prepare_chunk, verify_chunks};
+pub use prepared::{PreparedChunk, prepare_chunk, verify_chunks, verify_chunks_with_review};
+pub use review::{ReviewRow, ReviewStatus};
+pub use types::{ExportIssue, ExportLayout, ExportOptions};
 
 use crate::model::AthleteRecord;
 use anyhow::{Context, Result};
@@ -17,29 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExportLayout {
-    #[default]
-    Detailed,
-    SingleSheet,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportOptions {
-    pub states: Vec<String>,
-    pub graduation_years: Vec<i32>,
-    pub rows_per_file: usize,
-    pub per_athlete_sheets: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportIssue {
-    pub source: String,
-    pub url: String,
-    pub detail: String,
-}
 
 pub fn write_spreadsheets_with_issues(
     path: &Path,
@@ -166,6 +147,7 @@ pub struct StagedExport {
     layout: ExportLayout,
     started_layout: Option<ExportLayout>,
     single_sheet: single_sheet::Accumulator,
+    review: Option<Vec<ReviewRow>>,
 }
 
 impl StagedExport {
@@ -179,6 +161,7 @@ impl StagedExport {
             layout: ExportLayout::Detailed,
             started_layout: None,
             single_sheet: single_sheet::Accumulator::default(),
+            review: None,
         })
     }
 
@@ -240,7 +223,8 @@ impl StagedExport {
         );
         if self.layout == ExportLayout::SingleSheet {
             staging::with_writer(&self.path, &mut self.staged, |path| {
-                self.single_sheet.write_and_verify(path)
+                self.single_sheet
+                    .write_and_verify(path, self.review.as_deref())
             })?;
             self.destinations.push(self.path.clone());
         } else if self.destinations.is_empty() {

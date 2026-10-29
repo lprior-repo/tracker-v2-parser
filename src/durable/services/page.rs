@@ -38,7 +38,7 @@ impl AthleticPage {
         Json(input): Json<PageExecution>,
     ) -> HandlerResult<Json<PageOutcome>> {
         page::validate_request(&input.request).terminal()?;
-        if page::value_digest(&input.config).terminal()?
+        if crate::durable::model::page_config_digest(&input.config).terminal()?
             != input.request.binding.scope.config_sha256
         {
             return Err(TerminalError::new("page configuration binding mismatch").into());

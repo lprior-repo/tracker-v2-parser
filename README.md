@@ -103,7 +103,7 @@ unmanifested partial files, which are not automatically deleted. Choose a new
 output name rather than overwriting another file.
 
 The checked-in configuration selects `layout = "single_sheet"` under `[export]`.
-This writes exactly one workbook with one `Athletes` worksheet across database
+This writes exactly one workbook with an `Athletes` worksheet across database
 batches: school/address, published track/XC coach names and emails, profile links,
 and every captured source-published PR. PR columns retain the published sport, event, competition level and provider;
 all-level and middle-school marks remain visible with their own labels. Raw event
@@ -114,7 +114,15 @@ results also provide event bests within compatible timing, wind, event and cours
 contexts; they do not compete across levels or incompatible contexts. The athlete
 cohort/state settings still apply; this layout includes only confirmed selected
 graduation years. School addresses require a published street address and retain
-postal order. No JSON, review prose or supporting sheets are written. Compact
+postal order. Raw JSON and overflow sheets are omitted.
+
+Set `review_sheet = true` under `[export]` to add exactly one second `Review`
+worksheet. The default is `false`, which preserves the one-sheet workbook. Review
+contains scoped failed/blocked checkpoints, exact source IDs, bounded diagnostics,
+durable retry state/time, and investigation guidance. Disabled providers' existing
+failures and unscoped discovery roots remain visible. Saved access stops require
+human handling; the sheet never authorizes bypassing restrictions. Both tabs are
+frozen together and verified cell by cell before publication. Compact
 prepared cells are retained across batches; raw profile JSON and result records are discarded after each batch. The total athlete count must fit
 `rows_per_file` and Excel's row capacity; prepared storage is limited to 128 MiB.
 Exceeding a row, byte, cell or column capacity fails explicitly without publishing

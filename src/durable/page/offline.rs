@@ -25,10 +25,9 @@ pub async fn offline_replay(
     };
     let fetched = match crate::transport::prepare_response(reservation.request.target.kind, capture)
     {
-        Ok(capture) => FetchDecision::Captured {
-            capture: super::execution::retain(database, root, &reservation, capture, now_ms)
-                .await?,
-        },
+        Ok(capture) => {
+            super::execution::retain_response(database, root, &reservation, capture, now_ms).await?
+        }
         Err(failure) => FetchDecision::Settled {
             outcome: database
                 .durable_fail(

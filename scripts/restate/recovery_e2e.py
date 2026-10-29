@@ -13,6 +13,7 @@ from recovery_evidence import (
     configuration, domain, fixture_request, journal, prove_delivery_isolation, register, verify_domain,
     verify_export, verify_retained,
 )
+from recovery_review import seed_review
 from recovery_support import (
     artifact, database_url, output, port, save, sha256, sql, start, stop, submit,
     wait_http, wait_port,
@@ -152,6 +153,8 @@ def replay_fixture(runtime, request):
 
 def exercise(runtime, identity):
     workflow_cli = prove_workflow_cli(runtime, identity)
+    review_rows = seed_review(runtime.database)
+    save(runtime.args.evidence / "review-checkpoints.json", review_rows)
     repository = Path(__file__).resolve().parents[2]
     replays = []
     requests = [fixture_request(repository, runtime.root, identity, source)
@@ -163,13 +166,15 @@ def exercise(runtime, identity):
     counts = domain(runtime.database)
     verify_domain(counts)
     verify_retained(counts, requests, runtime.root)
+    final_config = configuration()
+    final_config["export"]["review_sheet"] = True
     export = {"operation_id": "export-" + identity,
-        "spec": {"kind": "export", "config": configuration()}}
+        "spec": {"kind": "export", "config": final_config}}
     save(runtime.args.evidence / "export-request.json", export)
     export_id = runtime.restart_with_pending_export(export)
     exported = output(runtime.ingress, export_id)
     workflow_cli['after_restore'] = verify_cli_restore(runtime, workflow_cli)
-    verified = verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx")
+    verified = verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx", review_rows)
     for request, expected_id, expected_output in (*replays, (export, export_id, exported)):
         actual_id, _ = submit(runtime.ingress, request)
         if actual_id != expected_id or output(runtime.ingress, actual_id) != expected_output:
@@ -177,7 +182,7 @@ def exercise(runtime, identity):
     verify_retained(counts, requests, runtime.root)
     if domain(runtime.database) != counts:
         raise RuntimeError("fixture domain state changed after replay or export restart")
-    if verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx") != verified:
+    if verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx", review_rows) != verified:
         raise RuntimeError("immutable workbook or canonical pointer changed on duplicate export")
     save(runtime.args.evidence / "export-result.json", exported)
     save(runtime.args.evidence / "export-verification.json", verified)

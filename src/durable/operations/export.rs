@@ -1,6 +1,7 @@
 mod freeze;
 mod publication;
 mod render;
+mod review;
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -34,11 +35,17 @@ pub struct FrozenPlan {
     pub chunks: Vec<FrozenChunk>,
     pub rows: usize,
     pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rows: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_bytes: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Batch {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    review: Vec<crate::export::ReviewRow>,
     records: Vec<AthleteRecord>,
     issues: Vec<(String, String, String)>,
 }
@@ -51,6 +58,8 @@ pub struct VerifiedExport {
     pub workbook: Artifact,
     pub rows: usize,
     pub columns: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rows: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

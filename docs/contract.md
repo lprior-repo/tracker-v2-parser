@@ -233,7 +233,7 @@ eligibility or a new cross-context PR ranking. Multiple claims remain sorted and
 retained. Raw marks and unsupported event labels are preserved. Coach names and
 emails are read from persisted source-school contact claims. JSON, audit prose,
 overflow and supporting tabs are omitted; over-capacity output fails explicitly.
-Each published workbook part contains exactly one Athletes sheet. The diagnostic
+Each published workbook contains one Athletes sheet. Optional `export.review_sheet = true` adds exactly one Review sheet from the same frozen snapshot; default false preserves the single-sheet format. Review includes scoped failed/blocked checkpoints, source IDs, bounded sanitized diagnostics, durable retry state/time and investigation guidance, with full-cell verification before publication. Blocked stops require human handling; deferred rows wait for their automatic retry. The diagnostic
 `detailed` layout retains the following supporting-sheet contract.
 
 One local athlete ID per row, school/postal fields,
