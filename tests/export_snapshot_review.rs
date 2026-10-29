@@ -130,7 +130,7 @@ async fn given_select_only_role_when_exporting_compatible_schema_then_workbooks_
             assert_eq!(names, vec!["Athlete 1", "Athlete 2", "Athlete 3"]);
             assert!(test.directory().join("readonly.manifest.json").exists());
             let output = test.directory().join("readonly-cli.xlsx");
-            let cli = support::run_cli(test.directory(), Some(&readonly_url(&test.url, Some(&role))?), &["export", "--output", output.to_str().context("CLI output path")?]).await?;
+            let cli = support::run_operation(test.directory(), Some(&readonly_url(&test.url, Some(&role))?), &support::OfflineOperation::Export{config:None,output:output.clone(),per_athlete:false}).await?;
             support::assert_success(&cli);
             assert_eq!(workbook_names(&[output])?, vec!["Athlete 1", "Athlete 2", "Athlete 3"]);
             Ok(())

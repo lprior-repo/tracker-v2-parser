@@ -9,6 +9,8 @@ use crate::durable::{
 };
 
 #[restate_sdk::service(
+    inactivity_timeout = "10m",
+    abort_timeout = "2m",
     idempotency_retention = "90 days",
     journal_retention = "90 days",
     invocation_retry_policy(

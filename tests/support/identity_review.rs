@@ -45,25 +45,23 @@ pub async fn replay(test: &Scenario, index: usize, section: &str) -> Result<()> 
         format!("{}/progression", url(index))
     };
     let output = test
-        .cli(&[
-            "scrape",
-            "--config",
-            config.to_str().context("config path")?,
-            "--input",
-            input.to_str().context("fixture path")?,
-            "--source",
-            "milesplit",
-            "--kind",
-            "athlete",
-            "--url",
-            &target,
-            "--state",
-            "WI",
-            "--season",
-            "2026",
-            "--athlete-id",
-            PROFILES[index].0,
-        ])
+        .operation(&crate::support::OfflineOperation::Replay {
+            config: Some(std::path::PathBuf::from(
+                (config.to_str().context("config path")?).to_string(),
+            )),
+            input: std::path::PathBuf::from((input.to_str().context("fixture path")?).to_string()),
+            target: track_scrapper_v2::model::Target::get(
+                track_scrapper_v2::model::Source::MileSplit,
+                track_scrapper_v2::model::PageKind::Athlete,
+                (&target).to_string(),
+                track_scrapper_v2::model::PageContext {
+                    state: Some(("WI").to_string()),
+                    athlete_id: Some((PROFILES[index].0).to_string()),
+                    season: Some(("2026").parse::<i32>()?),
+                    ..Default::default()
+                },
+            ),
+        })
         .await?;
     assert_success(&output);
     Ok(())
@@ -104,17 +102,11 @@ pub fn write_manifest(test: &Scenario, manifest: &Value) -> Result<(PathBuf, Str
 }
 
 pub async fn apply(test: &Scenario, manifest: &Value) -> Result<std::process::Output> {
-    let config = config(test)?;
     let (path, digest) = write_manifest(test, manifest)?;
-    test.cli(&[
-        "scrape",
-        "--config",
-        config.to_str().context("config path")?,
-        "--athlete-identity-manifest",
-        path.to_str().context("manifest path")?,
-        "--athlete-identity-sha256",
-        &digest,
-    ])
+    test.operation(&crate::support::OfflineOperation::ReviewedIdentity {
+        manifest: std::path::PathBuf::from((path.to_str().context("manifest path")?).to_string()),
+        sha256: (&digest).to_string(),
+    })
     .await
 }
 

@@ -1,3 +1,5 @@
+#[path = "durable_page/support.rs"]
+mod page_support;
 mod support;
 
 use anyhow::{Context, Result};
@@ -255,7 +257,7 @@ fn focus_config(test: &support::Scenario) -> Result<std::path::PathBuf> {
 }
 
 #[tokio::test]
-async fn given_only_irrelevant_pending_work_when_focused_cli_runs_then_no_discovery_contacts_followups_or_refresh_are_attempted()
+async fn given_only_irrelevant_pending_work_when_focused_durable_selection_runs_then_no_irrelevant_discovery_contacts_or_followups_are_attempted()
 -> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
@@ -265,14 +267,19 @@ async fn given_only_irrelevant_pending_work_when_focused_cli_runs_then_no_discov
                 .enqueue(&irrelevant(test, &selected).await?, false)
                 .await?;
             let before = snapshot(test, None).await?;
-            let path = focus_config(test)?;
-            let path = path.to_str().context("UTF8 focus config")?;
-            let output = test.cli(&["scrape", "--config", path]).await?;
-            support::assert_success(&output);
-            assert_eq!(snapshot(test, None).await?, before);
-            let refreshed = test.cli(&["scrape", "--config", path, "--refresh"]).await?;
-            assert!(!refreshed.status.success());
-            assert!(String::from_utf8_lossy(&refreshed.stderr).contains("refresh"));
+            let config = track_scrapper_v2::config::Config::load(&focus_config(test)?)?;
+            let scope = page_support::scope(&config)?;
+            track_scrapper_v2::runner::durable::bootstrap(&database, &config).await?;
+            assert!(
+                track_scrapper_v2::durable::page::select(
+                    &database,
+                    &config,
+                    &scope,
+                    chrono::Utc::now().timestamp_millis()
+                )
+                .await?
+                .is_none()
+            );
             assert_eq!(snapshot(test, None).await?, before);
             database.close().await;
             Ok(())
@@ -282,7 +289,7 @@ async fn given_only_irrelevant_pending_work_when_focused_cli_runs_then_no_discov
 }
 
 #[tokio::test]
-async fn given_existing_provider_stop_when_focused_cli_has_no_known_base_work_then_human_review_still_blocks_it()
+async fn given_existing_provider_stop_when_focused_durable_selection_has_no_known_base_work_then_human_review_still_blocks_it()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         let database = Database::connect(&test.url).await?;
@@ -290,10 +297,12 @@ async fn given_existing_provider_stop_when_focused_cli_has_no_known_base_work_th
         database.enqueue(std::slice::from_ref(&blocked), false).await?;
         sqlx::query("UPDATE scrape_pages SET status='blocked',attempts=1,last_error='HTTP 403 challenge requiring human review'").execute(&test.pool).await?;
         let before = snapshot(test, None).await?;
-        let path = focus_config(test)?;
-        let output = test.cli(&["scrape", "--config", path.to_str().context("UTF8 focus config")?]).await?;
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("human review"));
+        let config = track_scrapper_v2::config::Config::load(&focus_config(test)?)?;
+        let scope = page_support::scope(&config)?;
+        let error = track_scrapper_v2::durable::page::select(
+            &database, &config, &scope, chrono::Utc::now().timestamp_millis()
+        ).await.expect_err("preserved provider stop requires human review");
+        assert!(error.to_string().contains("human review"));
         assert_eq!(snapshot(test, None).await?, before);
         database.close().await; Ok(())
     })).await

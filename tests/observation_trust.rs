@@ -211,19 +211,22 @@ async fn masked_export(container: &str) -> Result<()> {
             .replace("Class of 2026", "Class of 2027");
             let input = test.directory().join("masked.html");
             std::fs::write(&input, &body)?;
-            let args = [
-                "scrape",
-                "--input",
-                input.to_str().context("input path")?,
-                "--source",
-                "milesplit",
-                "--kind",
-                "athlete",
-                "--url",
-                &target.url,
-            ];
-            support::assert_success(&test.cli(&args).await?);
-            support::assert_success(&test.cli(&args).await?);
+            let args = crate::support::OfflineOperation::Replay {
+                config: None,
+                input: std::path::PathBuf::from(
+                    (input.to_str().context("input path")?).to_string(),
+                ),
+                target: track_scrapper_v2::model::Target::get(
+                    track_scrapper_v2::model::Source::MileSplit,
+                    track_scrapper_v2::model::PageKind::Athlete,
+                    (&target.url).to_string(),
+                    track_scrapper_v2::model::PageContext {
+                        ..Default::default()
+                    },
+                ),
+            };
+            support::assert_success(&test.operation(&args).await?);
+            support::assert_success(&test.operation(&args).await?);
             let database = Database::connect(&test.url).await?;
             let (records, _) = database
                 .export_snapshot(&["WI".to_owned()], &[2027])
@@ -239,7 +242,13 @@ async fn masked_export(container: &str) -> Result<()> {
             let path = test.directory().join("masked.xlsx");
             support::assert_success(
                 &test
-                    .cli(&["export", "--output", path.to_str().context("output path")?])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (path.to_str().context("output path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let mut workbook = open_workbook_auto(&path)?;

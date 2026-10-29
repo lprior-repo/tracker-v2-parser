@@ -13,21 +13,20 @@ async fn import_synthetic(test: &support::Scenario, rows: &str) -> Result<std::p
         r#"<!doctype html><html><head><title>Synthetic roster test only</title><link rel="canonical" href="{ROSTER_URL}"></head><body><div class="jumbotron-content"><h1>Synthetic School</h1></div><ul id="rosterDataset">{rows}</ul></body></html>"#
     );
     tokio::fs::write(&input, html).await?;
-    test.cli(&[
-        "scrape",
-        "--input",
-        &input.to_string_lossy(),
-        "--source",
-        "milesplit",
-        "--kind",
-        "roster",
-        "--url",
-        ROSTER_URL,
-        "--state",
-        "CA",
-        "--season",
-        "2026",
-    ])
+    test.operation(&crate::support::OfflineOperation::Replay {
+        config: None,
+        input: std::path::PathBuf::from((&input.to_string_lossy()).to_string()),
+        target: track_scrapper_v2::model::Target::get(
+            track_scrapper_v2::model::Source::MileSplit,
+            track_scrapper_v2::model::PageKind::Roster,
+            (ROSTER_URL).to_string(),
+            track_scrapper_v2::model::PageContext {
+                state: Some(("CA").to_string()),
+                season: Some(("2026").parse::<i32>()?),
+                ..Default::default()
+            },
+        ),
+    })
     .await
 }
 

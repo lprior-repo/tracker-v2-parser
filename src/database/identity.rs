@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use futures::{TryStreamExt, stream};
 use sqlx::PgConnection;
 
@@ -318,10 +318,35 @@ async fn reserve(
     let athlete: i64 = sqlx::query_scalar("INSERT INTO athletes DEFAULT VALUES RETURNING id")
         .fetch_one(&mut *connection)
         .await?;
-    sqlx::query_scalar(
-        "INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url) VALUES($1,$2,$3,$4) RETURNING id",
-    ).bind(athlete).bind(source.as_str()).bind(source_id).bind(url)
-        .fetch_one(connection).await.map_err(Into::into)
+    let inserted = sqlx::query_scalar(
+        "INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url) VALUES($1,$2,$3,$4) \
+         ON CONFLICT(source,source_id) DO NOTHING RETURNING id",
+    )
+    .bind(athlete)
+    .bind(source.as_str())
+    .bind(source_id)
+    .bind(url)
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(id) = inserted {
+        return Ok(id);
+    }
+    let removed = sqlx::query(
+        "DELETE FROM athletes a WHERE a.id=$1 \
+         AND NOT EXISTS(SELECT 1 FROM athlete_sources p WHERE p.athlete_id=a.id) \
+         AND NOT EXISTS(SELECT 1 FROM results r WHERE r.athlete_id=a.id)",
+    )
+    .bind(athlete)
+    .execute(&mut *connection)
+    .await?
+    .rows_affected();
+    ensure!(removed == 1, "unlinked provisional athlete was not removed");
+    sqlx::query_scalar("SELECT id FROM athlete_sources WHERE source=$1 AND source_id=$2 FOR UPDATE")
+        .bind(source.as_str())
+        .bind(source_id)
+        .fetch_one(connection)
+        .await
+        .context("locking concurrently created athlete profile")
 }
 
 #[tracing::instrument(skip(connection, links))]

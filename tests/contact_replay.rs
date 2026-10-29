@@ -61,11 +61,7 @@ async fn given_same_site_access_stop_when_completed_or_exhausted_contact_is_repl
                 .fetch_all(&test.pool).await?;
             let input = support::fixture("contacts/named-no-email.html");
             for page in [&complete, &exhausted] {
-                let output = test.cli(&[
-                    "scrape", "--source", "milesplit", "--kind", "contacts", "--url", &page.url,
-                    "--input", input.to_str().context("UTF8 fixture path")?, "--school-id", "school-1",
-                    "--school-name", "Example High School", "--state", "WI", "--season", "2026",
-                ]).await?;
+                let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input.to_str().context("UTF8 fixture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Contacts,(&page.url).to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),school_id:Some(("school-1").to_string()),school_name:Some(("Example High School").to_string()),season:Some(("2026").parse::<i32>()?), ..Default::default()})}).await?;
                 assert!(!output.status.success());
             }
             let after: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p ORDER BY id")
@@ -101,14 +97,10 @@ async fn given_completed_contact_when_corrected_capture_is_replayed_then_new_pub
             let page = contact(Source::MileSplit, "staff", "school-1");
             let input = test.directory().join("public-staff.html");
             std::fs::write(&input, include_str!("../fixtures/contacts/named-no-email.html"))?;
-            let args = [
-                "scrape", "--source", "milesplit", "--kind", "contacts", "--url", &page.url,
-                "--input", input.to_str().context("UTF8 fixture path")?, "--school-id", "school-1",
-                "--school-name", "Example High School", "--state", "WI", "--season", "2026",
-            ];
-            support::assert_success(&test.cli(&args).await?);
+            let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input.to_str().context("UTF8 fixture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Contacts,(&page.url).to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),school_id:Some(("school-1").to_string()),school_name:Some(("Example High School").to_string()),season:Some(("2026").parse::<i32>()?), ..Default::default()})};
+            support::assert_success(&test.operation(&args).await?);
             std::fs::write(&input, "<main><h1>Example High School</h1><article class='staff-card'><span class='staff-name'>Ada Unpublished</span><span class='staff-title'>Head Outdoor Track Coach</span><a href='mailto:ada.runner@school.example.edu'>Published coaching email</a></article></main>")?;
-            support::assert_success(&test.cli(&args).await?);
+            support::assert_success(&test.operation(&args).await?);
             let claims: Vec<(String, Option<String>)> = sqlx::query_as(
                 "SELECT name,email FROM contacts WHERE kind='coach' ORDER BY email NULLS FIRST",
             ).fetch_all(&test.pool).await?;

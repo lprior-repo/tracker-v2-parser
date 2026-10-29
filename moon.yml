@@ -18,7 +18,6 @@ fileGroups:
     - 'config/**/*'
     - '.config/**/*'
     - '.sqlx/**/*'
-    - '.github/**/*'
     - '.env.example'
     - '*clippy.toml'
     - '*rustfmt.toml'
@@ -46,9 +45,7 @@ tasks:
   test:
     command: 'cargo test --workspace --all-features --locked'
     toolchains: [system]
-    inputs:
-      - '@group(rustInputs)'
-      - 'scripts/migration/**/*.py'
+    inputs: *rustInputs
     options: *qualityOptions
   build:
     command: 'cargo build --workspace --release --all-features --locked'
@@ -56,6 +53,7 @@ tasks:
     inputs: *rustInputs
     outputs:
       - 'target/release/track-scrapper-v2'
+      - 'target/release/native-ops'
     options: *qualityOptions
   doc:
     command: 'cargo doc --workspace --all-features --no-deps --locked'
@@ -79,5 +77,29 @@ tasks:
       mutex: rust-build
   run:
     command: 'cargo run --locked --'
+    toolchains: [system]
+    options: *manualOptions
+  native-worker-install:
+    command: 'cargo run --release --locked --bin native-ops -- worker-install'
+    toolchains: [system]
+    options: *manualOptions
+  native-recovery:
+    command: 'cargo run --release --locked --bin native-ops -- recovery'
+    toolchains: [system]
+    options: *manualOptions
+  native-backup:
+    command: 'cargo run --release --locked --bin native-ops -- migration backup'
+    toolchains: [system]
+    options: *manualOptions
+  native-restore:
+    command: 'cargo run --release --locked --bin native-ops -- migration restore'
+    toolchains: [system]
+    options: *manualOptions
+  native-cadence:
+    command: 'cargo bench --locked --bench durable_cadence'
+    toolchains: [system]
+    options: *manualOptions
+  qualify-export:
+    command: 'cargo run --release --locked --example qualify_durable_export --'
     toolchains: [system]
     options: *manualOptions

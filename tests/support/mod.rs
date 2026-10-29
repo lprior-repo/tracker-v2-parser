@@ -1,3 +1,7 @@
+mod operations;
+pub use operations::OfflineOperation;
+pub use operations::run as run_operation;
+
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -29,6 +33,13 @@ impl Scenario {
     pub async fn cli(&self, args: &[&str]) -> Result<Output> {
         run_cli(self.directory(), Some(&self.url), args).await
     }
+
+    pub fn operation<'a>(
+        &'a self,
+        operation: &'a OfflineOperation,
+    ) -> BoxFuture<'a, Result<Output>> {
+        run_operation(self.directory(), Some(&self.url), operation)
+    }
 }
 
 pub fn fixture(relative: &str) -> PathBuf {
@@ -49,17 +60,7 @@ pub async fn run_cli(directory: &Path, url: Option<&str>, args: &[&str]) -> Resu
     if let Some(url) = url {
         command.args(["--database-url", url]);
     }
-    if matches!(args.first().copied(), Some("scrape" | "export")) && !args.contains(&"--config") {
-        let config = directory.join("test-config.toml");
-        write_config(&config)?;
-        command
-            .arg(args[0])
-            .arg("--config")
-            .arg(config)
-            .args(&args[1..]);
-    } else {
-        command.args(args);
-    }
+    command.args(args);
     tokio::time::timeout(Duration::from_secs(30), command.output())
         .await
         .context("CLI exceeded its 30 second test deadline")?
@@ -149,25 +150,7 @@ where
 
 pub async fn import_bio(test: &Scenario) -> Result<Output> {
     let path = fixture("athleticnet/bio-28872883.json");
-    test.cli(&[
-        "scrape",
-        "--source",
-        "athleticnet",
-        "--kind",
-        "athlete",
-        "--url",
-        "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
-        "--input",
-        path.to_str().context("fixture path is not UTF-8")?,
-        "--athlete-id",
-        "28872883",
-        "--state",
-        "WI",
-        "--sport",
-        "outdoor",
-        "--season",
-        "2026",
-    ])
+    test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((path.to_str().context("fixture path is not UTF-8")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,("https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),season:Some(("2026").parse::<i32>()?),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})})
     .await
 }
 

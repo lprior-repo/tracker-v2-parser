@@ -37,11 +37,12 @@ impl Database {
             if found.is_some() {
                 return Ok((database, found));
             }
-            let job = if source == Source::MileSplit
+            let public_milesplit = source == Source::MileSplit
                 && matches!(
                     &config.acquisition,
                     crate::acquisition::AcquisitionPolicy::PublicResults { .. }
-                ) {
+                );
+            let job = if public_milesplit {
                 database
                     .profile_coverage_candidate(
                         Some(source),
@@ -67,7 +68,16 @@ impl Database {
                     JobClass::Profile,
                     &config.states,
                     &config.graduation_years,
-                    Some((&scope.run_generation, now_ms, owned)),
+                    Some(super::super::queue::DurableSelection {
+                        generation: &scope.run_generation,
+                        now_ms,
+                        owned,
+                        scope: if public_milesplit {
+                            super::super::queue::FallbackScope::MileSplitPublicDiscovery
+                        } else {
+                            super::super::queue::FallbackScope::All
+                        },
+                    }),
                 )
                 .await?
             } else {

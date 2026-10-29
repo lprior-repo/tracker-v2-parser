@@ -24,6 +24,8 @@ is immutable within a phase. Each phase has a separate operation generation.
 The configured page budget applies to each batch; the complete command has an
 explicit deadline of at most 24 hours and a bounded batch count. Deadline or
 budget exhaustion is visible and preserves checkpoints for another command.
+The production operator can select a 2,000-page batch to reduce export pauses;
+this is a deployment setting, and the checked-in configuration remains unchanged.
 Transient infrastructure outages retry without an AI process; a source access
 stop requires human handling.
 
@@ -36,7 +38,7 @@ reservation. Run one crawl owner per database; independent workflow generations
 are not a mechanism for increasing the configured concurrency.
 
 Parallel acquisition uses shared PostgreSQL slots and retains the exclusive
-maintenance/legacy lock. At most one browser acquisition runs at a time. HTTP
+maintenance/import lock. At most one browser acquisition runs at a time. HTTP
 request starts share provider and origin limits across slots and worker restarts;
 an abandoned request retains its full reservation debt. The shared provider/origin
 lease waits for response headers before admitting another request. Parallel mode
@@ -133,15 +135,27 @@ Configure both `RESTATE_ADMIN_URL` and `RESTATE_INGRESS_URL` for the native CLI.
 Keep IDs stable when retrying the same saved request. Use a fresh generation for
 new work; never reuse an ID for changed input. Local import inputs must first be
 staged with the library's `stage_input` or `stage_cooperative_manifest` helpers.
+An artifact descriptor is exactly `{"path":"/absolute/worker-artifacts/inputs/hash.input",
+"sha256":"ACTUAL_SHA256","bytes":1234}` with the actual staged values. Imports
+use `{"operation_id":"unique-id","spec":{"kind":"...",...}}`: `public_schools`
+takes `csv` and optional `origin`; `download_public_schools` takes
+`expected_sha256`; `private_schools` takes `csv`; `school_directory` takes `csv`
+and `manifest`; `wiaa_cooperatives` and `reviewed_identity` take `manifest`.
+`offline_replay` takes `config`, a source `target` and a staged `capture` artifact.
+These are operation JSON fields, not additional CLI flags. `durable contacts`
+submits the `wiaa_directory` operation using the selected configuration.
 Credentials, browser cookies and complete response bodies are not invocation
 arguments.
 
-`scripts/restate/install_native_worker.py` copies a built binary into an immutable
-hash-named directory, writes a private launcher and stages a versioned LaunchAgent.
+`moon run pipeline:native-worker-install -- --binary /absolute/track-scrapper-v2
+--runtime /absolute/private/runtime --secrets /absolute/private/native.env`
+copies the built worker and Rust launcher into an immutable directory identified
+by both executable hashes, writes a private configuration and stages a versioned LaunchAgent.
 `--activate` starts it. New code needs a new endpoint/port while existing work
-drains; do not overwrite an endpoint serving in-flight invocations. The legacy
-CLI fixture/replay paths remain for isolated diagnostics, not as a second
-production acquisition owner.
+drains; do not overwrite an endpoint serving in-flight invocations. The compiled
+CLI has no direct scrape/export/replay commands. Library APIs remain available
+for isolated parser and persistence tests; native qualification runs through
+Restate.
 
 ## Operations and verification
 
@@ -152,7 +166,7 @@ the database through the export-only path, writes an unprojected baseline and a
 durable frozen export, and requires every cell in all configured worksheets to match, including Review when enabled:
 
 ```sh
-cargo run --example qualify_durable_export --locked -- \
+moon run pipeline:qualify-export -- \
   --config config.toml --artifacts /absolute/private/empty-qualification \
   --operation-id unique-readonly-qualification
 ```
@@ -179,7 +193,7 @@ acknowledgement-loss recovery, monotonic retries, access-stop retention, pacing,
 frozen export reuse and verified publication. Run the native protocol rehearsal:
 
 ```sh
-python3 scripts/restate/recovery_e2e.py \
+moon run pipeline:native-recovery -- \
   --server /absolute/restate-server --worker /absolute/track-scrapper-v2 \
   --evidence /absolute/new-private-evidence-directory
 ```
@@ -195,7 +209,7 @@ invocation IDs, hashes and a reopened single-sheet XLSX. Its evidence explicitly
 separates those protocol checks from native chunk recovery and provider-outage
 scenarios. It never sends a source request to a public provider.
 
-`cargo bench --bench durable_cadence` compares completed-response cooldown with
+`moon run pipeline:native-cadence` compares completed-response cooldown with
 parallel start spacing using an isolated PostgreSQL schema and a delayed local
 HTTP fixture. It prints physical arrival gaps and request rates; fixture results
 do not establish public-provider throughput.
@@ -205,3 +219,13 @@ Official references: [durable versioning](https://docs.restate.dev/services/vers
 [snapshots and backups](https://docs.restate.dev/server/snapshots),
 [Rust SDK](https://docs.rs/restate-sdk/0.13.0/restate_sdk/),
 [disabling protocol retries](https://docs.rs/reqwest/0.13.5/reqwest/retry/fn.never.html).
+
+The native operator deployment sizes Restate memory pools explicitly: RocksDB
+1 GiB, SQL introspection 256 MiB, Bifrost cache 128 MiB, and invoker 256 MiB.
+These budgets total 1.625 GiB before process overhead. PostgreSQL, the worker,
+and the owned browser are additional; RSS must be measured under load. This is
+not an operating-system hard limit. See [Restate memory guidance](https://docs.restate.dev/server/memory).
+Native recovery qualification exercises the same three non-RocksDB limits with
+a smaller 256 MiB fixture RocksDB cache. An Operations invocation explicitly
+allows ten minutes of inactivity and two minutes to abort, covering the measured
+multi-minute streaming freeze without the default one-minute inactivity trigger.

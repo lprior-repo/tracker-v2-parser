@@ -1,3 +1,5 @@
+#[path = "durable_page/support.rs"]
+mod page_support;
 #[path = "support/records.rs"]
 mod records;
 mod support;
@@ -63,6 +65,7 @@ async fn missing_capture_failure(
             &test.url,
             &input,
             target.clone(),
+            &test.directory().join("evidence"),
         )
         .await
         .err()
@@ -107,8 +110,7 @@ async fn given_saved_marks_when_invalid_replay_fails_then_checkpoint_is_not_comp
         let invalid = test.directory().join("invalid.json");
         std::fs::write(&invalid, b"not source JSON")?;
         let url = "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=999999&sport=tf&level=0";
-        let output = test.cli(&["scrape","--source","athleticnet","--kind","athlete","--url",url,
-            "--input",invalid.to_str().context("UTF-8 path")?,"--athlete-id","999999","--state","WI"]).await?;
+        let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((invalid.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,(url).to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("999999").to_string()), ..Default::default()})}).await?;
         assert!(!output.status.success());
         let after: Vec<(String,String)> = sqlx::query_as("SELECT event,raw_mark FROM results ORDER BY event,raw_mark").fetch_all(&test.pool).await?;
         assert_eq!(after,before);
@@ -121,12 +123,7 @@ async fn given_saved_marks_when_invalid_replay_fails_then_checkpoint_is_not_comp
 async fn exhaust_failed_bio_replay(test: &support::Scenario) -> Result<()> {
     let invalid = test.directory().join("invalid-bio.json");
     std::fs::write(&invalid, b"not source JSON")?;
-    let output = test.cli(&[
-        "scrape", "--source", "athleticnet", "--kind", "athlete", "--url",
-        "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
-        "--input", invalid.to_str().context("UTF-8 path")?, "--athlete-id", "28872883",
-        "--state", "WI", "--sport", "outdoor", "--season", "2026",
-    ]).await?;
+    let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((invalid.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,("https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),season:Some(("2026").parse::<i32>()?),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})}).await?;
     assert!(!output.status.success());
     sqlx::query("UPDATE scrape_pages SET attempts=3 WHERE status='failed'")
         .execute(&test.pool)
@@ -157,12 +154,7 @@ async fn given_exhausted_failure_when_invalid_capture_is_replayed_then_failure_a
     with_schema(|test| Box::pin(async move {
         exhaust_failed_bio_replay(test).await?;
         let invalid = test.directory().join("invalid-bio.json");
-        let output = test.cli(&[
-            "scrape", "--source", "athleticnet", "--kind", "athlete", "--url",
-            "https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",
-            "--input", invalid.to_str().context("UTF-8 path")?, "--athlete-id", "28872883",
-            "--state", "WI", "--sport", "outdoor", "--season", "2026",
-        ]).await?;
+        let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((invalid.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,("https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),season:Some(("2026").parse::<i32>()?),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})}).await?;
         assert!(!output.status.success());
         let state: (String, i32, bool, bool) = sqlx::query_as(
             "SELECT status,attempts,last_success IS NOT NULL,last_error IS NOT NULL FROM scrape_pages WHERE url LIKE '%athleteId=28872883%'",
@@ -222,24 +214,22 @@ async fn given_parser_challenge_when_replayed_and_refreshed_then_block_is_preser
             let path = test.directory().join("challenge.html");
             std::fs::write(&path, "<title>Log In - MileSplit</title>")?;
             let url = "https://oh.milesplit.com/athletes/15005189-brice-fuller";
-            let args = [
-                "scrape",
-                "--source",
-                "milesplit",
-                "--kind",
-                "athlete",
-                "--url",
-                url,
-                "--input",
-                path.to_str().context("UTF-8 path")?,
-                "--athlete-id",
-                "15005189",
-                "--state",
-                "OH",
-                "--sport",
-                "outdoor",
-            ];
-            assert!(!test.cli(&args).await?.status.success());
+            let args = crate::support::OfflineOperation::Replay {
+                config: None,
+                input: std::path::PathBuf::from((path.to_str().context("UTF-8 path")?).to_string()),
+                target: track_scrapper_v2::model::Target::get(
+                    track_scrapper_v2::model::Source::MileSplit,
+                    track_scrapper_v2::model::PageKind::Athlete,
+                    (url).to_string(),
+                    track_scrapper_v2::model::PageContext {
+                        state: Some(("OH").to_string()),
+                        athlete_id: Some(("15005189").to_string()),
+                        sport: Some(track_scrapper_v2::model::Sport::Outdoor),
+                        ..Default::default()
+                    },
+                ),
+            };
+            assert!(!test.operation(&args).await?.status.success());
             let before: (String, i32, Option<String>) =
                 sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE url=$1")
                     .bind(url)
@@ -255,8 +245,10 @@ async fn given_parser_challenge_when_replayed_and_refreshed_then_block_is_preser
             );
             let valid = fixture("milesplit/athlete-oh-15005189.html");
             let mut replay = args;
-            replay[8] = valid.to_str().context("UTF-8 fixture path")?;
-            assert!(!test.cli(&replay).await?.status.success());
+            if let support::OfflineOperation::Replay { input, .. } = &mut replay {
+                *input = valid;
+            }
+            assert!(!test.operation(&replay).await?.status.success());
             let after: (String, i32, Option<String>) =
                 sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE url=$1")
                     .bind(url)
@@ -270,7 +262,7 @@ async fn given_parser_challenge_when_replayed_and_refreshed_then_block_is_preser
 }
 
 #[tokio::test]
-async fn given_exhausted_checkpoint_when_scraping_then_invocation_fails_without_attempt()
+async fn given_exhausted_transient_checkpoint_when_durable_scope_starts_then_original_count_and_replayed_reservation_are_preserved()
 -> Result<()> {
     with_schema(|test| {
         Box::pin(async move {
@@ -278,24 +270,31 @@ async fn given_exhausted_checkpoint_when_scraping_then_invocation_fails_without_
             complete_seed_pages(&database).await?;
             let mut page = target(Source::AthleticNet, "11");
             page.context.state = Some("WI".to_owned());
-            database.enqueue(&[page], false).await?;
+            database.enqueue(&[page.clone()], false).await?;
             sqlx::query(
                 "UPDATE scrape_pages SET status='failed', attempts=3, last_error='network failure' WHERE url LIKE '%/athlete/11'",
             )
             .execute(&test.pool)
             .await?;
-            let output = test.cli(&["scrape"]).await?;
-            assert!(!output.status.success());
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("exhausted unfinished checkpoints")
-            );
-            let state: (String, i32) = sqlx::query_as(
-                "SELECT status,attempts FROM scrape_pages WHERE last_error='network failure'",
+            let config=track_scrapper_v2::config::Config::default();
+            let scope=page_support::scope(&config)?;
+            let request=track_scrapper_v2::durable::page::bind_target(&database,page,&scope).await?;
+            let now=chrono::Utc::now().timestamp_millis();
+            let first=page_support::reserve(&database,&request,now).await?;
+            assert_eq!((first.total_attempts,first.cycle,first.ordinal),(4,1,1));
+            let replay=page_support::reserve(&database,&request,now+1).await?;
+            assert_eq!(serde_json::to_value(&replay)?,serde_json::to_value(&first)?);
+            let original:i32=sqlx::query_scalar("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1")
+                .bind(&request.binding.operation_id).fetch_one(&test.pool).await?;
+            assert_eq!(original,3);
+            let state: (String, i32, Option<String>) = sqlx::query_as(
+                "SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1",
             )
-            .fetch_one(&test.pool)
-            .await?;
-            assert_eq!(state, ("failed".to_owned(), 3));
+            .bind(request.binding.page_id).fetch_one(&test.pool).await?;
+            assert_eq!(state,("pending".to_owned(),4,Some("network failure".to_owned())));
+            assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts WHERE operation_id=$1")
+                .bind(&request.binding.operation_id).fetch_one(&test.pool).await?,1);
+            assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(&test.pool).await?,0);
             database.close().await;
             Ok(())
         })
@@ -323,9 +322,10 @@ async fn given_nonblocked_acquisition_failure_when_scraping_then_three_attempts_
                 assert_eq!(state, ("failed".to_owned(), expected, true, true));
             }
             assert!(database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()]).await?.is_none());
-            let output = test.cli(&["scrape"]).await?;
-            assert!(!output.status.success());
-            assert!(String::from_utf8_lossy(&output.stderr).contains("exhausted unfinished checkpoints"));
+            let config=track_scrapper_v2::config::Config::default();
+            let scope=page_support::scope(&config)?;
+            let request=track_scrapper_v2::durable::page::bind_target(&database,page.clone(),&scope).await?;
+            assert!(matches!(track_scrapper_v2::durable::page::reserve(&database,&request,chrono::Utc::now().timestamp_millis()).await?,track_scrapper_v2::durable::page::ReservationDecision::Settled{outcome:track_scrapper_v2::durable::page::PageOutcome::Rejected{..}}));
             let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE url=$1")
                 .bind(&page.url).fetch_one(&test.pool).await?;
             assert_eq!(attempts, 3);
@@ -387,9 +387,10 @@ async fn given_exhausted_page_when_other_page_is_pending_then_other_page_is_drai
                 missing_capture_failure(test, &next.target).await?;
             }
             assert!(database.next_job(Some(Source::AthleticNet), 3, &["WI".to_owned()]).await?.is_none());
-            let output = test.cli(&["scrape"]).await?;
-            assert!(!output.status.success());
-            assert!(String::from_utf8_lossy(&output.stderr).contains("exhausted unfinished checkpoints"));
+            let config=track_scrapper_v2::config::Config::default();
+            let scope=page_support::scope(&config)?;
+            let request=track_scrapper_v2::durable::page::bind_target(&database,first.clone(),&scope).await?;
+            assert!(matches!(track_scrapper_v2::durable::page::reserve(&database,&request,chrono::Utc::now().timestamp_millis()).await?,track_scrapper_v2::durable::page::ReservationDecision::Settled{outcome:track_scrapper_v2::durable::page::PageOutcome::Rejected{..}}));
             let states: Vec<(String, i32, Option<String>)> = sqlx::query_as(
                 "SELECT status,attempts,last_success::text FROM scrape_pages WHERE url=$1 OR url=$2 ORDER BY id",
             ).bind(&first.url).bind(&second.url).fetch_all(&test.pool).await?;
@@ -454,8 +455,14 @@ async fn given_blocked_page_when_scraping_then_pending_page_is_not_attempted() -
             database
                 .fail_job(&job, None, "access challenge", true)
                 .await?;
-            let output = test.cli(&["scrape"]).await?;
-            assert!(!output.status.success());
+            assert!(
+                track_scrapper_v2::runner::durable::bootstrap(
+                    &database,
+                    &track_scrapper_v2::config::Config::default()
+                )
+                .await
+                .is_err()
+            );
             let state: (String, i32) =
                 sqlx::query_as("SELECT status,attempts FROM scrape_pages WHERE url=$1")
                     .bind(&second.url)
@@ -570,11 +577,13 @@ async fn given_conflicting_linked_profiles_when_observed_then_needs_review_preve
             let output = test.directory().join("review.xlsx");
             assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--output",
-                        output.to_str().context("UTF-8 output path")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("UTF-8 output path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let rows = sheet_rows(&output, "Athletes")?;
@@ -647,10 +656,9 @@ async fn given_native_milesplit_profile_when_replayed_then_all_sports_retain_pub
 -> Result<()> {
     with_schema(|test| Box::pin(async move {
         let path = fixture("milesplit/athlete-oh-15005189.html");
-        let args = ["scrape","--source","milesplit","--kind","athlete","--url","https://oh.milesplit.com/athletes/15005189-brice-fuller",
-            "--input",path.to_str().context("UTF-8 fixture path")?,"--athlete-id","15005189","--state","OH","--sport","outdoor"];
-        assert_success(&test.cli(&args).await?);
-        assert_success(&test.cli(&args).await?);
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((path.to_str().context("UTF-8 fixture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Athlete,("https://oh.milesplit.com/athletes/15005189-brice-fuller").to_string(),track_scrapper_v2::model::PageContext {state:Some(("OH").to_string()),athlete_id:Some(("15005189").to_string()),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})};
+        assert_success(&test.operation(&args).await?);
+        assert_success(&test.operation(&args).await?);
         let profiles: Vec<(String,String,Option<i32>)> = sqlx::query_as("SELECT source_id,name,graduation_year FROM athlete_sources").fetch_all(&test.pool).await?;
         assert_eq!(profiles,vec![("15005189".to_owned(),"Brice Fuller".to_owned(),Some(2028))]);
         for (sport,event,expected) in [("outdoor","1600m",vec!["4:12.69","4:33.74"]),("indoor","3000m",vec!["8:26.83"]),("xc","5K",vec!["14:49.06"])] {
@@ -668,9 +676,7 @@ async fn given_school_and_unknown_level_career_when_exported_then_observations_s
 -> Result<()> {
     with_schema(|test| Box::pin(async move {
         let school = fixture("athleticnet/team-core-3204.json");
-        assert_success(&test.cli(&["scrape","--source","athleticnet","--kind","team","--url",
-            "https://www.athletic.net/api/v1/TeamHome/GetTeamCore?teamId=3204&sport=tfo&year=2026","--input",
-            school.to_str().context("UTF-8 path")?,"--school-id","3204","--state","WI"]).await?);
+        assert_success(&test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((school.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Team,("https://www.athletic.net/api/v1/TeamHome/GetTeamCore?teamId=3204&sport=tfo&year=2026").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),school_id:Some(("3204").to_string()), ..Default::default()})}).await?);
         assert_success(&import_bio(test).await?);
         let database = Database::connect(&test.url).await?;
         let published = Athlete {
@@ -684,7 +690,7 @@ async fn given_school_and_unknown_level_career_when_exported_then_observations_s
         }).await?;
         database.close().await;
         let output = test.directory().join("athletes.xlsx");
-        assert_success(&test.cli(&["export","--output",output.to_str().context("UTF-8 path")?,"--per-athlete"]).await?);
+        assert_success(&test.operation(&crate::support::OfflineOperation::Export {config:None,output:std::path::PathBuf::from((output.to_str().context("UTF-8 path")?).to_string()),per_athlete:true}).await?);
         let rows = sheet_rows(&output,"Athletes")?;
         assert_eq!(rows.len(),2);
         assert_eq!(cell(&rows,"name")?,"Kingston Penn");
@@ -701,7 +707,7 @@ async fn given_school_and_unknown_level_career_when_exported_then_observations_s
             row.iter().any(|cell| cell.contains("high-school") || cell.contains("HS"))
         }));
         let original = std::fs::read(&output)?;
-        let duplicate = test.cli(&["export","--output",output.to_str().context("UTF-8 path")?]).await?;
+        let duplicate = test.operation(&crate::support::OfflineOperation::Export {config:None,output:std::path::PathBuf::from((output.to_str().context("UTF-8 path")?).to_string()),per_athlete:false}).await?;
         assert!(!duplicate.status.success(),"existing workbook must not be overwritten");
         assert_eq!(std::fs::read(&output)?,original);
         Ok(())
@@ -739,23 +745,23 @@ async fn given_real_public_staff_when_replayed_then_only_published_coaching_mail
             database.close().await;
             assert_success(
                 &test
-                    .cli(&[
-                        "scrape",
-                        "--source",
-                        "athleticnet",
-                        "--kind",
-                        "contacts",
-                        "--url",
-                        "https://gomats.org/staff-directory",
-                        "--input",
-                        path.to_str().context("UTF-8 path")?,
-                        "--school-id",
-                        "miramonte",
-                        "--school-name",
-                        "Miramonte High School",
-                        "--state",
-                        "CA",
-                    ])
+                    .operation(&crate::support::OfflineOperation::Replay {
+                        config: None,
+                        input: std::path::PathBuf::from(
+                            (path.to_str().context("UTF-8 path")?).to_string(),
+                        ),
+                        target: track_scrapper_v2::model::Target::get(
+                            track_scrapper_v2::model::Source::AthleticNet,
+                            track_scrapper_v2::model::PageKind::Contacts,
+                            ("https://gomats.org/staff-directory").to_string(),
+                            track_scrapper_v2::model::PageContext {
+                                state: Some(("CA").to_string()),
+                                school_id: Some(("miramonte").to_string()),
+                                school_name: Some(("Miramonte High School").to_string()),
+                                ..Default::default()
+                            },
+                        ),
+                    })
                     .await?,
             );
             let contacts: Vec<(String, Option<String>, String)> = sqlx::query_as(
@@ -786,11 +792,13 @@ async fn given_real_public_staff_when_replayed_then_only_published_coaching_mail
             let output = test.directory().join("contacts.xlsx");
             assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--output",
-                        output.to_str().context("UTF-8 output path")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("UTF-8 output path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let rows = sheet_rows(&output, "Athletes")?;
@@ -888,11 +896,13 @@ async fn given_unknown_graduation_year_when_exported_then_source_row_is_visible_
             let output = test.directory().join("unknown-year.xlsx");
             assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--output",
-                        output.to_str().context("UTF-8 output path")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("UTF-8 output path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let athletes = sheet_rows(&output, "Athletes")?;
@@ -979,23 +989,23 @@ async fn given_school_scoped_office_email_when_contacts_replay_then_school_mailb
             let path = fixture("contacts/scoped-school.html");
             assert_success(
                 &test
-                    .cli(&[
-                        "scrape",
-                        "--source",
-                        "athleticnet",
-                        "--kind",
-                        "contacts",
-                        "--url",
-                        "https://school.example.edu/athletics/staff",
-                        "--input",
-                        path.to_str().context("UTF-8 fixture path")?,
-                        "--school-id",
-                        "example",
-                        "--school-name",
-                        "Example High School",
-                        "--state",
-                        "CA",
-                    ])
+                    .operation(&crate::support::OfflineOperation::Replay {
+                        config: None,
+                        input: std::path::PathBuf::from(
+                            (path.to_str().context("UTF-8 fixture path")?).to_string(),
+                        ),
+                        target: track_scrapper_v2::model::Target::get(
+                            track_scrapper_v2::model::Source::AthleticNet,
+                            track_scrapper_v2::model::PageKind::Contacts,
+                            ("https://school.example.edu/athletics/staff").to_string(),
+                            track_scrapper_v2::model::PageContext {
+                                state: Some(("CA").to_string()),
+                                school_id: Some(("example").to_string()),
+                                school_name: Some(("Example High School").to_string()),
+                                ..Default::default()
+                            },
+                        ),
+                    })
                     .await?,
             );
             let school: (String, String, String) = sqlx::query_as(
@@ -1026,11 +1036,13 @@ async fn given_school_scoped_office_email_when_contacts_replay_then_school_mailb
             let output = test.directory().join("office.xlsx");
             assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--output",
-                        output.to_str().context("UTF-8 export path")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("UTF-8 export path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let rows = sheet_rows(&output, "Athletes")?;
@@ -1052,10 +1064,9 @@ async fn given_native_unlinked_results_when_replayed_then_rows_survive_without_i
     with_schema(|test| Box::pin(async move {
         let path = fixture("milesplit/oh_meet_770621_rs1321880_raw.html");
         let url = "https://oh.milesplit.com/meets/770621-beaver-eastern-invite-2026/results/1321880/raw";
-        let args = ["scrape","--source","milesplit","--kind","results","--url",url,
-            "--input",path.to_str().context("UTF-8 fixture path")?,"--state","OH","--sport","xc"];
-        assert_success(&test.cli(&args).await?);
-        assert_success(&test.cli(&args).await?);
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((path.to_str().context("UTF-8 fixture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Results,(url).to_string(),track_scrapper_v2::model::PageContext {state:Some(("OH").to_string()),sport:Some(track_scrapper_v2::model::Sport::CrossCountry), ..Default::default()})};
+        assert_success(&test.operation(&args).await?);
+        assert_success(&test.operation(&args).await?);
         let unassigned: i64 = sqlx::query_scalar("SELECT count(*) FROM results WHERE athlete_id IS NULL AND athlete_source_id IS NULL")
             .fetch_one(&test.pool).await?;
         assert_eq!(unassigned,80);

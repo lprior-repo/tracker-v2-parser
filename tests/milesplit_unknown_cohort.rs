@@ -7,10 +7,9 @@ async fn source_unknown_cohorts_survive_roster_replay_without_losing_known_years
     support::with_schema(|test| Box::pin(async move {
         let fixture = support::fixture("milesplit/roster-al-addison.html");
         let path = fixture.to_string_lossy();
-        let args = ["scrape", "--input", &path, "--source", "milesplit", "--kind", "roster",
-            "--url", "https://al.milesplit.com/teams/6253-addison/roster", "--state", "AL"];
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((&path).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Roster,("https://al.milesplit.com/teams/6253-addison/roster").to_string(),track_scrapper_v2::model::PageContext {state:Some(("AL").to_string()), ..Default::default()})};
         for _ in 0..2 {
-            let output = test.cli(&args).await?;
+            let output = test.operation(&args).await?;
             support::assert_success(&output);
         }
         let rows: Vec<(String, String, Option<i32>)> = sqlx::query_as(

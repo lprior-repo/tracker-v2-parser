@@ -3,7 +3,7 @@
 ## Scope and skills
 
 This is a single-crate Rust scraper and XLSX exporter using SQLx and PostgreSQL.
-The CLI provides `scrape` and `export`. Configuration selects states, graduation
+The CLI provides only `durable` subcommands. Configuration selects states, graduation
 years, sources and bounded limits. The application loads `.env` when present.
 The application schema has six business tables and six durability ledger tables;
 SQLx migration metadata is separate.
@@ -36,8 +36,9 @@ moon run pipeline:test
 moon run pipeline:build
 moon run pipeline:doc
 env -u CI moon run pipeline:fmt-write
-env -u CI moon run pipeline:run -- scrape --config config.toml
-env -u CI moon run pipeline:run -- export --config config.toml --output athletes.xlsx
+env -u CI moon run pipeline:run -- durable crawl --config config.toml --generation unique-run
+env -u CI moon run pipeline:run -- durable export --config config.toml --operation-id unique-export
+env -u CI moon run pipeline:native-recovery -- --server /absolute/restate-server --worker /absolute/track-scrapper-v2 --evidence /absolute/new-evidence
 moon ci --force
 ```
 
@@ -50,12 +51,17 @@ no-code-comments requirement.
 Manual tasks use `env -u CI` because Moon skips tasks marked `runInCI: false`
 when the calling environment already has `CI` set.
 
-Require actual CLI smoke evidence, not just compilation: use an isolated
-PostgreSQL schema to replay a source fixture twice, verify persistence without
-duplicates, and export and reopen an XLSX workbook. Tests use real PostgreSQL and
+Require actual native Restate smoke evidence, not just compilation: use an isolated
+PostgreSQL schema and owned server/worker to replay an `offline_replay` operation
+twice, verify persistence without duplicates, and durably export and reopen an XLSX
+workbook. Parser/persistence tests can use library APIs directly. Tests use real PostgreSQL and
 deterministic, isolated scenarios. Record commands, observed output, exit status,
 and any untested behavior honestly.
 Keep README instructions aligned with the exercised CLI behavior.
+Keep repository source and tests in Rust. Do not add Python source, generated
+Python launchers, notebooks, bytecode, or GitHub Actions. Moon owns the quality
+lanes and native operator tasks. The worker executable exposes only `durable`;
+`native-ops` manages native installation, migration and isolated recovery proofs.
 
 ## Implementation rules
 

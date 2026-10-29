@@ -1,20 +1,16 @@
-mod acquisition;
-pub(crate) async fn check_stops(database: &crate::database::Database) -> anyhow::Result<()> {
-    acquisition::check_stops(database).await
-}
-
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::Serialize;
 
 use crate::{
-    config::Config,
     database::Database,
     model::{School, Source, Target},
     sources::wiaa::{self, DirectoryMatch, DirectorySchool},
-    transport::{Mode, Options, Transport},
 };
 
 const MAX_SCHOOLS: usize = 10_000;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
@@ -26,64 +22,6 @@ pub struct Report {
     pub uncorroborated: usize,
     pub ambiguous: usize,
     pub enqueued: u64,
-}
-
-pub async fn enrich(config: &Config, database_url: &str) -> Result<Report> {
-    let mut config = config.clone();
-    config.validate()?;
-    ensure!(
-        config.states.iter().any(|state| state == "WI"),
-        "WIAA enrichment requires Wisconsin scope"
-    );
-    ensure!(
-        config.acquisition.includes_contacts(),
-        "WIAA enrichment requires contact collection enabled"
-    );
-    let database = Database::connect(database_url).await?;
-    let result = locked(&config, &database).await;
-    database.close().await;
-    result
-}
-
-async fn locked(config: &Config, database: &Database) -> Result<Report> {
-    let mut transaction = database.pool().begin().await?;
-    let acquired: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_xact_lock(hashtext(current_schema()),194832741)",
-    )
-    .fetch_one(&mut *transaction)
-    .await?;
-    ensure!(acquired, "another scraper owns the acquisition session");
-    let result = collect(config, database).await;
-    let cleanup = transaction
-        .rollback()
-        .await
-        .context("releasing WIAA enrichment lock");
-    combine(result, cleanup)
-}
-
-async fn collect(config: &Config, database: &Database) -> Result<Report> {
-    acquisition::check_stops(database).await?;
-    let providers = config.enabled_sources();
-    let source = providers
-        .iter()
-        .copied()
-        .find(|source| *source == Source::MileSplit)
-        .or_else(|| providers.first().copied())
-        .context("WIAA enrichment requires an enabled athlete provider")?;
-    let schools = schools(database, &providers).await?;
-    let mut transport = Transport::new(Options {
-        mode: Mode::Http,
-        driver_url: None,
-        profile: std::env::temp_dir().join("tracker-wiaa-unused-http-profile"),
-        headless: true,
-        rps: config.limits.requests_per_second,
-    })?
-    .with_contact_rate(config.limits.contact_requests_per_second)?;
-    let result = acquisition::collect_index(database, &mut transport, source).await;
-    let entries = combine(result, transport.close().await)?;
-    let (targets, mut report) = prepare(&schools, &entries, config.season)?;
-    report.enqueued = database.enqueue(&targets, false).await?;
-    Ok(report)
 }
 
 pub(crate) async fn schools(
@@ -141,12 +79,13 @@ pub(crate) fn prepare(
     )
 }
 
-fn combine<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
-    match (result, cleanup) {
-        (Ok(value), Ok(())) => Ok(value),
-        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(cleanup)) => {
-            Err(error.context(format!("cleanup also failed: {cleanup:#}")))
-        }
-    }
+pub(crate) async fn check_stops(database: &Database) -> Result<()> {
+    let stopped: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM scrape_pages p CROSS JOIN LATERAL unnest(ARRAY[p.url,p.cursor->>'access_stop_url']) AS stop(url) WHERE p.status='blocked' AND p.cursor->>'kind'='contacts' AND lower(substring(stop.url from '(?i)^https?://([^/?#]+)')) IN ('schools.wiaawi.org','schools.wiaawi.org:443','schools.wiaawi.org:80'))"
+    ).fetch_one(database.pool()).await?;
+    ensure!(
+        !stopped,
+        "WIAA contact authority has a preserved access stop requiring human review"
+    );
+    Ok(())
 }

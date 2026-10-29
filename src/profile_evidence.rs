@@ -1,8 +1,7 @@
 use std::{
-    env,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -25,26 +24,6 @@ pub struct RetainedCapture {
     content_type: String,
     retained_at: chrono::DateTime<chrono::Utc>,
     representation: &'static str,
-}
-
-fn evidence_directory() -> Result<PathBuf> {
-    let path = if let Some(path) = env::var_os("TRACK_SCRAPPER_EVIDENCE_DIR") {
-        PathBuf::from(path)
-    } else {
-        let base = match env::var_os("XDG_DATA_HOME") {
-            Some(base) => PathBuf::from(base),
-            None => {
-                PathBuf::from(env::var_os("HOME").context("HOME is required for profile evidence")?)
-                    .join(".local/share")
-            }
-        };
-        base.join("track-scrapper-v2/evidence")
-    };
-    ensure!(
-        path.is_absolute(),
-        "profile evidence directory must be absolute"
-    );
-    Ok(path)
 }
 
 fn verify_existing(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -125,9 +104,14 @@ fn store(root: &Path, capture: &Capture) -> Result<RetainedCapture> {
 }
 
 #[tracing::instrument(skip_all)]
-pub async fn retain(capture: Capture) -> Result<(Capture, RetainedCapture)> {
+pub async fn retain_at(root: &Path, capture: Capture) -> Result<(Capture, RetainedCapture)> {
+    ensure!(
+        root.is_absolute(),
+        "profile evidence directory must be absolute"
+    );
+    let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let evidence = store(&evidence_directory()?, &capture)?;
+        let evidence = store(&root, &capture)?;
         Ok((capture, evidence))
     })
     .await

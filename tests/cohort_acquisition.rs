@@ -1,3 +1,5 @@
+#[path = "durable_page/support.rs"]
+mod page_support;
 mod support;
 
 use anyhow::{Context, Result};
@@ -248,7 +250,7 @@ async fn given_cohort_jobs_when_state_attempt_and_contact_stops_apply_then_only_
 }
 
 #[tokio::test]
-async fn given_only_exhausted_other_year_profiles_when_cohort_crawl_finishes_then_cli_succeeds_and_preserves_them()
+async fn given_only_exhausted_other_year_profiles_when_cohort_crawl_finishes_then_durable_selection_finishes_and_preserves_them()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         let database = Database::connect(&test.url).await?;
@@ -261,10 +263,12 @@ async fn given_only_exhausted_other_year_profiles_when_cohort_crawl_finishes_the
             database.persist(None, &seed, &Capture { url: seed.url.clone(), status: 200, content_type: "text/html".into(), body: b"<html></html>".to_vec() }, &ParsedPage::default()).await?;
         }
         let before = snapshot(test, Source::MileSplit, &["51"]).await?;
-        let path = test.directory().join("cohort.toml");
-        std::fs::write(&path, "states=['WI']\ngraduation_years=[2027]\nseason=2026\n[sources.athleticnet]\nenabled=false\n[sources.milesplit]\nenabled=true\ntransport='http'\n")?;
-        let output = test.cli(&["scrape", "--config", path.to_str().context("UTF8 config path")?]).await?;
-        support::assert_success(&output);
+        let config = track_scrapper_v2::config::Config::parse("states=['WI']\ngraduation_years=[2027]\nseason=2026\n[sources.athleticnet]\nenabled=false\n[sources.milesplit]\nenabled=true\ntransport='http'\n")?;
+        let scope = page_support::scope(&config)?;
+        track_scrapper_v2::runner::durable::bootstrap(&database, &config).await?;
+        assert!(track_scrapper_v2::durable::page::select(
+            &database, &config, &scope, chrono::Utc::now().timestamp_millis()
+        ).await?.is_none());
         assert_eq!(snapshot(test, Source::MileSplit, &["51"]).await?, before);
         database.close().await;
         Ok(())

@@ -1,9 +1,10 @@
 # Scraper rewrite contract
 
-This contract implements the owner's six-table, two-command design. It replaces
-Part 1's SQLite bootstrap. The reuse source is
+This contract implements six business tables with PostgreSQL durability ledgers
+and a durable-only CLI. It replaces Part 1's SQLite bootstrap. The reuse source is
 `/home/lewis/src/ad-law-scrape/athletic-rust-pipeline` (main `280492f`); its parsers,
-fixtures, event rules, and source limits are useful, not its Fjall/Restate runtime.
+fixtures, event rules, and source limits are reused with native Restate orchestration
+and PostgreSQL persistence rather than its Fjall storage.
 
 ## Domain and commands
 
@@ -19,10 +20,13 @@ fixtures, event rules, and source limits are useful, not its Fjall/Restate runti
   track/XC coach may have no published mailbox; a uniquely associated mailbox
   may have no published person name. Neither fact is guessed.
 - **Page:** a bounded acquisition/checkpoint entry, not a generic workflow job.
-- `scrape`: configuration → acquire/replay → parse → transactionally save rows
-  and the next page/cursor. HTTP and ordinary Chromium are source settings.
-- `export`: configuration → consistent database snapshot → comparable bests →
-  verified new XLSX. It performs no source access or database repair.
+- `durable crawl`: configuration → bounded recorded acquisition batches → parse →
+  transactionally save rows and the next page/cursor → verified export and continuation.
+  HTTP and ordinary Chromium are source settings.
+- `durable export`: configuration → consistent database snapshot → comparable
+  bests → verified new XLSX. It performs no source access or database repair.
+- `durable contacts` queues validated public WIAA school details;
+  `durable operation` submits hash-bound imports and retained-fixture replay.
 
 Configuration selects lower-48 states, graduation cohorts, source transports,
 season, finite page limit, RPS, automatic-attempt limit, and output splitting.
@@ -35,9 +39,11 @@ Expanding the configured state list is explicit, not an automatic national crawl
 
 ## Storage contract
 
-Exactly six application tables; ordinary SQLx migration metadata is not an
-application entity. There are no capture, receipt, decision, export-generation,
-event/state/year, distributed-lease, or model-service tables.
+Six business tables retain application facts. Six additional durability tables
+record page operations, attempts, receipts, wire pacing, wire requests and import
+receipts; ordinary SQLx migration metadata is separate. Capture bodies and export
+generations are hash-verified filesystem artifacts. No model service participates
+in production acquisition.
 
 | Table | Identity and retained facts |
 |---|---|
@@ -167,9 +173,11 @@ unchanged.
 
 
 
-One running scraper owns the acquisition session. Concurrency is bounded at one
-initially. Source requests are paced at no more than 1 RPS; supplemental official
-school pages use conservative pacing. No distributed leases or fencing protocol.
+One durable crawl owns acquisition for a database. Concurrency is bounded at one
+to three page slots; provider/origin request pacing remains at most three RPS.
+Defaults remain one RPS with conservative supplemental-school pacing, unless an
+explicit bounded contact override is configured. PostgreSQL admission locks and
+persistent wire reservations survive worker restarts.
 Response bodies, redirects, parser/frontier expansion, attempts, and each command's
 page budget have finite bounds. Source failures never mean "no athletes found."
 All target URLs, including token/bootstrap URLs, are validated before insertion;

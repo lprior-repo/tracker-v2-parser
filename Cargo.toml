@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.94"
 publish = false
+default-run = "track-scrapper-v2"
 description = "Athletic.net and MileSplit recruiting data pipeline using SQLx and PostgreSQL"
 
 [dependencies]
@@ -16,25 +17,29 @@ clap = { version = "4", features = ["derive", "env"] }
 csv = "1"
 dotenvy = "0.15"
 futures = "0.3"
+flate2 = "1.1.10"
 lol_html = "3.0"
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream", "query", "gzip"] }
 restate-sdk = { version = "=0.13.0", features = ["reqwest-client"] }
 rust_xlsxwriter = { version = "0.101", features = ["constant_memory"] }
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "process"] }
 scraper = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "json", "chrono", "migrate", "macros"] }
+tar = { version = "0.4.46", default-features = false }
+tempfile = "3.27.0"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time", "fs", "process", "net", "io-util", "signal"] }
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "ansi"] }
 url = "2"
+unicode-casefold = "0.2.0"
+unicode-normalization = "0.1.26"
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 
 [lints.rust]
@@ -59,6 +64,14 @@ arithmetic_side_effects = "deny"
 as_conversions = "deny"
 let_underscore_must_use = "deny"
 await_holding_lock = "deny"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
 
 [profile.release]
 opt-level = 3

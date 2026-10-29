@@ -179,14 +179,14 @@ async fn blocked_source_stops_cli_before_attempting_other_pending_pages() -> Res
             assert_eq!(job.target.url, blocked.url);
             assert!(database.start_attempt(job.id, 3).await?);
             database.fail_job(&job, None, "access denied", true).await?;
-            database.close().await;
-
-            let output = test.cli(&["scrape"]).await?;
-            assert!(!output.status.success());
-            assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("blocked page requiring human review")
-            );
+            let error = track_scrapper_v2::runner::durable::bootstrap(
+                &database,
+                &track_scrapper_v2::config::Config::default(),
+            )
+            .await
+            .err()
+            .context("durable source stop")?;
+            assert!(format!("{error:#}").contains("blocked page requiring human review"));
             let blocked_state: (String, i32, Option<String>) =
                 sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE url=$1")
                     .bind(&blocked.url)

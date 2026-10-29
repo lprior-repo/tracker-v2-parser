@@ -43,14 +43,12 @@ track-scrapper-v2 durable crawl --config config.toml --generation unique-statewi
 track-scrapper-v2 durable export --config config.toml --operation-id unique-export
 ```
 
-The direct commands below remain available for isolated diagnostics and fixture
-replay. Keep one production acquisition owner.
+The CLI exposes only durable commands. Keep one production acquisition owner;
+fixture replay and imports also run as recorded Restate operations.
 
 ```sh
-cargo run -- scrape --config config.toml
-cargo run -- export --config config.toml --output athletes.xlsx
-cargo run -- scrape --help
-cargo run -- export --help
+cargo run -- durable --help
+cargo run -- durable operation --help
 ```
 The checked-in configuration starts with Wisconsin (`WI`), graduation year 2027,
 season 2026, a 1,000-page checkpoint budget, and MileSplit enabled. Add states to the `states` array after
@@ -136,7 +134,8 @@ Exceeding a row, byte, cell or column capacity fails explicitly without publishi
 a complete export or adding overflow tabs. Empty issue-only batches do not create
 extra empty files.
 
-`layout = "detailed"` selects the diagnostic export described below.
+The library's `layout = "detailed"` selects the diagnostic export described below.
+Durable CLI exports require `single_sheet`.
 The main sheet has one row per selected canonical athlete ID. Only explicitly
 published high-school observations compete for PRs. All-level, middle-school,
 college, unknown-level and unconfirmed prior-revision observations remain in
@@ -202,12 +201,29 @@ source facts; the canonical `Athlete ID` supplies one spreadsheet row. For examp
 }
 ```
 
-Use the IDs from the target database and the exact SHA-256 of the reviewed file:
+Use the IDs from the target database. Stage the reviewed file with the library's
+`durable::operations::stage_input` helper under the worker's artifact root, then
+save an `OperationRequest` as `reviewed-identity-operation.json`:
+
+```json
+{
+  "operation_id": "reviewed-identity-1",
+  "spec": {
+    "kind": "reviewed_identity",
+    "manifest": {
+      "path": "/absolute/private/artifacts/inputs/ACTUAL_SHA256.input",
+      "sha256": "ACTUAL_SHA256",
+      "bytes": 1234
+    }
+  }
+}
+```
+
+Replace the descriptor with the helper's exact path, SHA-256 and byte length.
+The path must be inside the artifact root used by the registered worker.
 
 ```sh
-track-scrapper-v2 scrape --config config.toml \
-  --athlete-identity-manifest reviewed-identity.json \
-  --athlete-identity-sha256 EXPECTED_SHA256
+track-scrapper-v2 durable operation --request reviewed-identity-operation.json
 ```
 
 This offline action requires the crawler's acquisition lock, so run it between
@@ -229,13 +245,14 @@ conflict/separation behavior. Published `sameAs` links retain the existing
 automatic identity safeguards.
 
 
-Before parsing a MileSplit athlete response, the CLI retains its
-transport-sanitized bytes under their SHA-256 content address. The default
-directory is `${XDG_DATA_HOME:-$HOME/.local/share}/track-scrapper-v2/evidence`;
-`TRACK_SCRAPPER_EVIDENCE_DIR` can select another absolute path. Per-page database
+Before parsing a source response, the durable worker retains its
+transport-sanitized bytes under their SHA-256 content address inside its private
+artifact root. Per-page database
 metadata records the artifact, hash, byte length, effective URL, status and
 retention time. Replay reuses identical bytes and refuses to overwrite corrupt
 evidence. An evidence-write failure leaves the page failed, not successful.
+Library fixture replay takes an explicit `evidence_root`; it does not discover
+capture directories from environment variables or the home directory.
 Unsupported sensitive JavaScript expressions cause their entire script body to
 be removed before retention, followed by another complete redaction pass.
 Public DOM and separate athletic JSON remain available; unsupported sensitive
@@ -248,15 +265,16 @@ Import the published CSV from
 using a SHA-256 obtained independently for the exact file:
 
 ```sh
-cargo run -- scrape --school-addresses /path/to/high_school_addresses.csv \
-  --school-addresses-sha256 EXPECTED_SHA256
-cargo run -- scrape --download-school-addresses /path/to/new-addresses.csv \
-  --school-addresses-sha256 EXPECTED_SHA256
+track-scrapper-v2 durable operation --request public-schools-operation.json
+track-scrapper-v2 durable operation --request download-public-schools-operation.json
 ```
 
-The first form is offline; the second explicitly downloads the repository's
-`output/all_us_high_schools.csv` over HTTPS and refuses to overwrite the
-destination. Both verify the supplied digest before database changes. The
+The first request uses `spec.kind = "public_schools"`, a staged `csv` artifact
+descriptor and `origin: null`. The second uses
+`spec.kind = "download_public_schools"` and `expected_sha256`; it downloads the
+repository's `output/all_us_high_schools.csv` over HTTPS into its operation
+workspace. Both use a unique `operation_id` and verify the supplied digest before
+database changes. The
 downloader is pinned to repository commit
 `b7058732f05ab59105aa042e66d8a8cad467bf3c`; its CSV SHA-256 is
 `e141d147329289f957dbc160ce6b765a844754ba32ecf970697398043fa2c0ee`.
@@ -279,11 +297,11 @@ name-only identity joins or a Python runtime.
 The retained NCES PSS 2023–24 public-use CSV can also be imported offline:
 
 ```sh
-cargo run -- scrape --private-school-addresses /path/to/pss2324_pu.csv \
-  --school-addresses-sha256 EXPECTED_SHA256
+track-scrapper-v2 durable operation --request private-schools-operation.json
 ```
 
-PSS identities use `pss:<uppercase PPIN>`, preserving eight-character IDs and
+The request uses `spec.kind = "private_schools"` and a staged `csv` artifact
+descriptor. PSS identities use `pss:<uppercase PPIN>`, preserving eight-character IDs and
 leading zeros without colliding with public-school IDs. The published
 `PADDRS`/`PCITY`/`PSTABB`/`PZIP`/`PZIP4` tuple is explicitly **mailing** data.
 Physical-location columns never fill missing mailing components. Raw phone,
@@ -302,13 +320,13 @@ To enrich already-observed schools without contacting providers, supply both a
 local reference directory CSV and its manifest:
 
 ```sh
-cargo run -- scrape --school-directory /path/to/school_directory.csv \
-  --school-directory-manifest /path/to/manifest.json
+track-scrapper-v2 durable operation --request school-directory-operation.json
 ```
 
-This mode does not start a crawl or require a scraper configuration. It checks
-the CSV's SHA-256 and byte length against the supplied manifest before opening
-the database. Duplicate `(sources, key)` identities reject the entire directory
+This request uses `spec.kind = "school_directory"` plus staged `csv` and `manifest`
+artifact descriptors. It does not start a crawl or require a scraper configuration.
+It checks the CSV's SHA-256 and byte length against the supplied manifest before
+database changes. Duplicate `(sources, key)` identities reject the entire directory
 before database access; the same key in distinct source namespaces stays separate.
 The manifest is not an independently authenticated signature; choose trusted
 inputs. Initial enrichment requires unique normalized name,
@@ -335,12 +353,11 @@ as incomplete. Caller credentials remain origin-bound. Page requests, bodies,
 queued work, concurrency and cleanup have finite limits. Challenges are not
 bypassed, and failed/cancelled acquisition does not establish complete coverage.
 
-The crawl reports an error if `limits.max_pages` is exhausted while checkpoints
-remain pending. Increase the limit if needed and run the scrape again to resume
-from its persisted checkpoints.
-Nonblocked page failures remain recorded while untouched pages continue. The
-scrape reports exhausted failures when runnable work is drained; `--refresh`
-does not reset failed or interrupted attempt counts.
+`limits.max_pages` bounds each durable batch. The workflow exports its verified
+snapshot and schedules a continuation while its deadline and batch count permit.
+Checkpoints remain available when the bounded run ends. Nonblocked page failures
+remain recorded while untouched pages continue; automatic attempts and saved
+access stops are preserved across restarts and new runs.
 
 Athletic.net results without a published result ID use its row code where
 available (including the meet API's `ShortCode`). Without a code, the key
@@ -365,7 +382,8 @@ Published manual and spreadsheet-style result tables are retained as unassigned
 results when no source athlete identifier is available. When the published
 canonical file matches the selected result, its rows are not queued twice.
 AthleticRUNMEET tables retain individual and relay rows, including DNS/DQ and
-duplicate published rows, without inventing athlete IDs. Within each source's
+duplicate published rows, without inventing athlete IDs. The library diagnostic
+scheduler uses each source's
 eight scheduling turns, five reservations go to profiles, one to rosters, one to
 official-school contacts and one to bulk pages; empty classes fall back to
 available work. This prevents roster/bulk backlogs from starving profiles or
@@ -389,15 +407,15 @@ Discover published Wisconsin WIAA school contacts after collecting provider
 schools, with `WI` selected and contact collection enabled:
 
 ```sh
-cargo run -- scrape --config config.toml --wiaa-directory
-cargo run -- scrape --config config.toml
-cargo run -- export --config config.toml --output athletes-with-contacts.xlsx
+track-scrapper-v2 durable contacts --config config.toml --operation-id wiaa-directory-1
+track-scrapper-v2 durable crawl --config config.toml --generation school-contacts-1
+track-scrapper-v2 durable export --config config.toml --operation-id athletes-with-contacts-1
 ```
 
 The first command reads the public WIAA directory and enqueues school-detail
 pages matched by exact normalized school name, Wisconsin state and city. It
 reports missing, uncorroborated and ambiguous matches without guessing identities.
-The subsequent scrape acquires those pages and persists published track/XC coach
+The subsequent crawl acquires those pages and persists published track/XC coach
 names, emails and school addresses; discovery alone does not populate those
 fields. Provider school IDs remain intact. Existing site access stops apply,
 and WIAA global navigation is not crawled.
@@ -406,10 +424,12 @@ Reviewed cooperative programs can import their designated host's published
 coach contacts from retained WIAA evidence:
 
 ```sh
-cargo run -- scrape --config config.toml --wiaa-coop-manifest /path/to/manifest.json
+track-scrapper-v2 durable operation --request cooperative-contacts-operation.json
 ```
 
-The manifest supplies all four 2026–2027 boys/girls track/XC reports and each
+The request uses `spec.kind = "wiaa_cooperatives"` and a staged `manifest` artifact.
+Use `stage_cooperative_manifest` to stage its referenced captures under the worker
+artifact root. The manifest supplies all four 2026–2027 boys/girls track/XC reports and each
 host-school capture, with URLs, request scope, capture times and SHA-256 hashes.
 The importer reparses those captures, checks the existing provider identity and
 designated host, and imports only the supported sport/gender coaches. It preserves
@@ -430,7 +450,7 @@ authority, not unrelated school sites or athlete pages. Public sign-in links and
 embedded contact-form CAPTCHA widgets do not by themselves block a page.
 Staff links use the effective response URL and published HTML base without
 changing checkpoint identity or broadening the school-site crawl authority.
-Contact HTML is parsed in memory rather than retained as a raw capture;
+Contact HTML is sanitized before durable capture retention;
 recognized credential-bearing derived URLs are omitted before storage or
 queueing, without discarding other published contact or postal records.
 An initial GET contact URL returning HTTP 404 can discover its same-site root in
@@ -475,14 +495,20 @@ PostgreSQL stores the application data. DoltHub synchronizes Beads issues only;
 it does not back up athletes, results, checkpoints, retained HTML, or workbooks.
 GitHub carries the code and migrations, not the live database or credentials.
 
-The portable migration tools require Python 3 and PostgreSQL command-line tools.
-Use the same PostgreSQL major version on both machines. A backup captures all six
-application tables and SQLx migration history from one exported database snapshot,
-plus retained evidence, the selected configuration, and saved exports. It does
+The Rust migration tools run through Moon and require PostgreSQL command-line tools.
+Use the same PostgreSQL major version on both machines. A version-two backup captures
+all six application tables, six durability tables and SQLx migration history from
+one exported database snapshot, plus retained evidence, the selected configuration,
+saved exports and the explicitly selected durable artifact directory. It does
 not copy role passwords, `.env`, browser profiles, old backup directories, or
 unrelated Downloads. Backup and restore share the same credential-filename
 rejection policy. Original evidence paths remain provenance; portable evidence
 files are named by SHA-256.
+Version-two archives verify every capture and parse artifact referenced by that
+snapshot. A missing or corrupt referenced blob prevents publication. Restate's
+server journals and configuration require a separate stopped-server backup.
+Legacy version-one archives verify their original seven-table inventory only;
+their durability records and artifacts are not certified by that format.
 
 ### Package on the source machine
 
@@ -493,10 +519,11 @@ The dump and logical fingerprints use one snapshot even if writers are active.
 
 ```sh
 PGHOST=localhost PGUSER=track_scrapper \
-python3 scripts/migration/backup.py \
+moon run pipeline:native-backup -- \
   --database track_scrapper \
   --data-dir "$HOME/.local/share/track-scrapper-v2" \
   --config config.toml \
+  --artifacts /absolute/private/durable-artifacts \
   --output "$HOME/track-scrapper-migration.tar.gz"
 ```
 
@@ -529,13 +556,13 @@ or copy its live data directory between Linux and macOS.
 
 ### Hydrate a new machine
 
-Fetch this repository's `main` first. On macOS, Python 3 and Homebrew must already
+Fetch this repository's `main` first. On macOS, Rust, Moon and Homebrew must already
 be available. `--bootstrap-macos` installs and starts the matching PostgreSQL
 Homebrew service; omit it on Linux where PostgreSQL is already running.
 
 ```sh
 git pull --ff-only origin main
-python3 scripts/migration/restore.py \
+moon run pipeline:native-restore -- \
   --archive "$HOME/Downloads/track-scrapper-migration.tar.gz" \
   --database track_scrapper \
   --data-dir "$HOME/.local/share/track-scrapper-v2" \
@@ -550,22 +577,41 @@ fingerprints before publishing the restored files. It never cleans or drops an
 existing database. A failed restore identifies any newly created partial target.
 
 The new data directory contains `config.toml`, `evidence`, `exports`, and a private
-`.env` configured for the destination. Build the application from the repository
-root, then run it from that data directory so its dotenv loader reads the
-destination settings:
+`.env` configured for the destination, plus `durable-artifacts` for version-two
+bundles and a JSON-string `private.env` for the Rust worker installer. Build from
+the repository root, then start
+a dedicated worker from that data directory so its dotenv loader reads the
+restored database settings. Use a separate Restate server with its own data
+directory and free loopback ports. Set `RESTORED_RESTATE_ADMIN` and
+`RESTORED_RESTATE_INGRESS` to that server's URLs; an existing production worker
+would still use its own database, regardless of the client's local `.env`.
 
 ```sh
 REPO="$PWD"
 env -u CI moon run pipeline:build
 (
   cd "$HOME/.local/share/track-scrapper-v2"
-  env -u DATABASE_URL -u TRACK_SCRAPPER_EVIDENCE_DIR \
-    "$REPO/target/release/track-scrapper-v2" export \
-    --config config.toml --output exports/restored-athletes.xlsx
+  env -u DATABASE_URL \
+    "$REPO/target/release/track-scrapper-v2" durable serve \
+    --bind 127.0.0.1:9086 --artifacts "$PWD/durable-artifacts" \
+    --published-workbook "$PWD/exports/restored-athletes.xlsx"
 )
 ```
 
-Reopen the export and check its completion manifest before resuming scraping.
+In another terminal, register that worker with the isolated server and submit
+the export:
+
+```sh
+RESTATE_ADMIN_URL="$RESTORED_RESTATE_ADMIN" \
+  RESTATE_INGRESS_URL="$RESTORED_RESTATE_INGRESS" \
+  restate deployments register http://127.0.0.1:9086 --yes
+track-scrapper-v2 durable export \
+  --config "$HOME/.local/share/track-scrapper-v2/config.toml" \
+  --operation-id restored-export-1 --ingress "$RESTORED_RESTATE_INGRESS"
+```
+
+Wait for the operation receipt, then reopen the delivered export and check its
+completion manifest before starting acquisition.
 Restoration preserves captured data; it does not fill missing PRs or contacts or
 prove complete source coverage. Keep the old machine unchanged until the new
 database and files have been verified. Older captures without retained response
@@ -602,11 +648,12 @@ CARGO_BUILD_JOBS=2 RUST_TEST_THREADS=2 MOON_CONCURRENCY=1 moon ci --force
 ```
 
 Set `TEST_DATABASE_URL` and `TEST_EXPORT_READONLY_ROLE` privately before that
-command. The application is an on-demand CLI, not an HTTP service. Start its
-database before invoking `scrape --input` for offline replay or `export`, and
-stop only its own database cluster when finished. Replay a representative fixture
-twice, verify stable identities/results/checkpoints, then export and reopen the
-workbook and verify every manifest part's byte length and SHA-256.
+command. The durable worker is a native HTTP endpoint registered with Restate.
+Start its database and owned server/worker before submitting operations. Library
+tests may replay representative fixtures directly against isolated schemas;
+native qualification sends `offline_replay` operations through Restate twice,
+verifies stable identities/results/checkpoints, then exports and reopens the
+workbook and checks every manifest part's byte length and SHA-256.
 
 macOS temporary-directory paths can contain a `/var` symlink. Migration backup
 inputs must use canonical, existing paths: source symlinks and symlinked parents
@@ -614,8 +661,10 @@ are intentionally rejected. Test fixture roots are canonicalized before creating
 their contents so security assertions exercise the selected path itself.
 
 A fresh database does not restore the real dataset. Durable source access stops
-apply across machines and databases. Keep Athletic.net disabled and retain the
-Wisconsin scope, one request per second, and 1,000-page budget.
+apply across machines and databases. The checked-in starting settings keep
+Athletic.net disabled, Wisconsin scope, one request per second and a 1,000-page
+budget. A production operator can choose a 2,000-page batch to reduce export
+pauses without changing those checked-in defaults.
 
 For an explicitly requested fresh collection of public results, an operator can
 select this acquisition policy:
@@ -653,7 +702,8 @@ website attempts; existing failures remain recorded.
 The default rate remains one request per second. Setting
 `requests_per_second = 2.0` or `3.0` under `[limits]` selects a higher rate, with a hard
 ceiling of three requests per second. Durable crawls accept `concurrency = 1` through
-`3`; the legacy live scraper requires one slot. Offline replay accepts either setting.
+`3`. Offline replay is a durable operation; library test helpers can also replay
+retained fixtures directly.
 Use a higher rate only where the source policy permits it. HTTP redirect hops and
 browser document/resource requests retain wire pacing. School contacts default to
 one request per five seconds, or one per thirty seconds for staff-directory URLs.
@@ -690,6 +740,10 @@ moon ci --force
 Integration tests require `TEST_DATABASE_URL`; they create isolated PostgreSQL
 schemas and remove them afterward. Do not point tests or smoke checks at a
 production database.
+The migration scenario additionally requires `TEST_MIGRATION_ADMIN_DATABASE_URL`
+for creating and removing uniquely named disposable databases. All dump, restore
+and fingerprint work uses the ordinary test role. Keep administrator credentials
+in a private environment; the scenario never falls back to a production URL.
 The read-only export scenario requires either permission to create a temporary
 test role or a preprovisioned NOLOGIN role named by `TEST_EXPORT_READONLY_ROLE`.
 Grant the test user membership in that role, not `CREATEROLE`; each scenario

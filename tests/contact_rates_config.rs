@@ -42,7 +42,7 @@ fn omitted_contact_rate_preserves_the_exact_preexisting_limits_serialization() -
 }
 
 #[tokio::test]
-async fn legacy_live_scrape_rejects_parallel_config_before_opening_database() -> Result<()> {
+async fn removed_scrape_command_rejects_parallel_config_before_opening_database() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let config = directory.path().join("parallel.toml");
     std::fs::write(&config, "[limits]\nconcurrency=3")?;
@@ -55,6 +55,6 @@ async fn legacy_live_scrape_rejects_parallel_config_before_opening_database() ->
         .output()
         .await?;
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("use durable crawl"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
     Ok(())
 }

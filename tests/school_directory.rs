@@ -42,8 +42,8 @@ async fn offline_directory_preserves_conflicts_and_ambiguity() -> Result<()> {
           ('athleticnet','8','Postal Conflict','WI','Madison','17 Main','99999',NULL,'source')")
           .execute(&test.pool).await?;
         let (csv, manifest) = fixture(test, CSV)?;
-        let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
-        let output = test.cli(&args).await?;
+        let args = crate::support::OfflineOperation::Directory {csv:std::path::PathBuf::from((&csv).to_string()),manifest:std::path::PathBuf::from((&manifest).to_string())};
+        let output = test.operation(&args).await?;
         support::assert_success(&output);
         let rows: Vec<(String, Option<String>, Option<String>, Option<serde_json::Value>, String)> = sqlx::query_as("SELECT source_id,address,postal_code,address_provenance,source_url FROM schools ORDER BY source_id").fetch_all(&test.pool).await?;
         assert_eq!(rows[0].1.as_deref(), Some("10 Main"));
@@ -56,7 +56,7 @@ async fn offline_directory_preserves_conflicts_and_ambiguity() -> Result<()> {
         assert!(rows[3..7].iter().all(|row| row.3.is_none()));
         assert_eq!(rows[7].2.as_deref(), Some("99999"));
         assert!(rows.iter().all(|row| row.4 == "source"));
-        let again = test.cli(&args).await?;
+        let again = test.operation(&args).await?;
         support::assert_success(&again);
         Ok(())
     })).await
@@ -69,7 +69,7 @@ async fn wrong_manifest_rejects_before_database_updates() -> Result<()> {
         sqlx::query("INSERT INTO schools(source,source_id,name,state,city,website,source_url) VALUES ('athleticnet','1','Web School','WI','Madison','https://web.example','source')").execute(&test.pool).await?;
         let (csv, manifest) = fixture(test, CSV)?;
         std::fs::write(&csv, "changed")?;
-        let output = test.cli(&["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest]).await?;
+        let output = test.operation(&crate::support::OfflineOperation::Directory {csv:std::path::PathBuf::from((&csv).to_string()),manifest:std::path::PathBuf::from((&manifest).to_string())}).await?;
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("does not match manifest"));
         let address: Option<String> = sqlx::query_scalar("SELECT address FROM schools WHERE source_id='1'").fetch_one(&test.pool).await?;
@@ -98,8 +98,7 @@ async fn website_corroboration_preserves_paths_but_canonicalizes_hosts() -> Resu
           ('athleticnet','2','Slash School','WI','Madison','https://web.example/campus','source'), \
           ('athleticnet','3','Host School','WI','Madison','https://host.example/School','source')")
           .execute(&test.pool).await?;
-        let output = test.cli(&["scrape", "--school-directory", &csv.to_string_lossy(),
-          "--school-directory-manifest", &manifest.to_string_lossy()]).await?;
+        let output = test.operation(&crate::support::OfflineOperation::Directory {csv:std::path::PathBuf::from((&csv.to_string_lossy()).to_string()),manifest:std::path::PathBuf::from((&manifest.to_string_lossy()).to_string())}).await?;
         support::assert_success(&output);
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
           "SELECT source_id,address FROM schools ORDER BY source_id").fetch_all(&test.pool).await?;
@@ -117,13 +116,13 @@ async fn given_duplicate_directory_identity_when_replayed_then_owned_address_is_
             .execute(&test.pool).await?;
         let original = "key,name,street1,street2,city,state,zip,website,sources\nsource:1,Alpha High,10 Main,,Madison,WI,53701,https://alpha.example/,reference\n";
         let (csv, manifest) = fixture(test, original)?;
-        let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
-        support::assert_success(&test.cli(&args).await?);
+        let args = crate::support::OfflineOperation::Directory {csv:std::path::PathBuf::from((&csv).to_string()),manifest:std::path::PathBuf::from((&manifest).to_string())};
+        support::assert_success(&test.operation(&args).await?);
         let before: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source_id='alpha'")
             .fetch_one(&test.pool).await?;
         let duplicate = format!("{original}source:1,Beta High,20 Main,,Madison,WI,53702,https://beta.example/,reference\n");
         fixture(test, &duplicate)?;
-        let output = test.cli(&args).await?;
+        let output = test.operation(&args).await?;
         assert!(!output.status.success(), "ambiguous source identity was accepted");
         assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate source identities"));
         let after: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(s) FROM schools s WHERE source_id='alpha'")
@@ -146,13 +145,13 @@ async fn given_source_scoped_directory_ids_when_names_change_then_both_owned_add
             .execute(&test.pool).await?;
         let original = "key,name,street1,street2,city,state,zip,website,sources\n1,Alpha High,10 Main,,Madison,WI,53701,https://alpha.example/,alpha-directory\n1,Beta High,20 Main,,Madison,WI,53702,https://beta.example/,beta-directory\n";
         let (csv, manifest) = fixture(test, original)?;
-        let args = ["scrape", "--school-directory", &csv, "--school-directory-manifest", &manifest];
-        support::assert_success(&test.cli(&args).await?);
+        let args = crate::support::OfflineOperation::Directory {csv:std::path::PathBuf::from((&csv).to_string()),manifest:std::path::PathBuf::from((&manifest).to_string())};
+        support::assert_success(&test.operation(&args).await?);
         let corrected = original
             .replace("Alpha High,10 Main", "Renamed Alpha,11 Main")
             .replace("Beta High,20 Main", "Renamed Beta,21 Main");
         fixture(test, &corrected)?;
-        support::assert_success(&test.cli(&args).await?);
+        support::assert_success(&test.operation(&args).await?);
         let addresses: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT source_id,address,postal_code FROM schools ORDER BY source_id",
         ).fetch_all(&test.pool).await?;

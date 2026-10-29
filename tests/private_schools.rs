@@ -23,8 +23,8 @@ async fn private_school_mail_tuples_are_preserved_and_reimport_is_idempotent() -
         Database::connect(&test.url).await?.close().await;
         sqlx::query("INSERT INTO schools(source,source_id,name,state,city,address,source_url) VALUES ('athleticnet','1','Box Academy','WI','Madison','PO BOX 17','source')").execute(&test.pool).await?;
         let (path, sha) = fixture(test, CSV)?;
-        let args = ["scrape", "--private-school-addresses", &path, "--school-addresses-sha256", &sha];
-        let output = test.cli(&args).await?;
+        let args = crate::support::OfflineOperation::PrivateSchools {csv:std::path::PathBuf::from((&path).to_string()),sha256:(&sha).to_string()};
+        let output = test.operation(&args).await?;
         support::assert_success(&output);
         let row: (String, String, Option<String>, serde_json::Value, String) = sqlx::query_as("SELECT source_id,address,postal_code,address_provenance,uuid::text FROM schools WHERE source='nces' AND source_id='pss:02004116'").fetch_one(&test.pool).await?;
         assert_eq!(row.0, "pss:02004116");
@@ -38,7 +38,7 @@ async fn private_school_mail_tuples_are_preserved_and_reimport_is_idempotent() -
         let enriched: (Option<String>, serde_json::Value) = sqlx::query_as("SELECT postal_code,address_provenance FROM schools WHERE source='athleticnet' AND source_id='1'").fetch_one(&test.pool).await?;
         assert_eq!(enriched.0.as_deref(), Some("53701-1234"));
         assert_eq!(enriched.1.pointer("/postal_code/directory/address_type").and_then(|v| v.as_str()), Some("mailing"));
-        let output = test.cli(&args).await?;
+        let output = test.operation(&args).await?;
         support::assert_success(&output);
         let uuid: String = sqlx::query_scalar("SELECT uuid::text FROM schools WHERE source_id='pss:02004116'").fetch_one(&test.pool).await?;
         assert_eq!(uuid, row.4);
@@ -55,24 +55,18 @@ async fn bad_hash_and_duplicate_ppin_are_rejected_without_writes() -> Result<()>
                 format!("{CSV}A2380006,Duplicate,1 MAIN,Madison,WI,53703,,555,10,,,,,\n");
             let (path, sha) = fixture(test, &duplicate)?;
             let output = test
-                .cli(&[
-                    "scrape",
-                    "--private-school-addresses",
-                    &path,
-                    "--school-addresses-sha256",
-                    &sha,
-                ])
+                .operation(&crate::support::OfflineOperation::PrivateSchools {
+                    csv: std::path::PathBuf::from((&path).to_string()),
+                    sha256: (&sha).to_string(),
+                })
                 .await?;
             assert!(!output.status.success());
             assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate school IDs"));
             let output = test
-                .cli(&[
-                    "scrape",
-                    "--private-school-addresses",
-                    &path,
-                    "--school-addresses-sha256",
-                    "bad",
-                ])
+                .operation(&crate::support::OfflineOperation::PrivateSchools {
+                    csv: std::path::PathBuf::from((&path).to_string()),
+                    sha256: ("bad").to_string(),
+                })
                 .await?;
             assert!(!output.status.success());
             let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schools")

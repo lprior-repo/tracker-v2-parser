@@ -1,5 +1,8 @@
 use restate_sdk::prelude::*;
 
+#[cfg(test)]
+mod tests;
+
 macro_rules! recorded {
     ($ctx:expr, $name:expr, $effect:expr) => {{
         let effect = $effect;
@@ -51,7 +54,7 @@ pub(super) fn classify(error: anyhow::Error) -> HandlerError {
                 sqlx::Error::Database(database) => database.code().is_some_and(|code| {
                     matches!(
                         code.as_ref(),
-                        "40001" | "40P01" | "55P03" | "57P01" | "53300"
+                        "40001" | "40P01" | "55P03" | "57P01" | "53100" | "53300"
                     )
                 }),
                 _ => false,

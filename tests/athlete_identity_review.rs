@@ -31,13 +31,13 @@ async fn assert_workbook(test: &support::Scenario, canonical: i64) -> Result<()>
     let output = test.directory().join("reviewed.xlsx");
     support::assert_success(
         &test
-            .cli(&[
-                "export",
-                "--config",
-                config.to_str().context("config")?,
-                "--output",
-                output.to_str().context("output")?,
-            ])
+            .operation(&crate::support::OfflineOperation::Export {
+                config: Some(std::path::PathBuf::from(
+                    (config.to_str().context("config")?).to_string(),
+                )),
+                output: std::path::PathBuf::from((output.to_str().context("output")?).to_string()),
+                per_athlete: false,
+            })
             .await?,
     );
     let mut workbook = open_workbook_auto(&output)?;

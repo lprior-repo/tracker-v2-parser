@@ -56,11 +56,13 @@ async fn export_row(test: &support::Scenario, filename: &str) -> Result<BTreeMap
     let output = test.directory().join(filename);
     support::assert_success(
         &test
-            .cli(&[
-                "export",
-                "--output",
-                output.to_str().context("UTF-8 output")?,
-            ])
+            .operation(&crate::support::OfflineOperation::Export {
+                config: None,
+                output: std::path::PathBuf::from(
+                    (output.to_str().context("UTF-8 output")?).to_string(),
+                ),
+                per_athlete: false,
+            })
             .await?,
     );
     let mut workbook = open_workbook_auto(&output)?;

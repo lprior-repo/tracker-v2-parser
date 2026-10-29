@@ -370,11 +370,13 @@ async fn export_case(
     let output = test.directory().join("fixture.xlsx");
     support::assert_success(
         &test
-            .cli(&[
-                "export",
-                "--output",
-                output.to_str().context("output path")?,
-            ])
+            .operation(&crate::support::OfflineOperation::Export {
+                config: None,
+                output: std::path::PathBuf::from(
+                    (output.to_str().context("output path")?).to_string(),
+                ),
+                per_athlete: false,
+            })
             .await?,
     );
     let mut workbook = open_workbook_auto(&output)?;
@@ -433,11 +435,13 @@ async fn given_captured_bio_when_cli_replayed_twice_then_unknown_levels_remain_o
             let output = test.directory().join("captured-bio.xlsx");
             support::assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--output",
-                        output.to_str().context("output path")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: None,
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("output path")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let mut workbook = open_workbook_auto(output)?;

@@ -253,11 +253,7 @@ async fn given_rendered_contact_challenge_when_cli_replays_then_site_is_blocked_
         let page = target("staff","school");
         let input = test.directory().join("rendered-challenge.html");
         std::fs::write(&input,"<html><head><title>School</title></head><body><main>captcha challenge</main></body></html>")?;
-        let output = test.cli(&[
-            "scrape","--source","milesplit","--kind","contacts","--url",&page.url,
-            "--input",input.to_str().context("UTF8 capture path")?,"--school-id","school",
-            "--school-name","school High School","--state","WI","--season","2026",
-        ]).await?;
+        let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input.to_str().context("UTF8 capture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Contacts,(&page.url).to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),school_id:Some(("school").to_string()),school_name:Some(("school High School").to_string()),season:Some(("2026").parse::<i32>()?), ..Default::default()})}).await?;
         assert!(!output.status.success());
         let state: (String,i32,Option<String>) = sqlx::query_as(
             "SELECT status,attempts,last_success::text FROM scrape_pages WHERE url=$1",

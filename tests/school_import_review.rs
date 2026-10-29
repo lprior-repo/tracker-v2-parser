@@ -248,11 +248,13 @@ async fn enriched_correction(test: &support::Scenario, feed: Feed) -> Result<()>
     let output = test.directory().join("postal.xlsx");
     support::assert_success(
         &test
-            .cli(&[
-                "export",
-                "--output",
-                output.to_str().context("UTF-8 output")?,
-            ])
+            .operation(&crate::support::OfflineOperation::Export {
+                config: None,
+                output: std::path::PathBuf::from(
+                    (output.to_str().context("UTF-8 output")?).to_string(),
+                ),
+                per_athlete: false,
+            })
             .await?,
     );
     let mut workbook = open_workbook_auto(&output)?;

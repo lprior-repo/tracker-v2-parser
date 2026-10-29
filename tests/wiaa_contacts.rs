@@ -259,9 +259,9 @@ async fn given_wiaa_capture_when_replayed_twice_through_cli_then_school_and_coac
     support::with_schema(|test| Box::pin(async move {
         let input = test.directory().join("published-wiaa-school.html");
         std::fs::write(&input, detail())?;
-        let args = ["scrape", "--source", "milesplit", "--kind", "contacts", "--url", "https://schools.wiaawi.org/Directory/School/GetDirectorySchool?orgID=42", "--input", input.to_str().context("UTF8 capture path")?, "--school-id", "provider-school-123", "--school-name", "Example", "--state", "WI", "--season", "2026", "--subject-id", "contacts-depth:2"];
-        support::assert_success(&test.cli(&args).await?);
-        support::assert_success(&test.cli(&args).await?);
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input.to_str().context("UTF8 capture path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Contacts,("https://schools.wiaawi.org/Directory/School/GetDirectorySchool?orgID=42").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),school_id:Some(("provider-school-123").to_string()),school_name:Some(("Example").to_string()),subject_id:Some(("contacts-depth:2").to_string()),season:Some(("2026").parse::<i32>()?), ..Default::default()})};
+        support::assert_success(&test.operation(&args).await?);
+        support::assert_success(&test.operation(&args).await?);
         let schools: Vec<(String, String, String, String)> = sqlx::query_as("SELECT source_id,address,city,postal_code FROM schools ORDER BY id").fetch_all(&test.pool).await?;
         assert_eq!(schools, vec![("provider-school-123".into(),"123 School Road".into(),"Example City".into(),"54405-9730".into())]);
         let coaches: Vec<(String, String, String)> = sqlx::query_as("SELECT s.source_id,c.name,c.email FROM contacts c JOIN schools s ON s.id=c.school_id WHERE c.kind='coach' ORDER BY c.email").fetch_all(&test.pool).await?;

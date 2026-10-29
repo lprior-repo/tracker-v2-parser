@@ -77,18 +77,14 @@ async fn given_retained_athleticnet_html_challenge_when_replayed_then_blocked_st
         let input = test.directory().join("challenge.html");
         std::fs::write(&input, "\u{feff} \n<!doctype html><title>Just a moment</title><main>Verify you are human</main>")?;
         let destination = target();
-        let args = [
-            "scrape", "--source", "athleticnet", "--kind", "athlete",
-            "--url", destination.url.as_str(), "--input", input.to_str().context("challenge path")?,
-            "--athlete-id", "28872883", "--state", "WI", "--sport", "outdoor",
-        ];
-        let first = test.cli(&args).await?;
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input.to_str().context("challenge path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,(destination.url.as_str()).to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})};
+        let first = test.operation(&args).await?;
         assert!(!first.status.success());
         let state: (String, i32, bool) = sqlx::query_as(
             "SELECT status,attempts,last_success IS NOT NULL FROM scrape_pages"
         ).fetch_one(&test.pool).await?;
         assert_eq!(state, ("blocked".into(), 1, false));
-        let second = test.cli(&args).await?;
+        let second = test.operation(&args).await?;
         assert!(!second.status.success());
         let after: (String, i32, bool) = sqlx::query_as(
             "SELECT status,attempts,last_success IS NOT NULL FROM scrape_pages"

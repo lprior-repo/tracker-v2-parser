@@ -1,3 +1,5 @@
+#[path = "durable_page/support.rs"]
+mod page_support;
 mod support;
 
 use anyhow::{Context, Result};
@@ -155,7 +157,7 @@ fn wisconsin_config() -> &'static str {
 }
 
 #[tokio::test]
-async fn given_outside_state_failures_when_wisconsin_drains_then_cli_succeeds_without_consuming_them()
+async fn given_outside_state_failures_when_wisconsin_drains_then_durable_selection_finishes_without_consuming_them()
 -> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
@@ -173,10 +175,11 @@ async fn given_outside_state_failures_when_wisconsin_drains_then_cli_succeeds_wi
             let before: Vec<(i64, String, i32, Option<String>)> = sqlx::query_as(
                 "SELECT id,status,attempts,last_error FROM scrape_pages ORDER BY id",
             ).fetch_all(&test.pool).await?;
-            let path = test.directory().join("wisconsin.toml");
-            std::fs::write(&path, wisconsin_config())?;
-            let output = test.cli(&["scrape", "--config", path.to_str().context("UTF8 configuration path")?]).await?;
-            support::assert_success(&output);
+            let scope = page_support::scope(&config)?;
+            track_scrapper_v2::runner::durable::bootstrap(&database, &config).await?;
+            assert!(track_scrapper_v2::durable::page::select(
+                &database, &config, &scope, chrono::Utc::now().timestamp_millis()
+            ).await?.is_none());
             let after: Vec<(i64, String, i32, Option<String>)> = sqlx::query_as(
                 "SELECT id,status,attempts,last_error FROM scrape_pages ORDER BY id",
             ).fetch_all(&test.pool).await?;
@@ -213,16 +216,16 @@ async fn given_provider_access_stop_outside_wisconsin_when_scope_changes_then_hu
                     true,
                 )
                 .await?;
-            let path = test.directory().join("wisconsin.toml");
-            std::fs::write(&path, wisconsin_config())?;
-            let output = test
-                .cli(&[
-                    "scrape",
-                    "--config",
-                    path.to_str().context("UTF8 configuration path")?,
-                ])
-                .await?;
-            assert!(!output.status.success());
+            let scope = page_support::scope(&config)?;
+            let error = track_scrapper_v2::durable::page::select(
+                &database,
+                &config,
+                &scope,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            .expect_err("provider access stop remains binding across states");
+            assert!(error.to_string().contains("human review"));
             let state: (String, i32, String) =
                 sqlx::query_as("SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1")
                     .bind(job.id)

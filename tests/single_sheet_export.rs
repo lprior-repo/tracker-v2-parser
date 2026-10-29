@@ -82,7 +82,7 @@ async fn given_all_level_prs_and_coaches_when_cli_exports_then_one_sheet_contain
         let config=test.directory().join("single.toml");
         std::fs::write(&config,"states=['WI']\ngraduation_years=[2027]\n[export]\nlayout='single_sheet'\nper_athlete_sheets=true\n")?;
         let output=test.directory().join("athletes.xlsx");
-        support::assert_success(&test.cli(&["export","--config",config.to_str().context("config")?,"--output",output.to_str().context("output")?]).await?);
+        support::assert_success(&test.operation(&crate::support::OfflineOperation::Export {config:Some(std::path::PathBuf::from((config.to_str().context("config")?).to_string())),output:std::path::PathBuf::from((output.to_str().context("output")?).to_string()),per_athlete:false}).await?);
         let mut book=open_workbook_auto(&output)?;
         assert_eq!(book.sheet_names(), &["Athletes"]);
         let sheet=book.worksheet_range("Athletes")?;

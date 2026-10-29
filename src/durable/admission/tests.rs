@@ -4,6 +4,9 @@ use sqlx::postgres::PgPoolOptions;
 use super::acquire;
 use crate::{database::Database, durable::pacing::test_support::with_database};
 
+#[path = "tests/wiaa.rs"]
+mod wiaa;
+
 #[tokio::test]
 async fn given_three_slots_when_admitting_more_then_the_fourth_and_exclusive_owners_wait_until_release()
 -> Result<()> {

@@ -251,10 +251,10 @@ async fn given_blocked_contact_authority_when_pending_and_new_jobs_are_selected_
         let job = database.next_job(Some(Source::MileSplit), 3, &[]).await?.context("first contact")?;
         let input = test.directory().join("contact-challenge.html");
         std::fs::write(&input, "<html><head><title>Just a moment...</title></head><body><h1>Verify you are human</h1></body></html>")?;
-        let error = Runner::new().replay(&Config::default(), &test.url, &input, job.target.clone())
+        let error = Runner::new().replay(&Config::default(), &test.url, &input, job.target.clone(), &test.directory().join("evidence"))
             .await.expect_err("full-page challenge must stop this contact site");
         assert!(format!("{error:#}").contains("Official school website access challenge"));
-        assert!(Runner::new().replay(&Config::default(), &test.url, &input, job.target.clone()).await.is_err());
+        assert!(Runner::new().replay(&Config::default(), &test.url, &input, job.target.clone(), &test.directory().join("evidence")).await.is_err());
         let fresh = contact(Source::MileSplit,"https://SCHOOL.EXAMPLE.EDU/athletics","later");
         let unrelated = contact(Source::MileSplit,"https://another.example.edu/staff","other");
         database.enqueue(&[fresh, unrelated.clone(), athletics_target()?], false).await?;
@@ -294,7 +294,7 @@ async fn prepare_startup(database: &Database, config: &Config) -> Result<()> {
 }
 
 #[tokio::test]
-async fn given_saved_website_when_normal_scrape_restarts_then_startup_backfills_under_lock_without_refreshing_contacts()
+async fn given_saved_website_when_durable_bootstrap_restarts_then_provider_stops_precede_backfill_and_saved_contact_stops_survive()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         let database = Database::connect(&test.url).await?;
@@ -302,21 +302,20 @@ async fn given_saved_website_when_normal_scrape_restarts_then_startup_backfills_
         config.states = vec!["CA".into()];
         config.sources.athleticnet.enabled = false;
         prepare_startup(&database, &config).await?;
-        let mut lock = database.pool().acquire().await?;
-        sqlx::query("SELECT pg_advisory_lock(hashtext(current_schema()),194832741)").execute(&mut *lock).await?;
-        assert!(Runner::new().scrape(&config, &test.url).await.expect_err("normal scrape lock")
-            .to_string().contains("another scraper owns"));
-        assert!(checkpoint_rows(&database).await?.is_empty());
-        sqlx::query("SELECT pg_advisory_unlock(hashtext(current_schema()),194832741)").execute(&mut *lock).await?;
-        drop(lock);
-        let error = Runner::new().scrape(&config, &test.url).await.expect_err("provider stop avoids network");
+        let error = track_scrapper_v2::runner::durable::bootstrap(&database, &config)
+            .await.expect_err("provider stop avoids network and backfill");
         assert!(error.to_string().contains("blocked page requiring human review"));
-        let rows = checkpoint_rows(&database).await?;
-        assert_eq!(rows, vec![("1234".into(),"pending".into(),0)]);
+        assert!(checkpoint_rows(&database).await?.is_empty());
+        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE cursor->>'kind' <> 'contacts'")
+            .execute(&test.pool).await?;
+        track_scrapper_v2::runner::durable::bootstrap(&database, &config).await?;
+        assert_eq!(checkpoint_rows(&database).await?, vec![("1234".into(),"pending".into(),0)]);
         sqlx::query("UPDATE scrape_pages SET status='blocked',attempts=1,last_error='contact challenge' WHERE cursor->>'kind'='contacts'").execute(&test.pool).await?;
-        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE cursor->>'kind' <> 'contacts'").execute(&test.pool).await?;
-        Runner::new().scrape_with_refresh(&config, &test.url, false).await?;
+        let before: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p ORDER BY id").fetch_all(&test.pool).await?;
+        track_scrapper_v2::runner::durable::bootstrap(&database, &config).await?;
         assert_eq!(checkpoint_rows(&database).await?, vec![("1234".into(),"blocked".into(),1)]);
+        let after: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p ORDER BY id").fetch_all(&test.pool).await?;
+        assert_eq!(after,before);
         database.close().await;
         Ok(())
     })).await
@@ -335,7 +334,7 @@ async fn given_public_contacts_with_login_links_and_form_captcha_when_parsed_the
             include_str!("../fixtures/contacts/scoped-school.html"));
         let input = test.directory().join("public-contacts-with-captcha.html");
         std::fs::write(&input, body)?;
-        Runner::new().replay(&Config::default(), &test.url, &input, target.clone()).await?;
+        Runner::new().replay(&Config::default(), &test.url, &input, target.clone(), &test.directory().join("evidence")).await?;
         let state: String = sqlx::query_scalar("SELECT status FROM scrape_pages WHERE url=$1")
             .bind(&target.url).fetch_one(&test.pool).await?;
         assert_eq!(state, "succeeded");
@@ -416,7 +415,7 @@ async fn given_public_staff_and_office_with_credential_markup_when_replayed_then
             }).is_err());
             let input = test.directory().join(format!("transient-{id}.html"));
             std::fs::write(&input, markup)?;
-            Runner::new().replay(&Config::default(), &test.url, &input, target).await?;
+            Runner::new().replay(&Config::default(), &test.url, &input, target, &test.directory().join("evidence")).await?;
             let rows: Vec<String> = sqlx::query_scalar(
                 "SELECT c.email FROM contacts c JOIN schools s ON s.id=c.school_id WHERE s.source_id=$1 ORDER BY c.email",
             ).bind(id).fetch_all(&test.pool).await?;

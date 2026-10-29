@@ -1,5 +1,7 @@
 mod selection;
-pub(super) use selection::{next, next_for_cohort, next_for_cohort_in};
+pub(super) use selection::{
+    DurableSelection, FallbackScope, next, next_for_cohort, next_for_cohort_in,
+};
 
 use anyhow::{Context, Result, bail};
 use futures::{TryStreamExt, stream};

@@ -11,6 +11,7 @@ pub mod durable;
 pub mod export;
 pub mod marks;
 pub mod model;
+pub mod native_ops;
 mod profile_evidence;
 pub mod runner;
 pub mod school_address_download;

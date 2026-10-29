@@ -8,7 +8,6 @@ use sqlx::{
 
 use crate::model::{AthleteRecord, Capture, Counts, ParsedPage, Source, Target};
 
-mod acquisition_scope;
 mod cohort_queue;
 mod contact_discovery;
 mod contacts;
@@ -277,6 +276,14 @@ async fn connect_pool(url: &str) -> Result<PgPool> {
     PgPoolOptions::new()
         .max_connections(8)
         .acquire_timeout(Duration::from_secs(10))
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET lock_timeout='5s'")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect_with(options)
         .await
         .context("connecting to PostgreSQL")

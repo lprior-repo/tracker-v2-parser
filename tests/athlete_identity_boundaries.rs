@@ -40,19 +40,10 @@ async fn given_invalid_or_stale_user_reviews_when_imported_then_every_database_r
                 assert!(!output.stderr.is_empty());
                 assert_eq!(snapshot(test).await?, before);
             }
-            let config = identity::config(test)?;
             let (path, _) = identity::write_manifest(test, &valid)?;
             let wrong_hash = "0".repeat(64);
             let output = test
-                .cli(&[
-                    "scrape",
-                    "--config",
-                    config.to_str().context("config")?,
-                    "--athlete-identity-manifest",
-                    path.to_str().context("manifest")?,
-                    "--athlete-identity-sha256",
-                    &wrong_hash,
-                ])
+                .operation(&crate::support::OfflineOperation::ReviewedIdentity {manifest:std::path::PathBuf::from((path.to_str().context("manifest")?).to_string()),sha256:(&wrong_hash).to_string()})
                 .await?;
             assert!(!output.status.success());
             assert!(String::from_utf8_lossy(&output.stderr).contains("SHA-256 mismatch"));

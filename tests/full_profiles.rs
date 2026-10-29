@@ -282,8 +282,8 @@ async fn given_evidence_io_failure_when_replaying_then_checkpoint_fails_and_vali
         std::fs::write(&evidence_root, b"not a directory")?;
         let fixture = support::fixture("milesplit/athlete-oh-15005189-current.html");
         let input = fixture.to_str().context("fixture path")?;
-        let args = ["scrape", "--input", input, "--source", "milesplit", "--kind", "athlete", "--url", URL];
-        let failed = test.cli(&args).await?;
+        let args = crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((input).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Athlete,(URL).to_string(),track_scrapper_v2::model::PageContext {..Default::default()})};
+        let failed = test.operation(&args).await?;
         assert!(!failed.status.success());
         assert!(String::from_utf8_lossy(&failed.stderr).contains("retaining profile evidence"));
         let checkpoint: (String, i32) = sqlx::query_as("SELECT status,attempts FROM scrape_pages WHERE cursor->>'url'=$1")
@@ -292,11 +292,11 @@ async fn given_evidence_io_failure_when_replaying_then_checkpoint_fails_and_vali
         let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results").fetch_one(&test.pool).await?;
         assert_eq!(results, 0);
         std::fs::remove_file(&evidence_root)?;
-        support::assert_success(&test.cli(&args).await?);
+        support::assert_success(&test.operation(&args).await?);
         let progression_url = format!("{URL}/progression");
         let progression = support::fixture("milesplit/athlete-oh-15005189-progression-current.html");
-        support::assert_success(&test.cli(&["scrape", "--input", progression.to_str().context("progression path")?, "--source", "milesplit", "--kind", "athlete", "--url", &progression_url]).await?);
-        support::assert_success(&test.cli(&args).await?);
+        support::assert_success(&test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((progression.to_str().context("progression path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::MileSplit,track_scrapper_v2::model::PageKind::Athlete,(&progression_url).to_string(),track_scrapper_v2::model::PageContext {..Default::default()})}).await?);
+        support::assert_success(&test.operation(&args).await?);
         let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results").fetch_one(&test.pool).await?;
         assert_eq!(results, 28);
         let values: Value = sqlx::query_scalar("SELECT details->'source_values' FROM athlete_sources WHERE source='milesplit' AND source_id='15005189'")

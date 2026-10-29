@@ -1,14 +1,13 @@
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use futures::TryStreamExt;
-use reqwest::{Client, Response, redirect::Policy};
+use reqwest::Response;
 use sha2::{Digest, Sha256};
 
 mod durable;
@@ -18,30 +17,6 @@ pub use durable::{DownloadTransient, download_durable};
 pub const SOURCE: &str = "https://raw.githubusercontent.com/lprior-repo/rust-athletic-school-addresses/b7058732f05ab59105aa042e66d8a8cad467bf3c/output/all_us_high_schools.csv";
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-fn client() -> Result<Client> {
-    Client::builder()
-        .https_only(true)
-        .timeout(Duration::from_mins(2))
-        .connect_timeout(Duration::from_secs(15))
-        .user_agent("track-scrapper-v2/0.1 public athletics research")
-        .redirect(Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                return attempt.error("address download exceeded redirect limit");
-            }
-            if attempt.url().scheme() != "https"
-                || attempt.url().host_str() != Some("raw.githubusercontent.com")
-                || !attempt.url().username().is_empty()
-                || attempt.url().password().is_some()
-                || attempt.url().port_or_known_default() != Some(443)
-            {
-                return attempt.error("address download redirect is outside the approved source");
-            }
-            attempt.follow()
-        }))
-        .build()
-        .context("building school address download client")
-}
 
 fn validate_digest(expected: &str) -> Result<()> {
     ensure!(
@@ -113,25 +88,6 @@ fn save_verified(bytes: &[u8], expected: &str, path: &Path) -> Result<()> {
         (Ok(()), Err(error)) => Err(error.context("school address file was published")),
         (Err(error), Err(cleanup)) => Err(error.context(cleanup.to_string())),
     }
-}
-
-#[tracing::instrument(skip_all)]
-pub async fn download(expected_sha256: &str, output_path: &Path) -> Result<()> {
-    validate_digest(expected_sha256)?;
-    let response = client()?
-        .get(SOURCE)
-        .send()
-        .await
-        .context("fetching school address CSV")?;
-    let bytes = response_bytes(response).await?;
-    if bytes.is_empty() {
-        bail!("school address download was empty");
-    }
-    let expected = expected_sha256.to_owned();
-    let path = PathBuf::from(output_path);
-    tokio::task::spawn_blocking(move || save_verified(&bytes, &expected, &path))
-        .await
-        .context("school address file writer failed")?
 }
 
 #[cfg(test)]

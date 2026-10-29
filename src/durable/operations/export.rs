@@ -82,13 +82,17 @@ pub fn frozen_plan(workspace: &Workspace, frozen: &FrozenExport) -> Result<Froze
         config: plan.config.clone(),
     })?;
     ensure!(
-        plan.chunks.len() <= 10000 && plan.bytes <= 512 * 1024 * 1024,
+        plan.chunks.len() <= 10000 && plan.bytes <= crate::export::MAX_EXPORT_BYTES,
         "frozen export exceeds capacity"
     );
     let (bytes, rows) =
         plan.chunks
             .iter()
             .try_fold((0_u64, 0_usize), |(bytes, rows), chunk| -> Result<_> {
+                ensure!(
+                    chunk.artifact.bytes <= super::artifacts::MAX_ARTIFACT_BYTES,
+                    "frozen chunk exceeds 64 MiB artifact capacity"
+                );
                 Ok((
                     bytes
                         .checked_add(chunk.artifact.bytes)

@@ -51,13 +51,15 @@ async fn given_national_backlog_when_wisconsin_cli_exports_then_only_scoped_issu
             let output = test.directory().join("scoped.xlsx");
             support::assert_success(
                 &test
-                    .cli(&[
-                        "export",
-                        "--config",
-                        config.to_str().context("UTF-8 config")?,
-                        "--output",
-                        output.to_str().context("UTF-8 output")?,
-                    ])
+                    .operation(&crate::support::OfflineOperation::Export {
+                        config: Some(std::path::PathBuf::from(
+                            (config.to_str().context("UTF-8 config")?).to_string(),
+                        )),
+                        output: std::path::PathBuf::from(
+                            (output.to_str().context("UTF-8 output")?).to_string(),
+                        ),
+                        per_athlete: false,
+                    })
                     .await?,
             );
             let mut workbook = open_workbook_auto(&output)?;
