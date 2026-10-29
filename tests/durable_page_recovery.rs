@@ -175,3 +175,73 @@ async fn another_generation_cannot_hijack_an_unfinished_page_even_after_the_old_
     })
     .await
 }
+
+#[tokio::test]
+async fn due_earlier_contact_retries_rotate_behind_untouched_profiles_and_later_retry_rounds()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        use track_scrapper_v2::{config::Config,model::{Athlete,Capture,PageKind,ParsedPage,School}};
+        let database=Database::connect(&test.url).await?;
+        let config=Config::parse("states=['OH']\ngraduation_years=[2027]\nseason=2026\n[acquisition]\nmode='public_results'\nprofile_coverage_only=true\ncollect_contacts=true\n[sources.athleticnet]\nenabled=false\n[sources.milesplit]\nenabled=true\ntransport='http'\n")?;
+        let scope=page_support::scope(&config)?;
+        let first_team=page_support::target("501");
+        let mut contact=first_team.clone();
+        contact.kind=PageKind::Contacts;
+        contact.url="https://earlier.example.org/".into();
+        contact.context.subject_id=Some("contacts-depth:0".into());
+        let second_team=page_support::target("502");
+        let mut profile=page_support::profile();
+        profile.context.school_id=Some("502".into());
+        let first_page=ParsedPage {schools:vec![School {id:"501".into(),name:"Earlier School".into(),state:Some("OH".into()),..School::default()}],next:vec![contact.clone()],..ParsedPage::default()};
+        let second_page=ParsedPage {schools:vec![School {id:"502".into(),name:"Later School".into(),state:Some("OH".into()),..School::default()}],athletes:vec![Athlete {id:"15005189".into(),name:"Brice Fuller".into(),state:Some("OH".into()),school_id:Some("502".into()),graduation_year:Some(2027),profile_url:Some(profile.url.clone()),..Athlete::default()}],next:vec![profile.clone()],..ParsedPage::default()};
+        for (target,parsed) in [(&first_team,&first_page),(&second_team,&second_page)] {
+            database.persist(None,target,&Capture {url:target.url.clone(),status:200,content_type:"application/json".into(),body:serde_json::to_vec(parsed)?},parsed).await?;
+        }
+        let mut now=chrono::Utc::now().timestamp_millis();
+        let first=page::select(&database,&config,&scope,now).await?.context("first school contact")?;
+        assert_eq!(first.target.url,contact.url);
+        let reserved=page_support::reserve(&database,&first,now).await?;
+        now=defer_round(&database,&reserved,now).await?;
+        assert_eq!(database.next_profile_coverage_job(None,3,&config.states,&config.graduation_years,true).await?.context("unchanged legacy school ordering")?.target.url,contact.url);
+        let mut seen=std::collections::BTreeMap::<String,i32>::new();
+        seen.insert(contact.url.clone(),1);
+        for expected in [&profile.url,&contact.url,&profile.url,&contact.url,&profile.url,&contact.url,&profile.url] {
+            let selected=page::select(&database,&config,&scope,now).await?.context("fair eligible page")?;
+            assert_eq!(&selected.target.url,expected,"scope-local retry rounds must rotate before school ordering");
+            let reservation=page_support::reserve(&database,&selected,now).await?;
+            let attempts=seen.entry(expected.clone()).or_default();
+            *attempts+=1;
+            assert_eq!((reservation.cycle,reservation.ordinal),((*attempts-1)/3+1,(*attempts-1)%3+1));
+            assert_eq!(reservation.total_attempts,*attempts);
+            now=defer_round(&database,&reservation,now).await?;
+        }
+        assert_eq!(seen.get(&contact.url),Some(&4));
+        assert_eq!(seen.get(&profile.url),Some(&4));
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts").fetch_one(&test.pool).await?,8);
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+async fn defer_round(
+    database: &Database,
+    reservation: &page::PageReservation,
+    now: i64,
+) -> Result<i64> {
+    match database
+        .durable_fail(
+            reservation,
+            FailureRecord {
+                class: FailureClass::Transient,
+                detail: "DNS resolution failed",
+                capture: None,
+                stopped_origin: None,
+                observed_at_ms: now,
+            },
+        )
+        .await?
+    {
+        PageOutcome::Deferred { retry_at_ms, .. } => Ok(retry_at_ms),
+        outcome => anyhow::bail!("expected retry round, got {outcome:?}"),
+    }
+}

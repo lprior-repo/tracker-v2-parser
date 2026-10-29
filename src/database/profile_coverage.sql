@@ -117,8 +117,9 @@ WITH cohort AS (
 ), first_job AS (
     SELECT j.id,j.cursor,j.attempts FROM jobs j
     JOIN school_anchors s ON s.source=j.source AND s.school_id=j.school_id
-    WHERE ($8::text IS NULL OR NOT EXISTS (SELECT 1 FROM durable_page_operations d WHERE d.page_id=j.id AND d.run_generation=$8 AND (d.state IN ('completed','blocked','rejected','exhausted') OR (d.state='deferred' AND d.retry_at_ms > $9))))
-    ORDER BY s.school_order,j.stage,j.athlete_order,j.section,(j.attempts=0) DESC,j.id
+    LEFT JOIN durable_page_operations d ON d.page_id=j.id AND d.run_generation=$8
+    WHERE ($8::text IS NULL OR NOT COALESCE(d.state IN ('completed','blocked','rejected','exhausted') OR (d.state='deferred' AND d.retry_at_ms > $9),false))
+    ORDER BY COALESCE((d.cycle::bigint-1)*3+d.cycle_attempts,0),s.school_order,j.stage,j.athlete_order,j.section,(j.attempts=0) DESC,j.id
     LIMIT 1
 )
 SELECT id,cursor FROM first_job

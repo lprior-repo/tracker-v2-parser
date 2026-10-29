@@ -46,6 +46,8 @@ journal entries for every browser resource.
 DNS/connect/selected HTTP failures have three-attempt bursts and durable
 cooldowns. Counters increase across recovery cycles. Rejected inputs and known
 access restrictions do not receive an automatic retry or alternate IP/transport.
+Untouched pages in the current workflow scope precede due retries; retry rounds
+rotate before school order so a failing earlier school cannot stall later work.
 Public reference CSV downloads use the same durable wire rules with a separate
 three-chain budget and approved redirects. Production imports verify hashes and
 commit their domain writes and operation receipt in one PostgreSQL transaction.
@@ -74,7 +76,7 @@ local storage. Bind the server, ingress, administration and worker to loopback.
 Use fixed node/cluster names and preserve them with the data directory.
 
 The installed machine uses ingress `127.0.0.1:18095`, admin `127.0.0.1:19095`,
-fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9087`. Both the server
+fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9088`. Both the server
 and worker run as user LaunchAgents with KeepAlive and restrictive permissions.
 They resume at login independently of the chat. A sleeping or powered-off Mac
 does not execute work; persisted work remains available after it returns.
