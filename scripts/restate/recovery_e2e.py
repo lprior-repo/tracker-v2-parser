@@ -8,7 +8,7 @@ import time
 import uuid
 
 from recovery_backup import restore_server_backup
-from recovery_cli import prove_workflow_cli
+from recovery_cli import prove_workflow_cli, verify_cli_restore
 from recovery_evidence import (
     configuration, domain, fixture_request, journal, prove_delivery_isolation, register, verify_domain,
     verify_export, verify_retained,
@@ -168,6 +168,7 @@ def exercise(runtime, identity):
     save(runtime.args.evidence / "export-request.json", export)
     export_id = runtime.restart_with_pending_export(export)
     exported = output(runtime.ingress, export_id)
+    workflow_cli['after_restore'] = verify_cli_restore(runtime, workflow_cli)
     verified = verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx")
     for request, expected_id, expected_output in (*replays, (export, export_id, exported)):
         actual_id, _ = submit(runtime.ingress, request)

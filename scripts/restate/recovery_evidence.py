@@ -78,6 +78,8 @@ def domain(database):
              (sport='xc' AND event='5K' AND raw_mark='14:49.06'))),
         'results_digest', (SELECT md5(coalesce(string_agg(source_result_key || ':' || raw_mark, ',' ORDER BY source_result_key),'')) FROM results),
         'attempts', (SELECT coalesce(sum(attempts),0) FROM scrape_pages),
+        'fixture_replay_attempts', (SELECT coalesce(sum(attempts),0) FROM scrape_pages WHERE cursor->>'kind'='athlete'),
+        'seeded_legacy_attempts', (SELECT coalesce(sum(attempts),0) FROM scrape_pages WHERE cursor->>'kind'='team'),
         'retained_receipts', (SELECT json_agg(json_build_object(
             'capture',capture,'parsed',parsed,'sha256',receipt_sha256) ORDER BY operation_id) FROM durable_page_receipts)
     );""")
@@ -87,7 +89,8 @@ def verify_domain(value):
     expected = {"athletes": 2, "profiles": 2, "results": 81,
         "individual": 69, "relay": 12, "page_receipts": 2,
         "completed_operations": 2, "succeeded_pages": 2, "fixture_profile": 1,
-        "specific_mark": 1, "attempts": 2, "athleticnet_results": 53,
+        "specific_mark": 1, "attempts": 5, "fixture_replay_attempts": 2,
+        "seeded_legacy_attempts": 3, "athleticnet_results": 53,
         "milesplit_results": 28, "milesplit_prs": 28, "unknown_year_profile": 1,
         "published_year_profile": 1, "milesplit_specific_prs": 6}
     for key, count in expected.items():

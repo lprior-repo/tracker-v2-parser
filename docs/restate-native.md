@@ -74,7 +74,7 @@ local storage. Bind the server, ingress, administration and worker to loopback.
 Use fixed node/cluster names and preserve them with the data directory.
 
 The installed machine uses ingress `127.0.0.1:18095`, admin `127.0.0.1:19095`,
-fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9086`. Both the server
+fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9087`. Both the server
 and worker run as user LaunchAgents with KeepAlive and restrictive permissions.
 They resume at login independently of the chat. A sleeping or powered-off Mac
 does not execute work; persisted work remains available after it returns.
@@ -111,6 +111,23 @@ production acquisition owner.
 
 ## Operations and verification
 
+Before deploying export changes, qualify a representative database snapshot with
+credentials in the private environment and a separate existing empty artifact
+directory. Pause and drain acquisition for this comparison. The example reads
+the database through the export-only path, writes an unprojected baseline and a
+durable frozen export, and requires every single-sheet cell to match:
+
+```sh
+cargo run --example qualify_durable_export --locked -- \
+  --config config.toml --artifacts /absolute/private/empty-qualification \
+  --operation-id unique-readonly-qualification
+```
+
+Frozen input keeps all typed facts, source IDs, profile URLs, coach programs,
+levels, revision status and headline PR evidence. Duplicated biography/history
+and whole-result HTML are omitted from this export input. PostgreSQL and retained
+source captures preserve the original evidence. Artifact bounds remain enforced.
+
 Health alone is insufficient. Check native server partition recovery, registered
 deployments, invocation state, the source attempt ledger and the latest verified
 workbook. Gracefully stop worker intake and drain owned operations before
@@ -134,8 +151,9 @@ python3 scripts/restate/recovery_e2e.py \
 ```
 
 It requires `TEST_DATABASE_URL`, creates and removes its own schema and processes,
-exercises native crawl/submit/status commands against an empty focused queue,
-proves workflow-key deduplication, replays a local fixture twice, accepts work while the worker is stopped, restarts
+exercises native crawl/submit/status commands against an isolated legacy checkpoint,
+proves workflow-key deduplication and an automatic second batch, replays a local
+fixture twice, accepts work while the worker is stopped, restarts
 the native server with the same state, replaces the worker and verifies retained
 invocation IDs, hashes and a reopened single-sheet XLSX. Its evidence explicitly
 separates those protocol checks from native chunk recovery and provider-outage

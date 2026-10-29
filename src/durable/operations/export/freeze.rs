@@ -1,11 +1,13 @@
 use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
+use serde_json::Value;
 
 use super::{Batch, FrozenChunk, FrozenExport, FrozenPlan, OperationSpec, Workspace};
 use crate::{
     config::Config,
     database::{Database, ExportSnapshot},
     export::ExportLayout,
+    model::{AthleteProfileDetails, AthleteRecord, Source},
 };
 
 fn generation(workspace: &Workspace) -> Result<u32> {
@@ -21,6 +23,70 @@ fn generation(workspace: &Workspace) -> Result<u32> {
         &serde_json::json!({"binding":workspace.binding(),"generation":generation}),
     )?;
     Ok(generation)
+}
+
+fn profile_for_sheet(mut profile: AthleteProfileDetails) -> AthleteProfileDetails {
+    let pages = if profile.source == Source::MileSplit {
+        profile
+            .source_values
+            .get("pages")
+            .and_then(Value::as_object)
+    } else {
+        None
+    };
+    let pages = pages
+        .into_iter()
+        .flatten()
+        .filter_map(|(url, page)| {
+            let rows = page.get("pr_rows")?.as_array()?;
+            let rows = rows
+                .iter()
+                .filter_map(|row| {
+                    let html = row.get("html")?.as_str()?;
+                    Some(serde_json::json!({"html": html, "masked": row.get("masked")}))
+                })
+                .collect::<Vec<_>>();
+            if rows.is_empty() {
+                None
+            } else {
+                Some((url.clone(), serde_json::json!({"pr_rows": rows})))
+            }
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    profile.source_values = serde_json::json!({"pages": pages});
+    profile
+}
+
+fn performance_values(values: Option<Value>) -> Option<Value> {
+    values.and_then(|values| {
+        let fields = ["level", "revision_status"]
+            .into_iter()
+            .filter_map(|field| {
+                values
+                    .get(field)
+                    .map(|value| (field.to_owned(), value.clone()))
+            })
+            .collect::<serde_json::Map<String, Value>>();
+        (!fields.is_empty()).then_some(Value::Object(fields))
+    })
+}
+
+fn record_for_sheet(mut record: AthleteRecord) -> AthleteRecord {
+    record.profile_details = record
+        .profile_details
+        .into_iter()
+        .map(profile_for_sheet)
+        .collect();
+    record.performances = record
+        .performances
+        .into_iter()
+        .map(|mut evidence| {
+            evidence.performance.source_values =
+                performance_values(evidence.performance.source_values);
+            evidence
+        })
+        .collect();
+    record
 }
 
 fn append(workspace: &Workspace, mut plan: FrozenPlan, batch: &Batch) -> Result<FrozenPlan> {
@@ -72,7 +138,7 @@ async fn collect(
         if let Some(records) = snapshot.next_records(1000).await? {
             return Ok(Some((
                 Batch {
-                    records,
+                    records: records.into_iter().map(record_for_sheet).collect(),
                     issues: Vec::new(),
                 },
                 snapshot,

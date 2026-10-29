@@ -69,7 +69,15 @@ where
 pub(crate) enum FixtureKind {
     Redirect,
     Browser,
-    Page { status: u16, body: &'static str },
+    Page {
+        status: u16,
+        body: &'static str,
+    },
+    DelayedPage {
+        status: u16,
+        body: &'static str,
+        delay: Duration,
+    },
 }
 
 pub(crate) struct WireFixture {
@@ -102,6 +110,9 @@ impl WireFixture {
                     .context("fixture request has no path")?
                     .to_owned();
                 arrivals.push((path.clone(), Instant::now()));
+                if let FixtureKind::DelayedPage { delay, .. } = kind {
+                    tokio::time::sleep(delay).await;
+                }
                 let (status, extra, body) = match kind {
                     FixtureKind::Redirect if index == 0 => {
                         ("302 Found", "Location: /athletes/fixture\r\n", "")
@@ -111,7 +122,8 @@ impl WireFixture {
                         "",
                         "<html><head><link rel='icon' href='data:,'></head><body><img src='/asset'><script>fetch('/api')</script></body></html>",
                     ),
-                    FixtureKind::Page { status, body } => (
+                    FixtureKind::Page { status, body }
+                    | FixtureKind::DelayedPage { status, body, .. } => (
                         match status {
                             403 => "403 Forbidden",
                             503 => "503 Service Unavailable",

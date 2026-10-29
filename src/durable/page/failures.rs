@@ -61,6 +61,8 @@ pub fn classify(failure: &Failure) -> FailureClass {
 }
 
 pub(super) fn transient_detail(detail: &str) -> bool {
+    let invalid_interception = detail.starts_with("browser interception failed:")
+        && detail.contains("Error -32602: Invalid InterceptionId.");
     let detail = detail.to_ascii_lowercase();
     [
         "dns",
@@ -86,6 +88,7 @@ pub(super) fn transient_detail(detail: &str) -> bool {
                         "408" | "425" | "500" | "502" | "503" | "504"
                     )
             })
+        || invalid_interception
 }
 
 pub(super) fn bounded_detail(detail: &str) -> String {

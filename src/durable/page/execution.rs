@@ -19,6 +19,7 @@ pub async fn fetch(
     transport: &mut Transport,
     now_ms: i64,
 ) -> Result<FetchDecision> {
+    let started = tokio::time::Instant::now();
     let (capture, _, outcome) = database.durable_stages(reservation).await?;
     if let Some(outcome) = outcome {
         return Ok(FetchDecision::Settled { outcome });
@@ -57,12 +58,24 @@ pub async fn fetch(
         &reservation.request.binding.operation_id,
         &reservation.attempt_id,
     )?;
-    match transport.fetch(&reservation.request.target).await {
-        Ok(capture) => retain(database, root, reservation, capture, now_ms)
+    let fetched = transport.fetch(&reservation.request.target).await;
+    let completed_at_ms = completion_time(now_ms, started.elapsed())?;
+    match fetched {
+        Ok(capture) => retain(database, root, reservation, capture, completed_at_ms)
             .await
             .map(|capture| FetchDecision::Captured { capture }),
-        Err(failure) => super::failures::record(database, root, reservation, failure, now_ms).await,
+        Err(failure) => {
+            super::failures::record(database, root, reservation, failure, completed_at_ms).await
+        }
     }
+}
+
+fn completion_time(now_ms: i64, elapsed: std::time::Duration) -> Result<i64> {
+    now_ms
+        .checked_add(
+            i64::try_from(elapsed.as_millis()).context("fetch duration exceeds clock bound")?,
+        )
+        .context("fetch completion clock overflow")
 }
 
 pub(super) async fn retain(
