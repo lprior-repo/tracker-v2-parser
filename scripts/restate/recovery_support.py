@@ -177,12 +177,12 @@ def submit(base, request):
     return invocation(result), result
 
 
-def output(base, identity, deadline=180):
+def output(base, identity, deadline=180, field="receipt"):
     until = time.monotonic() + deadline
     while time.monotonic() < until:
         try:
             status, value = http(base, "/restate/output/" + identity, timeout=5)
-            if status == 200 and isinstance(value, dict) and "receipt" in value:
+            if status == 200 and isinstance(value, dict) and field in value:
                 return value
             if status not in (200, 202, 404, 409, 470, 503):
                 raise RuntimeError("Restate invocation output failed with HTTP " + str(status))

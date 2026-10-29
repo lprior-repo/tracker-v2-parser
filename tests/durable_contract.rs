@@ -66,9 +66,13 @@ async fn given_nonlocal_ingress_when_submitting_then_no_external_request_can_be_
         "http://user:secret@127.0.0.1:18095",
         "http://127.0.0.1:18095/path",
     ] {
-        let result =
-            track_scrapper_v2::durable::cli::send(ingress, "restate/send/test/run", "test", &())
-                .await;
+        let result = track_scrapper_v2::durable::cli::send(
+            ingress,
+            "restate/send/test/run",
+            Some("test"),
+            Some(&()),
+        )
+        .await;
         assert!(
             result
                 .err()

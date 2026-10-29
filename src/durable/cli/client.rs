@@ -18,8 +18,8 @@ pub fn read_request<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 pub async fn send<T: Serialize + Sync>(
     ingress: &str,
     route: &str,
-    key: &str,
-    value: &T,
+    key: Option<&str>,
+    value: Option<&T>,
 ) -> Result<Value> {
     let base = Url::parse(ingress)?;
     ensure!(
@@ -38,12 +38,16 @@ pub async fn send<T: Serialize + Sync>(
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    let response = client
-        .post(base.join(route)?)
-        .header("idempotency-key", key)
-        .json(value)
-        .send()
-        .await?;
+    let request = client.post(base.join(route)?);
+    let request = match value {
+        Some(value) => request.json(value),
+        None => request,
+    };
+    let request = match key {
+        Some(key) => request.header("idempotency-key", key),
+        None => request,
+    };
+    let response = request.send().await?;
     let status = response.status();
     ensure!(
         response

@@ -74,7 +74,7 @@ local storage. Bind the server, ingress, administration and worker to loopback.
 Use fixed node/cluster names and preserve them with the data directory.
 
 The installed machine uses ingress `127.0.0.1:18095`, admin `127.0.0.1:19095`,
-fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9085`. Both the server
+fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9086`. Both the server
 and worker run as user LaunchAgents with KeepAlive and restrictive permissions.
 They resume at login independently of the chat. A sleeping or powered-off Mac
 does not execute work; persisted work remains available after it returns.
@@ -134,7 +134,8 @@ python3 scripts/restate/recovery_e2e.py \
 ```
 
 It requires `TEST_DATABASE_URL`, creates and removes its own schema and processes,
-replays a local fixture twice, accepts work while the worker is stopped, restarts
+exercises native crawl/submit/status commands against an empty focused queue,
+proves workflow-key deduplication, replays a local fixture twice, accepts work while the worker is stopped, restarts
 the native server with the same state, replaces the worker and verifies retained
 invocation IDs, hashes and a reopened single-sheet XLSX. Its evidence explicitly
 separates those protocol checks from native chunk recovery and provider-outage

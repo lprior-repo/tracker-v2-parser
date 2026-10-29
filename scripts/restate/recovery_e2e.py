@@ -8,6 +8,7 @@ import time
 import uuid
 
 from recovery_backup import restore_server_backup
+from recovery_cli import prove_workflow_cli
 from recovery_evidence import (
     configuration, domain, fixture_request, journal, prove_delivery_isolation, register, verify_domain,
     verify_export, verify_retained,
@@ -150,6 +151,7 @@ def replay_fixture(runtime, request):
 
 
 def exercise(runtime, identity):
+    workflow_cli = prove_workflow_cli(runtime, identity)
     repository = Path(__file__).resolve().parents[2]
     replays = []
     requests = [fixture_request(repository, runtime.root, identity, source)
@@ -182,7 +184,7 @@ def exercise(runtime, identity):
     isolation = prove_delivery_isolation(verified, runtime.root, runtime.args.evidence / "delivered.xlsx")
     save(runtime.args.evidence / "delivery-isolation.json", isolation)
     return {"offline_invocation_ids": [item[1] for item in replays], "export_invocation_id": export_id,
-        "domain": counts, "export": verified,
+        "domain": counts, "export": verified, "workflow_cli": workflow_cli,
         "journal": retained_journal, "delivery_copy_isolation": isolation,
         "backup_restore": json.loads((runtime.args.evidence / "restart-proof.json").read_text())}
 

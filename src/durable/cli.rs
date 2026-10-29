@@ -129,8 +129,8 @@ impl DurableArgs {
                 let response = send(
                     &ingress,
                     &format!("restate/send/AthleticCrawl/{key}/run"),
-                    &key,
-                    &value,
+                    None,
+                    Some(&value),
                 )
                 .await?;
                 println!("{}", serde_json::to_string_pretty(&response)?);
@@ -145,8 +145,8 @@ impl DurableArgs {
                 let response = send(
                     &ingress,
                     &format!("restate/call/AthleticCrawl/{key}/status"),
-                    &format!("status-{}", chrono::Utc::now().timestamp_millis()),
-                    &(),
+                    None,
+                    None::<&()>,
                 )
                 .await?;
                 println!("{}", serde_json::to_string_pretty(&response)?);

@@ -34,8 +34,8 @@ pub async fn start_crawl(
     let response = send(
         ingress,
         &format!("restate/send/AthleticCrawl/{key}/run"),
-        &key,
-        &value,
+        None,
+        Some(&value),
     )
     .await?;
     println!(
@@ -57,8 +57,8 @@ pub async fn submit_operation(ingress: &str, value: OperationRequest) -> Result<
     let response = send(
         ingress,
         "restate/send/AthleticOperations/execute",
-        &key,
-        &value,
+        Some(&key),
+        Some(&value),
     )
     .await?;
     println!("{}", serde_json::to_string_pretty(&response)?);
