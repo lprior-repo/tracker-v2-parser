@@ -65,3 +65,7 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[[bench]]
+name = "durable_cadence"
+harness = false

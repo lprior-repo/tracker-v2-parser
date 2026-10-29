@@ -1,9 +1,7 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ExportLayout, ExportOptions, ReviewRow, StagedExport, review, selection, single_sheet,
-};
+use super::{ExportLayout, ExportOptions, ReviewRow, StagedExport, selection, single_sheet};
 use crate::model::AthleteRecord;
 
 pub fn verify_chunks(path: &std::path::Path, chunks: &[PreparedChunk]) -> Result<(usize, usize)> {
@@ -15,78 +13,33 @@ pub fn verify_chunks_with_review(
     chunks: &[PreparedChunk],
     review_rows: Option<&[ReviewRow]>,
 ) -> Result<(usize, usize)> {
-    use calamine::{Reader, open_workbook_auto};
-    let columns = chunks
-        .iter()
-        .flat_map(|chunk| chunk.rows.iter().flat_map(|row| row.prs.keys()))
-        .collect::<std::collections::BTreeSet<_>>();
-    let headers = single_sheet::HEADERS
-        .iter()
-        .map(|value| (*value).to_owned())
-        .chain(columns.iter().map(|value| (*value).clone()))
-        .collect::<Vec<_>>();
-    let count = chunks.iter().try_fold(0_usize, |count, chunk| {
-        count
-            .checked_add(chunk.rows.len())
-            .ok_or_else(|| anyhow::anyhow!("prepared row count overflow"))
-    })?;
-    let mut workbook = open_workbook_auto(path)?;
-    let names = if review_rows.is_some() {
-        vec!["Athletes", "Review"]
-    } else {
-        vec!["Athletes"]
-    };
-    ensure!(
-        workbook.sheet_names() == names,
-        "verified export worksheet set/order differs from frozen contract"
-    );
-    if let Some(rows) = review_rows {
-        review::verify(path, rows)?;
-    }
-    let range = workbook.worksheet_range("Athletes")?;
-    ensure!(
-        range.height() == count.saturating_add(1) && range.width() == headers.len(),
-        "workbook dimensions differ from frozen prepared rows"
-    );
-    let actual_headers = range
-        .rows()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("workbook header absent"))?
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    ensure!(
-        actual_headers == headers,
-        "workbook header differs from prepared column union"
-    );
-    chunks
-        .iter()
-        .flat_map(|chunk| &chunk.rows)
-        .zip(range.rows().skip(1))
-        .try_for_each(|(row, actual)| -> Result<()> {
-            let expected = row
-                .identity
-                .iter()
+    super::prepared_verify::verify_source(
+        path,
+        chunks.len(),
+        |index| {
+            chunks
+                .get(index)
                 .cloned()
-                .chain(columns.iter().map(|column| {
-                    row.prs
-                        .get(*column)
-                        .map_or_else(String::new, |values| values.join("; "))
-                }));
-            ensure!(
-                expected.eq(actual.iter().map(ToString::to_string)),
-                "workbook cell differs from frozen prepared athlete row"
-            );
-            Ok(())
-        })?;
-    Ok((count, headers.len()))
+                .context("prepared chunk index absent")
+        },
+        review_rows,
+    )
 }
 
-#[derive(Serialize, Deserialize)]
+pub fn verify_chunk_source(
+    path: &std::path::Path,
+    chunk_count: usize,
+    load: impl Fn(usize) -> Result<PreparedChunk>,
+    review_rows: Option<&[ReviewRow]>,
+) -> Result<(usize, usize)> {
+    super::prepared_verify::verify_source(path, chunk_count, load, review_rows)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedChunk {
     pub athlete_ids: Vec<i64>,
-    rows: Vec<single_sheet::Prepared>,
+    pub(super) rows: Vec<single_sheet::Prepared>,
 }
 
 pub fn prepare_chunk(records: &[AthleteRecord], options: &ExportOptions) -> Result<PreparedChunk> {

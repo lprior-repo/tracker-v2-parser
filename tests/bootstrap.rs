@@ -132,7 +132,7 @@ async fn given_out_of_contract_configuration_when_scrape_starts_then_limits_and_
         let mutations = [
             valid.replace("max_attempts = 3","max_attempts = 0"),
             valid.replace("max_attempts = 3","max_attempts = 4"),
-            valid.replace("concurrency = 1","concurrency = 2"),
+            valid.replace("concurrency = 1","concurrency = 4"),
             valid.replace("requests_per_second = 1.0","requests_per_second = 0.0"),
             valid.replace("requests_per_second = 1.0","requests_per_second = 3.0001"),
             format!("unknown_configuration = true\n{valid}"),

@@ -146,6 +146,9 @@ impl AthleticCrawl {
         ctx: &WorkflowContext<'_>,
         request: &CrawlRequest,
     ) -> HandlerResult<BatchProgress> {
+        if request.config.limits.concurrency > 1 {
+            return self.pipeline(ctx, request).await;
+        }
         let scope = request.page_scope().terminal()?;
         stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
             .try_fold(BatchProgress::default(), |mut progress, index| {

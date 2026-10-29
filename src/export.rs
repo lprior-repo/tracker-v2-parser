@@ -1,5 +1,6 @@
 mod capacity;
 mod prepared;
+mod prepared_verify;
 mod profiles;
 mod publication;
 pub(crate) mod review;
@@ -10,7 +11,9 @@ mod staging;
 mod types;
 mod workbook;
 
-pub use prepared::{PreparedChunk, prepare_chunk, verify_chunks, verify_chunks_with_review};
+pub use prepared::{
+    PreparedChunk, prepare_chunk, verify_chunk_source, verify_chunks, verify_chunks_with_review,
+};
 pub use review::{ReviewRow, ReviewStatus};
 pub use types::{ExportIssue, ExportLayout, ExportOptions};
 
@@ -160,7 +163,7 @@ impl StagedExport {
             destinations: Vec::new(),
             layout: ExportLayout::Detailed,
             started_layout: None,
-            single_sheet: single_sheet::Accumulator::default(),
+            single_sheet: single_sheet::Accumulator::new(path),
             review: None,
         })
     }

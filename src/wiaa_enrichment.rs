@@ -77,7 +77,8 @@ async fn collect(config: &Config, database: &Database) -> Result<Report> {
         profile: std::env::temp_dir().join("tracker-wiaa-unused-http-profile"),
         headless: true,
         rps: config.limits.requests_per_second,
-    })?;
+    })?
+    .with_contact_rate(config.limits.contact_requests_per_second)?;
     let result = acquisition::collect_index(database, &mut transport, source).await;
     let entries = combine(result, transport.close().await)?;
     let (targets, mut report) = prepare(&schools, &entries, config.season)?;

@@ -14,6 +14,7 @@ from recovery_evidence import (
     verify_export, verify_retained,
 )
 from recovery_review import seed_review
+from recovery_pipeline import prove_pipeline, verify_pipeline_restore
 from recovery_support import (
     artifact, database_url, output, port, save, sha256, sql, start, stop, submit,
     wait_http, wait_port,
@@ -166,6 +167,8 @@ def exercise(runtime, identity):
     counts = domain(runtime.database)
     verify_domain(counts)
     verify_retained(counts, requests, runtime.root)
+    pipeline = prove_pipeline(runtime, identity)
+    counts = domain(runtime.database)
     final_config = configuration()
     final_config["export"]["review_sheet"] = True
     export = {"operation_id": "export-" + identity,
@@ -174,6 +177,7 @@ def exercise(runtime, identity):
     export_id = runtime.restart_with_pending_export(export)
     exported = output(runtime.ingress, export_id)
     workflow_cli['after_restore'] = verify_cli_restore(runtime, workflow_cli)
+    pipeline['after_restore'] = verify_pipeline_restore(runtime, pipeline)
     verified = verify_export(exported, runtime.root, runtime.args.evidence / "delivered.xlsx", review_rows)
     for request, expected_id, expected_output in (*replays, (export, export_id, exported)):
         actual_id, _ = submit(runtime.ingress, request)
@@ -190,7 +194,7 @@ def exercise(runtime, identity):
     isolation = prove_delivery_isolation(verified, runtime.root, runtime.args.evidence / "delivered.xlsx")
     save(runtime.args.evidence / "delivery-isolation.json", isolation)
     return {"offline_invocation_ids": [item[1] for item in replays], "export_invocation_id": export_id,
-        "domain": counts, "export": verified, "workflow_cli": workflow_cli,
+        "domain": counts, "export": verified, "workflow_cli": workflow_cli, "pipeline": pipeline,
         "journal": retained_journal, "delivery_copy_isolation": isolation,
         "backup_restore": json.loads((runtime.args.evidence / "restart-proof.json").read_text())}
 

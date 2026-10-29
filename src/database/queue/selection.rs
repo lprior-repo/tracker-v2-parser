@@ -33,7 +33,7 @@ pub(in crate::database) async fn next_for_cohort_in(
     preferred: JobClass,
     states: &[String],
     years: &[i32],
-    durable: Option<(&str, i64)>,
+    durable: Option<(&str, i64, &[i64])>,
 ) -> Result<Option<Job>> {
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT p.id,p.cursor FROM scrape_pages p WHERE p.status IN ('pending','failed') AND ($6::text IS NOT NULL OR p.attempts < $2) \
@@ -56,7 +56,8 @@ pub(in crate::database) async fn next_for_cohort_in(
            regexp_replace(lower(substring(p.url from '(?i)^https?://([^/?#]+)')), \
              CASE WHEN lower(p.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,''))) \
          AND ($6::text IS NULL OR NOT EXISTS (SELECT 1 FROM durable_page_operations d WHERE d.page_id=p.id AND d.run_generation=$6 AND (d.state IN ('completed','blocked','rejected','exhausted') OR (d.state='deferred' AND d.retry_at_ms > $7)))) \
-         ORDER BY (p.attempts = 0) DESC, \
+         AND ($6::text IS NULL OR NOT EXISTS (SELECT 1 FROM durable_page_operations active JOIN scrape_pages owned ON owned.id=active.page_id WHERE active.state='active' AND owned.id=ANY($8::bigint[]) AND owned.source=p.source AND (owned.id=p.id OR (owned.cursor->'context'->>'athlete_id' IS NOT NULL AND owned.cursor->'context'->>'athlete_id'=p.cursor->'context'->>'athlete_id') OR (owned.cursor->'context'->>'school_id'=p.cursor->'context'->>'school_id' AND (owned.cursor->>'kind' IN ('team','roster') OR p.cursor->>'kind' IN ('team','roster','contacts')))))) \
+         ORDER BY EXISTS (SELECT 1 FROM durable_page_operations d WHERE d.page_id=p.id AND d.run_generation=$6 AND d.state='active') DESC, (p.attempts = 0) DESC, \
          CASE p.cursor->>'kind' \
            WHEN 'athlete' THEN ($3 <> 'profile')::int \
            WHEN 'roster' THEN ($3 <> 'roster')::int \
@@ -72,8 +73,9 @@ pub(in crate::database) async fn next_for_cohort_in(
     .bind(preferred.as_str())
     .bind(states)
     .bind(years)
-    .bind(durable.map(|(generation,_)| generation))
-    .bind(durable.map(|(_,now)| now))
+    .bind(durable.map(|(generation,_,_)| generation))
+    .bind(durable.map(|(_,now,_)| now))
+    .bind(durable.map_or(&[][..], |(_,_,owned)| owned))
     .fetch_optional(pool)
     .await?;
     row.map(|(id, target)| {

@@ -16,6 +16,17 @@ impl Database {
         scope: &PageScope,
         now_ms: i64,
     ) -> Result<Option<Job>> {
+        self.next_durable_page_excluding(config, scope, now_ms, &[])
+            .await
+    }
+
+    pub async fn next_durable_page_excluding(
+        &self,
+        config: &Config,
+        scope: &PageScope,
+        now_ms: i64,
+        owned: &[i64],
+    ) -> Result<Option<Job>> {
         let (_, found) = futures::stream::iter(
             config
                 .enabled_sources()
@@ -41,6 +52,7 @@ impl Database {
                         super::super::profile_coverage::CoverageMode::Durable {
                             generation: &scope.run_generation,
                             now_ms,
+                            owned,
                         },
                     )
                     .await?
@@ -55,7 +67,7 @@ impl Database {
                     JobClass::Profile,
                     &config.states,
                     &config.graduation_years,
-                    Some((&scope.run_generation, now_ms)),
+                    Some((&scope.run_generation, now_ms, owned)),
                 )
                 .await?
             } else {

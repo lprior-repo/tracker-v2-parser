@@ -13,7 +13,8 @@ async fn given_two_and_three_rps_configs_when_native_cli_replays_then_results_re
         let input = support::fixture("athleticnet/bio-28872883.json");
         let mut before = None;
         for rate in [2.0,3.0] {
-            std::fs::write(&config,original.replace("requests_per_second = 1.0",&format!("requests_per_second = {rate}")))?;
+            std::fs::write(&config,original.replace("requests_per_second = 1.0",&format!("requests_per_second = {rate}\ncontact_requests_per_second = {rate}"))
+                .replace("concurrency = 1", "concurrency = 3"))?;
             let output = test.cli(&["scrape","--config",config.to_str().context("UTF-8 config")?,
                 "--input",input.to_str().context("UTF-8 fixture")?,"--source","athleticnet",
                 "--kind","athlete","--url","https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0",

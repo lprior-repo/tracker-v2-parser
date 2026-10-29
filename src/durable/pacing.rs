@@ -16,18 +16,28 @@ use url::Url;
 use crate::model::Source;
 
 const WIRE_TIMEOUT: Duration = Duration::from_secs(45);
-const MAX_ADMISSION_POLLS: usize = 512;
+const MAX_ADMISSION_POLLS: usize = 10_240;
+const MAX_ADMISSION_WAIT: Duration = Duration::from_secs(256);
+const LEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone)]
 pub struct PersistentPacing {
     pool: PgPool,
     wire_context: Option<wire::WireContext>,
+    spacing: Spacing,
+}
+
+#[derive(Clone, Copy)]
+enum Spacing {
+    CompletedHeaders,
+    RequestStarts,
 }
 
 struct WireScope {
     keys: [String; 2],
     interval_micros: i64,
     reservation_micros: i64,
+    spacing: Spacing,
 }
 
 enum Admission {
@@ -41,7 +51,14 @@ impl PersistentPacing {
         Self {
             pool,
             wire_context: None,
+            spacing: Spacing::CompletedHeaders,
         }
+    }
+
+    #[must_use]
+    pub const fn with_start_spacing(mut self) -> Self {
+        self.spacing = Spacing::RequestStarts;
+        self
     }
 
     #[tracing::instrument(skip_all)]
@@ -71,7 +88,7 @@ impl PersistentPacing {
         F: Future<Output = Result<T>>,
         S: Fn(&T) -> Option<u16>,
     {
-        let scope = WireScope::parse(source, address, interval)?;
+        let scope = WireScope::parse(source, address, interval, self.spacing)?;
         let token = self.admit(&scope).await?;
         let result = tokio::time::timeout(WIRE_TIMEOUT, operation)
             .await
@@ -88,8 +105,9 @@ impl PersistentPacing {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(max_polls = MAX_ADMISSION_POLLS, max_wait_seconds = MAX_ADMISSION_WAIT.as_secs(), lease_poll_millis = LEASE_POLL_INTERVAL.as_millis()))]
     async fn admit(&self, scope: &WireScope) -> Result<String> {
-        let result = stream::iter(0..MAX_ADMISSION_POLLS)
+        let admission = stream::iter(0..MAX_ADMISSION_POLLS)
             .map(Ok::<_, anyhow::Error>)
             .try_fold(None, |token, _| async move {
                 if token.is_some() {
@@ -102,14 +120,16 @@ impl PersistentPacing {
                         Ok(None)
                     }
                 }
-            })
-            .await?;
+            });
+        let result = tokio::time::timeout(MAX_ADMISSION_WAIT, admission)
+            .await
+            .context("persistent wire admission exceeded bounded wait budget")??;
         result.context("persistent wire admission exceeded bounded contention budget")
     }
 }
 
 impl WireScope {
-    fn parse(source: Source, address: &str, interval: Duration) -> Result<Self> {
+    fn parse(source: Source, address: &str, interval: Duration, spacing: Spacing) -> Result<Self> {
         ensure!(
             !interval.is_zero(),
             "persistent pacing interval must be positive"
@@ -145,6 +165,7 @@ impl WireScope {
             keys,
             interval_micros,
             reservation_micros,
+            spacing,
         })
     }
 }

@@ -1,17 +1,36 @@
 #[cfg(test)]
 use std::future::Future;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use sqlx::PgPool;
 
 use crate::{
     durable::pacing::{PersistentPacing, WireRequest},
-    model::Target,
+    model::{PageKind, Target},
 };
 
 use super::{Transport, request_interval};
 
 impl Transport {
+    pub fn with_contact_rate(mut self, rate: Option<f64>) -> Result<Self> {
+        ensure!(
+            rate.is_none_or(|rate| rate.is_finite() && rate > 0.0 && rate <= 3.0),
+            "contact request rate must be finite, positive and at most 3"
+        );
+        self.contact_requests_per_second = rate;
+        Ok(self)
+    }
+
+    pub(super) fn request_interval(&self, target: &Target) -> Result<std::time::Duration> {
+        match (target.kind, self.contact_requests_per_second) {
+            (PageKind::Contacts, Some(rate)) => {
+                std::time::Duration::try_from_secs_f64(self.options.rps.min(rate).recip())
+                    .context("contact request interval is not representable")
+            }
+            _ => request_interval(target, self.options.rps),
+        }
+    }
+
     #[must_use]
     pub fn with_persistent_pacing(mut self, pool: PgPool) -> Self {
         self.clients.clear();
@@ -21,6 +40,14 @@ impl Transport {
             .take()
             .map(|browser| browser.with_persistent_pacing(pacing.clone()));
         self.persistent_pacing = pacing;
+        self
+    }
+
+    #[must_use]
+    pub fn with_start_spacing(mut self) -> Self {
+        if let Some(pacing) = self.persistent_pacing.clone() {
+            self.replace_pacing(pacing.with_start_spacing());
+        }
         self
     }
 
@@ -70,16 +97,12 @@ impl Transport {
         })?;
         let identity = WireRequest::new(target.source, address, request.method().as_str(), body)?;
         pacing
-            .send(
-                identity,
-                request_interval(target, self.options.rps)?,
-                async {
-                    client
-                        .execute(request)
-                        .await
-                        .context("fetching source response")
-                },
-            )
+            .send(identity, self.request_interval(target)?, async {
+                client
+                    .execute(request)
+                    .await
+                    .context("fetching source response")
+            })
             .await
     }
 
@@ -117,7 +140,7 @@ impl Transport {
                     .execute(
                         target.source,
                         address,
-                        request_interval(target, self.options.rps)?,
+                        self.request_interval(target)?,
                         operation,
                     )
                     .await

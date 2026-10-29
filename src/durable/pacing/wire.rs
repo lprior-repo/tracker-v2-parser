@@ -21,7 +21,11 @@ impl PersistentPacing {
     }
 
     pub(crate) fn restart_wire_sequence(&self) -> Result<Self> {
-        let mut pacing = Self::new(self.pool.clone());
+        let mut pacing = Self {
+            pool: self.pool.clone(),
+            wire_context: None,
+            spacing: self.spacing,
+        };
         if let Some(context) = &self.wire_context {
             pacing.wire_context = Some(WireContext::new(
                 &context.operation_id,
@@ -69,6 +73,8 @@ impl PersistentPacing {
     where
         F: Future<Output = Result<Response>>,
     {
+        self.check_wire_origin(request).await?;
+        self.check_contact_origin(request).await?;
         if let Some(receipt) = receipt {
             self.begin_wire(receipt, request).await?;
         }

@@ -1,6 +1,7 @@
 mod crawl;
 mod operations;
 mod page;
+mod pipeline;
 
 use std::sync::Arc;
 

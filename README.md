@@ -122,9 +122,13 @@ contains scoped failed/blocked checkpoints, exact source IDs, bounded diagnostic
 durable retry state/time, and investigation guidance. Disabled providers' existing
 failures and unscoped discovery roots remain visible. Saved access stops require
 human handling; the sheet never authorizes bypassing restrictions. Both tabs are
-frozen together and verified cell by cell before publication. Compact
-prepared cells are retained across batches; raw profile JSON and result records are discarded after each batch. The total athlete count must fit
-`rows_per_file` and Excel's row capacity; prepared storage is limited to 128 MiB.
+frozen together and verified cell by cell before publication. Compact prepared
+cells are retained across batches; raw profile JSON and result records are
+discarded after each batch. The total athlete count must fit `rows_per_file` and
+Excel's row capacity. Prepared rows stream through a private, automatically
+removed disk spool limited to 512 MiB, with 8 MiB per row and 128 MiB per incoming
+batch in memory. Headers remain sorted across all chunks; workbook writing and
+full-cell verification stream rows without loading the complete sheet into memory.
 Exceeding a row, byte, cell or column capacity fails explicitly without publishing
 a complete export or adding overflow tabs. Empty issue-only batches do not create
 extra empty files.
@@ -645,10 +649,14 @@ that school's older website checkpoints. Incomplete official coverage keeps the
 website attempts; existing failures remain recorded.
 The default rate remains one request per second. Setting
 `requests_per_second = 2.0` or `3.0` under `[limits]` selects a higher rate, with a hard
-ceiling of three requests per second and concurrency fixed at one. Use a higher
-rate only where the source policy permits it. HTTP redirect hops and browser
-document/resource requests retain wire pacing; school contacts remain capped at
+ceiling of three requests per second. Durable crawls accept `concurrency = 1` through
+`3`; the legacy live scraper requires one slot. Offline replay accepts either setting.
+Use a higher rate only where the source policy permits it. HTTP redirect hops and
+browser document/resource requests retain wire pacing. School contacts default to
 one request per five seconds, or one per thirty seconds for staff-directory URLs.
+An explicit `contact_requests_per_second = 3.0` under `[limits]` overrides both
+contact defaults and remains capped by `requests_per_second`. Omitting this setting
+preserves existing pacing and acquisition hashes.
 The configured page budget and access-stop guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish
 statewide completeness.

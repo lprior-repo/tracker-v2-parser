@@ -13,6 +13,8 @@ the SDK requires Rust 1.90 or later. The reference implementation is
 Its attempt, receipt and explicit outcome patterns are adapted to PostgreSQL.
 Fjall storage and experimental server features are not imported.
 
+Prepared single-sheet rows use a private bounded disk spool (512 MiB total, 8 MiB per row, 128 MiB per incoming batch). Rendering streams those rows and verification reloads one immutable prepared chunk at a time, comparing every worksheet cell through a streaming reader. A failure removes the owned spool and preserves the last verified published workbook.
+
 ## Execution and recovery
 
 `AthleticCrawl` executes bounded page batches, invokes a verified export and
@@ -24,6 +26,26 @@ explicit deadline of at most 24 hours and a bounded batch count. Deadline or
 budget exhaustion is visible and preserves checkpoints for another command.
 Transient infrastructure outages retry without an AI process; a source access
 stop requires human handling.
+
+Durable crawls support one to three page slots. With `concurrency = 2` or `3`,
+each window journals page selection and reservation before eagerly sending its
+children, then attaches every child in submission order before proceeding.
+Current-window IDs exclude duplicate pages, school-parent overlap and concurrent
+sections of the same athlete. Normal selection still resumes an interrupted
+reservation. Run one crawl owner per database; independent workflow generations
+are not a mechanism for increasing the configured concurrency.
+
+Parallel acquisition uses shared PostgreSQL slots and retains the exclusive
+maintenance/legacy lock. At most one browser acquisition runs at a time. HTTP
+request starts share provider and origin limits across slots and worker restarts;
+an abandoned request retains its full reservation debt. The shared provider/origin
+lease waits for response headers before admitting another request. Parallel mode
+removes the extra post-header cooldown when the start interval has already elapsed.
+`contact_requests_per_second` explicitly overrides the conservative contact
+defaults and is capped by `requests_per_second`, with a maximum of three.
+Omitting the option preserves existing configuration identities and contact
+defaults. Source stops are checked again after admission. These limits are
+ceilings; network latency, browser work and exports can reduce observed throughput.
 
 `AthleticPage` records reservation, fetch/capture, parse and atomic persistence
 as separate Restate steps. Capture and parse blobs are bounded, fsynced and hash
@@ -163,13 +185,20 @@ python3 scripts/restate/recovery_e2e.py \
 ```
 
 It requires `TEST_DATABASE_URL`, creates and removes its own schema and processes,
-exercises native crawl/submit/status commands against an isolated legacy checkpoint,
-proves workflow-key deduplication and an automatic second batch, replays a local
+exercises native crawl/submit/status commands against isolated legacy checkpoints,
+proves workflow-key deduplication, an automatic second batch and bounded parallel
+windows with seven unique children split across five-page and two-page batches,
+rechecks both parallel reports after backup restoration, replays a local
 fixture twice, accepts work while the worker is stopped, restarts
 the native server with the same state, replaces the worker and verifies retained
 invocation IDs, hashes and a reopened single-sheet XLSX. Its evidence explicitly
 separates those protocol checks from native chunk recovery and provider-outage
 scenarios. It never sends a source request to a public provider.
+
+`cargo bench --bench durable_cadence` compares completed-response cooldown with
+parallel start spacing using an isolated PostgreSQL schema and a delayed local
+HTTP fixture. It prints physical arrival gaps and request rates; fixture results
+do not establish public-provider throughput.
 
 Official references: [durable versioning](https://docs.restate.dev/services/versioning),
 [configuration](https://docs.restate.dev/services/configuration),

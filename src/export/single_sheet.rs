@@ -32,9 +32,12 @@ pub(super) const HEADERS: [&str; 14] = [
     "Coach email",
 ];
 
-const MAX_PREPARED_BYTES: usize = 128 * 1024 * 1024;
+#[path = "single_sheet_spool.rs"]
+mod spool;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) use spool::Accumulator;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Prepared {
     pub(super) identity: Vec<String>,
     pub(super) prs: BTreeMap<String, Vec<String>>,
@@ -74,45 +77,6 @@ impl Prepared {
     }
 }
 
-#[derive(Default)]
-pub(super) struct Accumulator {
-    rows: Vec<Prepared>,
-    bytes: usize,
-    failed: bool,
-}
-
-impl Accumulator {
-    pub(super) fn append(&mut self, records: &[&AthleteRecord], row_limit: usize) -> Result<()> {
-        ensure!(!self.failed, "cannot continue a failed single-sheet export");
-        let result = records
-            .iter()
-            .try_for_each(|record| self.append_prepared(vec![prepare(record)?], row_limit));
-        self.failed = result.is_err();
-        result
-    }
-
-    pub(super) fn append_prepared(&mut self, rows: Vec<Prepared>, row_limit: usize) -> Result<()> {
-        ensure!(!self.failed, "cannot continue a failed single-sheet export");
-        self.failed = true;
-        let result = rows.into_iter().try_for_each(|row| {
-            ensure!(self.rows.len() < row_limit, "single-sheet export exceeds configured row capacity; increase rows_per_file within Excel capacity");
-            ensure!(row.identity.len() == HEADERS.len(), "prepared identity column count mismatch");
-            let bytes = self.bytes.checked_add(row.retained_bytes()?).context("single-sheet storage budget overflow")?;
-            ensure!(bytes <= MAX_PREPARED_BYTES, "single-sheet export exceeds 128 MiB prepared-storage capacity; no complete export was published");
-            self.rows.push(row);
-            self.bytes = bytes;
-            Ok(())
-        });
-        self.failed = result.is_err();
-        result
-    }
-
-    pub(super) fn write_and_verify(&self, path: &Path, review: Option<&[ReviewRow]>) -> Result<()> {
-        ensure!(!self.failed, "cannot publish a failed single-sheet export");
-        write_prepared(path, &self.rows, review)
-    }
-}
-
 pub(super) fn prepare(record: &AthleteRecord) -> Result<Prepared> {
     Ok(Prepared {
         identity: identity::identity(record),
@@ -120,42 +84,44 @@ pub(super) fn prepare(record: &AthleteRecord) -> Result<Prepared> {
     })
 }
 
-fn write_prepared(path: &Path, records: &[Prepared], review: Option<&[ReviewRow]>) -> Result<()> {
-    let columns = records
+pub(super) fn headers(columns: &BTreeSet<String>) -> Vec<String> {
+    HEADERS
         .iter()
-        .flat_map(|row| row.prs.keys())
-        .collect::<BTreeSet<_>>();
-    ensure!(
-        columns.len().saturating_add(HEADERS.len()) <= 16_384,
-        "single-sheet export exceeds Excel column capacity; select a narrower scope"
-    );
-    let headers = HEADERS
-        .iter()
-        .map(|s| (*s).to_owned())
-        .chain(columns.iter().map(|s| (*s).clone()))
+        .map(|value| (*value).to_owned())
+        .chain(columns.iter().cloned())
+        .collect()
+}
+
+pub(super) fn cells(record: Prepared, columns: &BTreeSet<String>) -> Result<Vec<String>> {
+    let values = record
+        .identity
+        .into_iter()
+        .chain(columns.iter().map(|column| {
+            record
+                .prs
+                .get(column)
+                .map_or_else(String::new, |values| values.join("; "))
+        }))
         .collect::<Vec<_>>();
+    ensure!(
+        values
+            .iter()
+            .all(|value| value.encode_utf16().count() <= capacity::MAX_CELL_UNITS),
+        "single-sheet cell exceeds Excel capacity; select a narrower scope"
+    );
+    Ok(values)
+}
+
+fn write_prepared(
+    path: &Path,
+    columns: &BTreeSet<String>,
+    records: impl Iterator<Item = Result<Prepared>>,
+    review: Option<&[ReviewRow]>,
+) -> Result<()> {
+    let headers = headers(columns);
     let mut workbook = Workbook::new();
     let mut expected = Vec::new();
-    let values = records.iter().map(|record| {
-        let cells = record
-            .identity
-            .iter()
-            .cloned()
-            .chain(columns.iter().map(|column| {
-                record
-                    .prs
-                    .get(*column)
-                    .map_or_else(String::new, |values| values.join("; "))
-            }))
-            .collect::<Vec<_>>();
-        ensure!(
-            cells
-                .iter()
-                .all(|s| s.encode_utf16().count() <= capacity::MAX_CELL_UNITS),
-            "single-sheet cell exceeds Excel capacity; select a narrower scope"
-        );
-        Ok(cells)
-    });
+    let values = records.map(|record| cells(record?, columns));
     capacity::write_fallible(
         &mut workbook,
         "Athletes",

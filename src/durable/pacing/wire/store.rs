@@ -5,6 +5,32 @@ use super::{PersistentPacing, WireReceipt, WireRequest};
 
 impl PersistentPacing {
     #[tracing::instrument(skip_all)]
+    pub(super) async fn check_contact_origin(&self, request: &WireRequest) -> Result<()> {
+        let (_, authority) = request
+            .origin
+            .split_once("://")
+            .context("wire origin has no authority")?;
+        let blocked: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM scrape_pages p \
+             CROSS JOIN LATERAL unnest(ARRAY[p.url,p.cursor->>'access_stop_url']) AS stop(url) \
+             WHERE p.status='blocked' AND p.cursor->>'kind'='contacts' \
+             AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')), \
+               CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'') = $1)",
+        )
+        .bind(authority.to_ascii_lowercase())
+        .fetch_one(&self.pool)
+        .await?;
+        if blocked {
+            return Err(crate::transport::AccessStop {
+                origin: request.origin.clone(),
+                status: None,
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    #[tracing::instrument(skip_all)]
     pub(super) async fn check_wire_origin(&self, request: &WireRequest) -> Result<()> {
         let status: Option<i32> = sqlx::query_scalar(
             "SELECT status FROM durable_wire_requests WHERE origin=$1 \

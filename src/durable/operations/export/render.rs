@@ -2,9 +2,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::{Artifact, Batch, FrozenExport, VerifiedExport, Workspace, frozen_plan, options};
-use crate::export::{
-    ExportLayout, PreparedChunk, StagedExport, prepare_chunk, verify_chunks_with_review,
-};
+use crate::export::{ExportLayout, StagedExport, prepare_chunk, verify_chunk_source};
 
 #[derive(Serialize, Deserialize)]
 struct ChunkReceipt {
@@ -62,18 +60,6 @@ pub fn prepare_export_chunk(
         },
     )?;
     Ok(prepared)
-}
-
-fn prepared_chunks(workspace: &Workspace, frozen: &FrozenExport) -> Result<Vec<PreparedChunk>> {
-    let plan = frozen_plan(workspace, frozen)?;
-    plan.chunks
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            let artifact = prepare_export_chunk(workspace, frozen, index)?;
-            serde_json::from_slice(&workspace.read(&artifact)?).map_err(Into::into)
-        })
-        .collect()
 }
 
 pub fn render_export(workspace: &Workspace, frozen: &FrozenExport) -> Result<Artifact> {
@@ -139,11 +125,17 @@ pub fn verify_export(
         );
         return Ok(verified);
     }
-    let chunks = prepared_chunks(workspace, frozen)?;
     let plan = frozen_plan(workspace, frozen)?;
     let review_rows = super::review::rows(workspace, &plan)?;
-    let (rows, columns) =
-        verify_chunks_with_review(&workbook.path, &chunks, review_rows.as_deref())?;
+    let (rows, columns) = verify_chunk_source(
+        &workbook.path,
+        plan.chunks.len(),
+        |index| {
+            let artifact = prepare_export_chunk(workspace, frozen, index)?;
+            Ok(serde_json::from_slice(&workspace.read(&artifact)?)?)
+        },
+        review_rows.as_deref(),
+    )?;
     let verified = VerifiedExport {
         binding: workspace.binding().into(),
         frozen_manifest: frozen.manifest.clone(),

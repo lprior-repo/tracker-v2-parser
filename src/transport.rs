@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod contact_rate_tests;
 mod http;
 mod persistent;
 pub(crate) mod policy;
@@ -108,6 +110,7 @@ pub(crate) const fn access_stop_status(status: u16) -> bool {
 
 pub struct Transport {
     options: Options,
+    contact_requests_per_second: Option<f64>,
     browser: Option<Browser>,
     clients: BTreeMap<String, Client>,
     next_request: BTreeMap<Source, Instant>,
@@ -128,6 +131,7 @@ impl Transport {
         );
         Ok(Self {
             options,
+            contact_requests_per_second: None,
             browser: None,
             clients: BTreeMap::new(),
             next_request: BTreeMap::new(),
@@ -213,7 +217,7 @@ impl Transport {
             );
         }
         self.pace(target).await?;
-        let interval = request_interval(target, self.options.rps)?;
+        let interval = self.request_interval(target)?;
         let result = self
             .browser
             .as_ref()
@@ -224,7 +228,7 @@ impl Transport {
         result
     }
 
-    fn uses_browser(&self, target: &Target) -> bool {
+    pub(crate) fn uses_browser(&self, target: &Target) -> bool {
         if matches!(target.kind, PageKind::Contacts)
             && !(matches!(self.options.mode, Mode::Http)
                 && crate::sources::wiaa::is_public_directory_url(&target.url))
@@ -243,7 +247,7 @@ impl Transport {
         if self.persistent_pacing.is_some() {
             return Ok(());
         }
-        let interval = request_interval(target, self.options.rps)?;
+        let interval = self.request_interval(target)?;
         let now = Instant::now();
         let start = self
             .next_request

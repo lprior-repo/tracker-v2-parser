@@ -8,7 +8,11 @@ use super::{Database, Job};
 pub(super) enum CoverageMode<'a> {
     Ready,
     Exhausted,
-    Durable { generation: &'a str, now_ms: i64 },
+    Durable {
+        generation: &'a str,
+        now_ms: i64,
+        owned: &'a [i64],
+    },
 }
 
 impl Database {
@@ -75,7 +79,11 @@ impl Database {
         );
         let exhausted = matches!(mode, CoverageMode::Exhausted);
         let durable = match mode {
-            CoverageMode::Durable { generation, now_ms } => Some((generation, now_ms)),
+            CoverageMode::Durable {
+                generation,
+                now_ms,
+                owned,
+            } => Some((generation, now_ms, owned)),
             CoverageMode::Ready | CoverageMode::Exhausted => None,
         };
         let row: Option<(i64, serde_json::Value)> =
@@ -87,8 +95,9 @@ impl Database {
                 .bind(exhausted)
                 .bind(LOWER_48.as_slice())
                 .bind(include_contacts)
-                .bind(durable.map(|(generation, _)| generation))
-                .bind(durable.map(|(_, now)| now))
+                .bind(durable.map(|(generation, _, _)| generation))
+                .bind(durable.map(|(_, now, _)| now))
+                .bind(durable.map_or(&[][..], |(_, _, owned)| owned))
                 .fetch_optional(&self.pool)
                 .await
                 .context("selecting published school-chain coverage checkpoint")?;

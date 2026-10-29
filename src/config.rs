@@ -41,6 +41,8 @@ pub struct Sources {
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
     pub requests_per_second: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_requests_per_second: Option<f64>,
     pub max_pages: usize,
     pub max_attempts: u32,
     pub concurrency: usize,
@@ -50,6 +52,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             requests_per_second: 1.0,
+            contact_requests_per_second: None,
             max_pages: 100,
             max_attempts: 3,
             concurrency: 1,
@@ -173,6 +176,12 @@ impl Config {
             "requests_per_second must be finite, positive and at most 3"
         );
         ensure!(
+            self.limits
+                .contact_requests_per_second
+                .is_none_or(|rate| { rate.is_finite() && rate > 0.0 && rate <= 3.0 }),
+            "contact_requests_per_second must be finite, positive and at most 3"
+        );
+        ensure!(
             (1..=100_000).contains(&self.limits.max_pages),
             "max_pages must be in 1..=100000"
         );
@@ -181,8 +190,8 @@ impl Config {
             "max_attempts must be in 1..=3"
         );
         ensure!(
-            self.limits.concurrency == 1,
-            "this version runs one scraper process with concurrency 1"
+            (1..=3).contains(&self.limits.concurrency),
+            "concurrency must be in 1..=3"
         );
         ensure!(
             (1..=1_000_000).contains(&self.export.rows_per_file),
@@ -230,7 +239,7 @@ mod tests {
             "[limits]\nrequests_per_second=nan",
             "[limits]\nrequests_per_second=3.0001",
             "[limits]\nmax_attempts=4",
-            "[limits]\nconcurrency=2",
+            "[limits]\nconcurrency=4",
             "[export]\nrows_per_file=0",
         ]
         .iter()

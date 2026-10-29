@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+mod admission;
+mod cadence;
+
 use anyhow::{Context, Result};
 
 use super::{PersistentPacing, WireRequest};

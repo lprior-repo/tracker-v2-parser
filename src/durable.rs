@@ -1,3 +1,4 @@
+mod admission;
 pub mod blocking;
 pub mod cli;
 mod delivery;

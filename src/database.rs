@@ -275,7 +275,7 @@ async fn connect_pool(url: &str) -> Result<PgPool> {
     }
     let options = PgConnectOptions::from_str(url).context("parsing PostgreSQL DATABASE_URL")?;
     PgPoolOptions::new()
-        .max_connections(4)
+        .max_connections(8)
         .acquire_timeout(Duration::from_secs(10))
         .connect_with(options)
         .await

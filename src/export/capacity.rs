@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use calamine::{Data, Reader, Xlsx, open_workbook};
 use rust_xlsxwriter::{Color, Format, Url, Workbook, Worksheet};
-use std::path::Path;
 
 const MAX_DATA_ROWS: u32 = 1_048_575;
 const MAX_HYPERLINKS: usize = 65_530;
@@ -259,39 +257,7 @@ pub(super) fn chunks(value: &str) -> impl Iterator<Item = &str> {
     })
 }
 
-pub(super) fn verify(path: &Path, expected: &[SheetCount]) -> Result<()> {
-    let mut workbook: Xlsx<_> =
-        open_workbook(path).context("reopening temporary XLSX for verification")?;
-    anyhow::ensure!(
-        workbook.sheet_names().len() == expected.len(),
-        "XLSX worksheet count mismatch"
-    );
-    expected.iter().try_for_each(|sheet| {
-        let range = workbook
-            .worksheet_range(&sheet.name)
-            .with_context(|| format!("verifying {} sheet", sheet.name))?;
-        let rows = usize::try_from(sheet.rows)?
-            .checked_add(1)
-            .context("worksheet count overflow")?;
-        anyhow::ensure!(
-            range.height() == rows,
-            "XLSX {} row count mismatch",
-            sheet.name
-        );
-        anyhow::ensure!(
-            range.rows().flatten().all(|cell| match cell {
-                Data::String(value) => value.encode_utf16().count() <= MAX_CELL_UNITS,
-                _ => true,
-            }),
-            "XLSX {} contains overlong cell text",
-            sheet.name
-        );
-        let hyperlinks = workbook.hyperlinks_by_sheet_name(&sheet.name)?;
-        anyhow::ensure!(
-            hyperlinks.len() == sheet.hyperlinks,
-            "XLSX {} hyperlink count mismatch",
-            sheet.name
-        );
-        Ok(())
-    })
-}
+#[path = "capacity_verify.rs"]
+mod verification;
+
+pub(super) use verification::verify;

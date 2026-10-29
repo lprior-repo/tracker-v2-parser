@@ -84,6 +84,10 @@ impl Runner {
         let mut config = config.clone();
         config.validate()?;
         ensure!(
+            config.limits.concurrency == 1,
+            "legacy scrape requires concurrency 1; use durable crawl for concurrent acquisition"
+        );
+        ensure!(
             !(refresh && config.acquisition.profile_coverage_only()),
             "profile_coverage_only does not refresh completed profiles"
         );
@@ -296,7 +300,8 @@ fn make_transport(config: &Config, source: Source) -> Result<Transport> {
         profile: PathBuf::from(format!("/tmp/track-scrapper-profile-{}", source.as_str())),
         headless: true,
         rps: config.limits.requests_per_second,
-    })
+    })?
+    .with_contact_rate(config.limits.contact_requests_per_second)
 }
 
 async fn next_enabled_job(

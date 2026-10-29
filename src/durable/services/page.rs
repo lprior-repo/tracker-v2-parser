@@ -54,9 +54,18 @@ impl AthleticPage {
             ReservationDecision::Settled { outcome } => return Ok(Json(outcome)),
         };
         let capture = match effects::record!(&ctx, "fetch-and-retain-page", || async {
-            let guard = effects::acquisition(database).await?;
             let mut transport = transport(&input.config, &input.request)?
                 .with_persistent_pacing(database.pool().clone());
+            if input.config.limits.concurrency > 1 {
+                transport = transport.with_start_spacing();
+            }
+            let guard = crate::durable::admission::acquire(
+                database,
+                input.config.limits.concurrency,
+                transport.uses_browser(&input.request.target),
+            )
+            .await?;
+            crate::runner::durable::check_stops(database, &input.config).await?;
             transport.set_wire_context(
                 &reservation.request.binding.operation_id,
                 &reservation.attempt_id,
@@ -115,7 +124,8 @@ fn transport(config: &Config, request: &PageRequest) -> Result<Transport> {
         )),
         headless: true,
         rps: config.limits.requests_per_second,
-    })
+    })?
+    .with_contact_rate(config.limits.contact_requests_per_second)
 }
 
 fn finish<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
