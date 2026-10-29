@@ -1,3 +1,5 @@
+pub const MAX_EXPORT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExportLayout {

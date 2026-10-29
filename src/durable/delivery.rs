@@ -1,12 +1,11 @@
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Read,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{Context, Result, ensure};
-use sha2::{Digest, Sha256};
 
 use super::operations::{Artifact, PublishedExport};
 
@@ -45,25 +44,38 @@ pub(super) fn publish(path: &Path, export: &PublishedExport) -> Result<bool> {
     }
     let directory = path.parent().context("published workbook parent")?;
     ensure!(directory.is_dir(), "published workbook parent must exist");
-    replace_file(path, &export.workbook)?;
-    replace_file(&path.with_extension("manifest.json"), &export.manifest)?;
+    export
+        .manifest
+        .stream_to(root, 64 * 1024 * 1024, &mut std::io::sink())?;
+    replace_file(
+        path,
+        &export.workbook,
+        root,
+        crate::export::MAX_EXPORT_BYTES,
+    )?;
+    replace_file(
+        &path.with_extension("manifest.json"),
+        &export.manifest,
+        root,
+        64 * 1024 * 1024,
+    )?;
     File::open(directory)?.sync_all()?;
     Ok(true)
 }
 
-fn replace_file(destination: &Path, source: &Artifact) -> Result<()> {
+fn replace_file(destination: &Path, source: &Artifact, root: &Path, limit: u64) -> Result<()> {
+    let destination_entry = destination
+        .parent()
+        .context("delivery parent absent")?
+        .canonicalize()?
+        .join(
+            destination
+                .file_name()
+                .context("delivery file name absent")?,
+        );
     ensure!(
-        source.bytes <= 67_108_864,
-        "workbook delivery exceeds 64 MiB"
-    );
-    let mut bytes = Vec::new();
-    File::open(&source.path)?
-        .take(67_108_865)
-        .read_to_end(&mut bytes)?;
-    ensure!(
-        u64::try_from(bytes.len())? == source.bytes
-            && format!("{:x}", Sha256::digest(&bytes)) == source.sha256,
-        "verified delivery artifact hash/length mismatch"
+        destination_entry != source.path.canonicalize()?,
+        "delivery must not replace the immutable artifact"
     );
     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temporary = destination.with_file_name(format!(
@@ -75,16 +87,17 @@ fn replace_file(destination: &Path, source: &Artifact) -> Result<()> {
         .write(true)
         .open(&temporary)
         .context("staging verified workbook delivery")?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    if let Err(error) = fs::rename(&temporary, destination) {
-        let cleanup = fs::remove_file(&temporary);
-        return match cleanup {
-            Ok(()) => Err(error).context("publishing verified workbook delivery"),
-            Err(cleanup) => Err(error).context(format!("delivery cleanup also failed: {cleanup}")),
-        };
+    let result = (|| -> Result<()> {
+        source.stream_to(root, limit, &mut file)?;
+        file.sync_all()?;
+        fs::rename(&temporary, destination).context("publishing verified workbook delivery")?;
+        Ok(())
+    })();
+    drop(file);
+    if result.is_err() {
+        fs::remove_file(&temporary).context("removing failed workbook delivery staging file")?;
     }
-    Ok(())
+    result
 }
 
 #[cfg(test)]

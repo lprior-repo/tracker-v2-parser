@@ -12,6 +12,7 @@ pub(super) fn write_and_verify(
     options: &ExportOptions,
 ) -> Result<()> {
     let mut workbook = Workbook::new();
+    workbook.use_zip_large_file(true);
     let mut expected = Vec::new();
     write_athletes(&mut workbook, records, &mut expected)?;
     write_issues(&mut workbook, records, issues, &mut expected)?;

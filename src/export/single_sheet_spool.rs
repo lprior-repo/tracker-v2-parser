@@ -13,7 +13,7 @@ use crate::model::AthleteRecord;
 
 const MAX_BATCH_BYTES: usize = 128 * 1024 * 1024;
 const MAX_ROW_BYTES: usize = 8 * 1024 * 1024;
-const MAX_DISK_BYTES: usize = 512 * 1024 * 1024;
+const MAX_DISK_BYTES: u64 = crate::export::MAX_EXPORT_BYTES;
 const MAX_HEADER_BYTES: usize = 16 * 1024 * 1024;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -64,7 +64,7 @@ pub struct Accumulator {
     spool: Option<Spool>,
     columns: BTreeSet<String>,
     row_count: usize,
-    disk_bytes: usize,
+    disk_bytes: u64,
     header_bytes: usize,
     failed: bool,
 }
@@ -151,12 +151,12 @@ impl Accumulator {
         );
         let size = self
             .disk_bytes
-            .checked_add(encoded.len())
+            .checked_add(u64::try_from(encoded.len())?)
             .and_then(|bytes| bytes.checked_add(1))
             .context("prepared spool size overflow")?;
         ensure!(
             size <= MAX_DISK_BYTES,
-            "single-sheet prepared spool exceeds 512 MiB disk capacity"
+            "single-sheet prepared spool exceeds 8 GiB disk capacity"
         );
         if self.spool.is_none() {
             self.spool = Some(Spool::new(&self.output)?);

@@ -1,3 +1,6 @@
+#[path = "artifacts_stream.rs"]
+mod stream;
+
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -208,7 +211,15 @@ impl Workspace {
         output: Option<&Artifact>,
     ) -> Result<OperationResult> {
         if let Some(artifact) = output {
-            self.read(artifact)?;
+            if artifact
+                .path
+                .extension()
+                .is_some_and(|extension| extension == "xlsx")
+            {
+                self.verify_workbook(artifact)?;
+            } else {
+                self.read(artifact)?;
+            }
         }
         let bytes = serde_json::to_vec(result)?;
         ensure!(

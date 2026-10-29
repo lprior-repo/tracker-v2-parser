@@ -120,6 +120,7 @@ fn write_prepared(
 ) -> Result<()> {
     let headers = headers(columns);
     let mut workbook = Workbook::new();
+    workbook.use_zip_large_file(true);
     let mut expected = Vec::new();
     let values = records.map(|record| cells(record?, columns));
     capacity::write_fallible(

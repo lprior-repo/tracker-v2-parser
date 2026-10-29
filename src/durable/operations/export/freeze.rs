@@ -108,7 +108,10 @@ fn append(workspace: &Workspace, mut plan: FrozenPlan, batch: &Batch) -> Result<
         .bytes
         .checked_add(u64::try_from(bytes.len())?)
         .context("frozen export size overflow")?;
-    ensure!(total <= 512 * 1024 * 1024, "frozen export exceeds 512 MiB");
+    ensure!(
+        total <= crate::export::MAX_EXPORT_BYTES,
+        "frozen export exceeds 8 GiB"
+    );
     let artifact = workspace.store(
         &format!(
             "freeze-{}-chunk-{}.json",

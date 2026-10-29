@@ -203,3 +203,35 @@ fn bounded_caps_reject_oversized_prepared_rows_and_batches_before_publication() 
     }
     Ok(())
 }
+
+#[test]
+fn xlsx_writer_enables_zip64_for_large_members_and_small_workbooks_still_reopen() -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("zip64.xlsx");
+    let mut export = StagedExport::new(&path, &options(1))?.with_layout(ExportLayout::SingleSheet);
+    export.stage_prepared(chunk(1, 1)?)?;
+    export.finish()?;
+    let mut header = [0_u8; 30];
+    let mut file = std::fs::File::open(&path)?;
+    file.read_exact(&mut header)?;
+    assert_eq!(&header[..4], b"PK\x03\x04");
+    assert!(
+        u16::from_le_bytes([header[4], header[5]]) >= 45,
+        "large-file entries require ZIP64 version 4.5"
+    );
+    let name_length = u16::from_le_bytes([header[26], header[27]]);
+    let extra_length = u16::from_le_bytes([header[28], header[29]]);
+    file.seek(SeekFrom::Current(i64::from(name_length)))?;
+    let mut extra = vec![0; usize::from(extra_length)];
+    file.read_exact(&mut extra)?;
+    assert!(
+        extra.starts_with(&[1, 0, 16, 0]),
+        "ZIP64 local extra field reserves both 64-bit member sizes"
+    );
+    assert_eq!(
+        verify_chunk_source(&path, 1, |_| chunk(1, 1), None)?,
+        (1, 26)
+    );
+    Ok(())
+}

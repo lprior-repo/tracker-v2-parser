@@ -69,7 +69,7 @@ pub fn render_export(workspace: &Workspace, frozen: &FrozenExport) -> Result<Art
             receipt.frozen_sha256 == frozen.manifest.sha256,
             "render receipt snapshot mismatch"
         );
-        workspace.read(&receipt.workbook)?;
+        workspace.verify_workbook(&receipt.workbook)?;
         return Ok(receipt.workbook);
     }
     let generation = (1..=100_u32)
@@ -99,7 +99,7 @@ pub fn render_export(workspace: &Workspace, frozen: &FrozenExport) -> Result<Art
             export.stage_prepared(chunk)
         })?;
     export.finish()?;
-    let workbook = workspace.inspect(&name)?;
+    let workbook = workspace.inspect_workbook(&name)?;
     workspace.record(
         "render-receipt.json",
         &RenderReceipt {
@@ -115,7 +115,7 @@ pub fn verify_export(
     frozen: &FrozenExport,
     workbook: &Artifact,
 ) -> Result<VerifiedExport> {
-    workspace.read(workbook)?;
+    workspace.verify_workbook(workbook)?;
     if let Some(verified) = workspace.load::<VerifiedExport>("verification-receipt.json")? {
         ensure!(
             verified.binding == workspace.binding()

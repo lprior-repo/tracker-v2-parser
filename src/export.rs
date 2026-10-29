@@ -15,7 +15,7 @@ pub use prepared::{
     PreparedChunk, prepare_chunk, verify_chunk_source, verify_chunks, verify_chunks_with_review,
 };
 pub use review::{ReviewRow, ReviewStatus};
-pub use types::{ExportIssue, ExportLayout, ExportOptions};
+pub use types::{ExportIssue, ExportLayout, ExportOptions, MAX_EXPORT_BYTES};
 
 use crate::model::AthleteRecord;
 use anyhow::{Context, Result};

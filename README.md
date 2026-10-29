@@ -126,8 +126,11 @@ frozen together and verified cell by cell before publication. Compact prepared
 cells are retained across batches; raw profile JSON and result records are
 discarded after each batch. The total athlete count must fit `rows_per_file` and
 Excel's row capacity. Prepared rows stream through a private, automatically
-removed disk spool limited to 512 MiB, with 8 MiB per row and 128 MiB per incoming
-batch in memory. Headers remain sorted across all chunks; workbook writing and
+removed disk spool limited to 8 GiB, with 8 MiB per row and 128 MiB per incoming
+batch in memory. Frozen export aggregates and final workbook artifacts also allow
+8 GiB; hashing, verification and delivery stream files. Individual JSON/input
+artifacts retain their 64 MiB memory limit. XLSX containers enable ZIP64 for large
+worksheet members. Headers remain sorted across all chunks; workbook writing and
 full-cell verification stream rows without loading the complete sheet into memory.
 Exceeding a row, byte, cell or column capacity fails explicitly without publishing
 a complete export or adding overflow tabs. Empty issue-only batches do not create

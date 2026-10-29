@@ -29,7 +29,7 @@ pub fn publish_export(workspace: &Workspace, verified: &VerifiedExport) -> Resul
         verified.binding == workspace.binding(),
         "export publication binding mismatch"
     );
-    workspace.read(&verified.workbook)?;
+    workspace.verify_workbook(&verified.workbook)?;
     workspace.read(&verified.frozen_manifest)?;
     let original: VerifiedExport = workspace
         .load("verification-receipt.json")?

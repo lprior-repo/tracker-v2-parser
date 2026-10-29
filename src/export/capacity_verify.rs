@@ -6,6 +6,10 @@ use calamine::{DataRef, Reader, Xlsx, open_workbook};
 use super::{MAX_CELL_UNITS, SheetCount};
 
 pub fn verify(path: &Path, expected: &[SheetCount]) -> Result<()> {
+    ensure!(
+        std::fs::metadata(path)?.len() <= crate::export::MAX_EXPORT_BYTES,
+        "XLSX exceeds 8 GiB workbook capacity"
+    );
     let mut workbook: Xlsx<_> =
         open_workbook(path).context("reopening temporary XLSX for verification")?;
     ensure!(

@@ -13,7 +13,7 @@ the SDK requires Rust 1.90 or later. The reference implementation is
 Its attempt, receipt and explicit outcome patterns are adapted to PostgreSQL.
 Fjall storage and experimental server features are not imported.
 
-Prepared single-sheet rows use a private bounded disk spool (512 MiB total, 8 MiB per row, 128 MiB per incoming batch). Rendering streams those rows and verification reloads one immutable prepared chunk at a time, comparing every worksheet cell through a streaming reader. A failure removes the owned spool and preserves the last verified published workbook.
+Prepared single-sheet rows use a private bounded disk spool (8 GiB total, 8 MiB per row, 128 MiB per incoming batch). Rendering streams those rows and verification reloads one immutable prepared chunk at a time, comparing every worksheet cell through a streaming reader. Frozen export aggregates and workbook artifacts are also bounded at 8 GiB. Workbook hashing and verified delivery copy streams; generic JSON/input artifacts retain the 64 MiB memory limit. A failure removes the owned spool and preserves the last verified published workbook.
 
 ## Execution and recovery
 
