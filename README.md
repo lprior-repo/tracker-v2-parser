@@ -819,8 +819,14 @@ The listed stop was reviewed as subscription photos. Its blocked checkpoint is
 retained and never requested again by this policy. Only exact canonical athlete
 photo/video URLs may be reviewed this way. Public-results mode excludes media,
 external school-contact acquisition unless enabled, and published robots restrictions before
-making requests. Local exclusions retain a separate marker and consume no
-attempts. Existing attempted exclusions require review. Any other blocked
+making requests. Excluded pages receive a rejected outcome for the configured
+run without consuming an attempt or changing the shared checkpoint. Selection,
+reservation and fetch apply the same policy. Reserved requests restore saved
+outcomes, access stops and valid captures before exclusion; captured work can
+finish without a new request. A saved local robots restriction
+does not stop other public work only when its exact policy error and retained
+evidence establish that no response, receipt or network request exists for it.
+That checkpoint remains blocked and unchanged. Any other blocked
 checkpoint still stops its source; new HTTP denials, challenges, login demands,
 and paywalls retain the existing immediate stop behavior. Omitting this policy
 retains the original complete acquisition behavior. Preserve source-stop evidence

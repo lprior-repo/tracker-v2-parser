@@ -32,5 +32,5 @@ per_athlete_sheets = false
 
 [acquisition]
 mode = "public_results"
-profile_coverage_only = true
+profile_coverage_only = false
 collect_contacts = true

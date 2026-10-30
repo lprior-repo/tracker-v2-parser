@@ -96,8 +96,8 @@ impl Runner {
 
 async fn check_source_stops(database: &Database, config: &Config) -> Result<()> {
     stream::iter(config.enabled_sources().into_iter().map(Ok::<_, anyhow::Error>)).try_for_each(|source| async move {
-        let stops: Vec<(String, i32, serde_json::Value)> = sqlx::query_as(
-            "SELECT url,attempts,cursor FROM scrape_pages WHERE source=$1 AND status='blocked' AND cursor->>'kind' <> 'contacts' ORDER BY id LIMIT 1001",
+        let stops: Vec<(String, i32, serde_json::Value,Option<String>,bool)> = sqlx::query_as(
+            "SELECT p.url,p.attempts,p.cursor,p.last_error,NOT EXISTS(SELECT 1 FROM durable_page_operations d JOIN durable_page_attempts a USING(operation_id) WHERE d.page_id=p.id AND (a.capture IS NOT NULL OR a.parsed IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM durable_page_receipts r WHERE r.page_id=p.id) AND NOT EXISTS(SELECT 1 FROM durable_page_operations d JOIN durable_wire_requests w USING(operation_id) WHERE d.page_id=p.id) FROM scrape_pages p WHERE p.source=$1 AND p.status='blocked' AND p.cursor->>'kind' <> 'contacts' ORDER BY p.id LIMIT 1001",
         )
         .bind(source.as_str())
         .fetch_all(database.pool())
@@ -109,11 +109,11 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
         );
         stops
             .iter()
-            .try_for_each(|(address, attempts, cursor)| -> Result<()> {
+            .try_for_each(|(address, attempts, cursor,detail,no_remote_evidence)| -> Result<()> {
                 ensure!(
                     config
                         .acquisition
-                        .permits_preserved_stop(address, *attempts, cursor)?,
+                        .permits_evidenced_stop(&crate::acquisition::PreservedStop {source,address,attempts:*attempts,cursor,detail:detail.as_deref(),no_remote_evidence:*no_remote_evidence})?,
                     "{} has a blocked page requiring human review",
                     source.as_str()
                 );

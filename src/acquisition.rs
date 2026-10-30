@@ -10,7 +10,9 @@ use crate::{
 
 pub(crate) const EXCLUSION: &str = "public-results/v1";
 
+mod exclusion;
 mod legacy;
+pub(crate) use exclusion::{PreservedStop, ScopeExclusion};
 pub(crate) use legacy::LegacyFailurePermit;
 pub use legacy::ReviewedLegacyFailure;
 
@@ -160,7 +162,11 @@ impl AcquisitionPolicy {
         if target.source != Source::MileSplit {
             return None;
         }
-        if crate::transport::robots::check(&target.url, &target.url).is_err() {
+        if crate::transport::robots::check(&target.url, &target.url).is_err()
+            || target.token_url.as_deref().is_some_and(|address| {
+                crate::transport::robots::check(address, &target.url).is_err()
+            })
+        {
             return Some(
                 "Public-results scope excludes a published robots restriction or ambiguous route",
             );
@@ -170,6 +176,22 @@ impl AcquisitionPolicy {
             url.path_segments().is_some_and(|parts| parts.into_iter().any(|part| matches!(part, "photos" | "videos")))
                 .then_some("Public-results scope excludes photo/video acquisition; published metadata remains retained")
         })
+    }
+
+    pub(crate) fn permits_evidenced_stop(&self, stop: &PreservedStop<'_>) -> Result<bool> {
+        let target: Target = serde_json::from_value(stop.cursor.clone())?;
+        ensure!(
+            target.source == stop.source,
+            "blocked checkpoint source does not match its target"
+        );
+        ensure!(
+            target.url == stop.address,
+            "blocked checkpoint URL does not match its target"
+        );
+        Ok(
+            self.permits_preserved_stop(stop.address, stop.attempts, stop.cursor)?
+                || (matches!(self, Self::PublicResults { .. }) && stop.local_robots(&target)),
+        )
     }
 
     pub(crate) fn permits_preserved_stop(

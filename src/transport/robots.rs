@@ -10,6 +10,17 @@ enum Escape {
     Second(u8),
 }
 
+#[derive(Debug)]
+pub struct PublishedRestriction;
+
+impl std::fmt::Display for PublishedRestriction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MileSplit published robots restrictions prohibit this route; subdomains remain conservatively restricted pending host-specific policy review")
+    }
+}
+
+impl std::error::Error for PublishedRestriction {}
+
 pub fn check(address: &str, original: &str) -> Result<()> {
     let url = Url::parse(address).context("parsing robots policy destination")?;
     let Some(host) = url.host_str() else {
@@ -27,9 +38,7 @@ pub fn check(address: &str, original: &str) -> Result<()> {
         .iter()
         .any(|prefix| path.starts_with(prefix))
     {
-        return Err(stop(&url, original).context(
-            "MileSplit published robots restrictions prohibit this route; subdomains remain conservatively restricted pending host-specific policy review",
-        ));
+        return Err(stop(&url, original).context(PublishedRestriction));
     }
     Ok(())
 }

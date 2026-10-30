@@ -73,7 +73,7 @@ enum Mode<'a> {
     },
 }
 
-async fn register(
+pub(super) async fn register(
     connection: &mut PgConnection,
     request: &PageRequest,
     completed_index_replay: bool,
@@ -200,7 +200,7 @@ async fn reserve(
     })
 }
 
-async fn unfinished(
+pub(super) async fn unfinished(
     connection: &mut PgConnection,
     request: &PageRequest,
 ) -> Result<Option<PageReservation>> {

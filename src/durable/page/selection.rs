@@ -1,4 +1,7 @@
+use std::ops::ControlFlow;
+
 use anyhow::{Context, Result, ensure};
+use futures::{TryStreamExt, stream};
 
 use super::{PageRequest, PageScope, ReservationDecision};
 use crate::{config::Config, database::Database};
@@ -80,15 +83,53 @@ pub async fn select_scheduled(
     }
     super::binding::deadline(scope, now_ms)?;
     crate::runner::durable::check_stops(database, config).await?;
-    database
+    let progress = stream::iter((0..100).map(Ok::<_, anyhow::Error>))
+        .try_fold(ControlFlow::Continue(()), |progress, _| async move {
+            match progress {
+                ControlFlow::Break(_) => Ok(progress),
+                ControlFlow::Continue(()) => {
+                    policy_candidate(database, config, scope, now_ms, owned, scheduling).await
+                }
+            }
+        })
+        .await?;
+    match progress {
+        ControlFlow::Break(selected) => Ok(selected),
+        ControlFlow::Continue(()) => Err(anyhow::Error::from(crate::durable::AcquisitionBusy))
+            .context(
+                "bounded policy exclusion scan reached 100 candidates; committed progress retained",
+            ),
+    }
+}
+
+async fn policy_candidate(
+    database: &Database,
+    config: &Config,
+    scope: &PageScope,
+    now_ms: i64,
+    owned: &[i64],
+    scheduling: Scheduling,
+) -> Result<ControlFlow<Option<PageRequest>>> {
+    let Some(job) = database
         .next_durable_page_scheduled(config, scope, now_ms, owned, scheduling)
         .await?
-        .map(|job| super::request(job, scope))
-        .transpose()
+    else {
+        return Ok(ControlFlow::Break(None));
+    };
+    let request = super::request(job, scope)?;
+    let Some(exclusion) = crate::acquisition::ScopeExclusion::bind(config, &request)? else {
+        return Ok(ControlFlow::Break(Some(request)));
+    };
+    match database.durable_exclude(&request, &exclusion).await? {
+        ReservationDecision::Reserved { .. } => Ok(ControlFlow::Break(Some(request))),
+        ReservationDecision::Settled { .. } => Ok(ControlFlow::Continue(())),
+    }
 }
 
 #[cfg(test)]
 mod batch_tests;
+#[cfg(test)]
+mod exclusion_scan_tests;
 #[cfg(test)]
 mod reviewed_legacy_tests;
 #[cfg(test)]
@@ -109,6 +150,9 @@ pub async fn reserve_configured(
     now_ms: i64,
 ) -> Result<ReservationDecision> {
     let policy = super::RetryPolicy::configured(config, request)?;
+    if let Some(exclusion) = crate::acquisition::ScopeExclusion::bind(config, request)? {
+        return database.durable_exclude(request, &exclusion).await;
+    }
     let permit = crate::acquisition::LegacyFailurePermit::bind(config, request)?;
     let index = super::IndexRefreshPermit::bind(config, request)?;
     database

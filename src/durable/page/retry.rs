@@ -59,10 +59,23 @@ pub async fn fetch_configured(
     config: &Config,
 ) -> Result<FetchDecision> {
     let policy = RetryPolicy::configured(config, &reservation.request)?;
-    super::execution::fetch_with_policy(database, root, reservation, transport, now_ms, &policy)
-        .await
+    let exclusion = crate::acquisition::ScopeExclusion::bind(config, &reservation.request)?;
+    super::execution::fetch_with_policy(
+        database,
+        root,
+        reservation,
+        transport,
+        now_ms,
+        super::execution::FetchPolicy {
+            retry: &policy,
+            exclusion: exclusion.as_ref(),
+        },
+    )
+    .await
 }
 
+#[cfg(test)]
+mod exclusion_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
