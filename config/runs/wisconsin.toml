@@ -1,0 +1,31 @@
+states = ["WI"]
+graduation_years = [2027]
+season = 2026
+
+[limits]
+requests_per_second = 3.0
+contact_requests_per_second = 3.0
+public_results_every = 8
+max_pages = 2000
+max_attempts = 3
+concurrency = 3
+
+[sources.athleticnet]
+enabled = false
+transport = "http"
+
+[sources.milesplit]
+enabled = true
+transport = "http"
+
+[export]
+name = "wisconsin-2027"
+review_sheet = true
+layout = "single_sheet"
+rows_per_file = 1000000
+per_athlete_sheets = false
+
+[acquisition]
+mode = "public_results"
+profile_coverage_only = true
+collect_contacts = true

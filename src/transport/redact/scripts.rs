@@ -55,6 +55,10 @@ fn inspect(
     let body = text
         .get(range.clone())
         .context("invalid native script boundary")?;
+    if discarded_telemetry_loader(body) {
+        ranges.push(range);
+        return Ok(());
+    }
     if html_assignments(body, secret, jwt).is_ok() {
         return Ok(());
     }
@@ -68,6 +72,19 @@ fn inspect(
     );
     ranges.push(range);
     Ok(())
+}
+
+fn discarded_telemetry_loader(body: &str) -> bool {
+    let Some((configuration, loader)) = body.trim().split_once(
+        "/*! For license information please see nr-loader-spa-1.324.0.min.js.LICENSE.txt */",
+    ) else {
+        return false;
+    };
+    let loader = loader.trim();
+    configuration.starts_with("(window.NREUM||(NREUM={})).init=")
+        && configuration.contains(";(window.NREUM||(NREUM={})).loader_config=")
+        && loader.starts_with("(()=>{")
+        && loader.ends_with("})()})();")
 }
 
 fn identified(body: &str, secret: &Regex) -> Result<bool> {
@@ -211,3 +228,7 @@ fn assignment_operator(text: &str) -> bool {
         .into_iter()
         .any(|operator| text.starts_with(operator))
 }
+
+#[cfg(test)]
+#[path = "scripts_tests.rs"]
+mod tests;

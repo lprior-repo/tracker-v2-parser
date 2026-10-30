@@ -18,6 +18,7 @@ pub use binding::{request, validate_request};
 pub use execution::{fetch, parse, persist};
 pub use failures::classify;
 pub use offline::{bind_target, offline_replay};
+pub(crate) use selection::{Scheduling, select_scheduled};
 pub use selection::{reserve, select, select_excluding};
 
 pub(crate) fn body_digest(bytes: &[u8]) -> String {

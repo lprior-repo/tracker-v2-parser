@@ -90,7 +90,14 @@ impl AthleticCrawl {
             .terminal()?;
         let now = effects::now!(ctx)?;
         let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || {
-            page::select_excluding(&self.runtime.database, &request.config, scope, now, owned)
+            page::select_scheduled(
+                &self.runtime.database,
+                &request.config,
+                scope,
+                now,
+                owned,
+                page::Scheduling::for_turn(&request.config, index),
+            )
         })?;
         let Some(page) = selected else {
             return Ok(None);

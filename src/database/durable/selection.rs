@@ -5,7 +5,7 @@ use super::Database;
 use crate::{
     config::Config,
     database::{Job, JobClass},
-    durable::page::PageScope,
+    durable::page::{PageScope, Scheduling},
     model::Source,
 };
 
@@ -27,6 +27,18 @@ impl Database {
         now_ms: i64,
         owned: &[i64],
     ) -> Result<Option<Job>> {
+        self.next_durable_page_scheduled(config, scope, now_ms, owned, Scheduling::Resume)
+            .await
+    }
+
+    pub(crate) async fn next_durable_page_scheduled(
+        &self,
+        config: &Config,
+        scope: &PageScope,
+        now_ms: i64,
+        owned: &[i64],
+        scheduling: Scheduling,
+    ) -> Result<Option<Job>> {
         let (_, found) = futures::stream::iter(
             config
                 .enabled_sources()
@@ -42,6 +54,28 @@ impl Database {
                     &config.acquisition,
                     crate::acquisition::AcquisitionPolicy::PublicResults { .. }
                 );
+            let bulk = if public_milesplit && matches!(scheduling, Scheduling::PublicBulkTurn) {
+                super::super::queue::next_for_cohort_in(
+                    &database.pool,
+                    Some(source),
+                    config.limits.max_attempts,
+                    JobClass::Bulk,
+                    &config.states,
+                    &config.graduation_years,
+                    Some(super::super::queue::DurableSelection {
+                        generation: &scope.run_generation,
+                        now_ms,
+                        owned,
+                        scope: super::super::queue::FallbackScope::MileSplitPublicDiscovery,
+                    }),
+                )
+                .await?
+            } else {
+                None
+            };
+            if bulk.is_some() {
+                return Ok((database, bulk));
+            }
             let job = if public_milesplit {
                 database
                     .profile_coverage_candidate(
@@ -54,6 +88,7 @@ impl Database {
                             generation: &scope.run_generation,
                             now_ms,
                             owned,
+                            allow_deferred: !matches!(scheduling, Scheduling::SchoolSweep),
                         },
                     )
                     .await?

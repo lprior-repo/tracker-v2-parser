@@ -7,9 +7,53 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 
-use super::operations::{Artifact, PublishedExport};
+use super::operations::{
+    Artifact, FrozenExport, PublishedExport, VerifiedExport, Workspace, frozen_plan,
+};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+pub(super) fn publish_configured(
+    path: &Path,
+    workspace: &Workspace,
+    export: &PublishedExport,
+) -> Result<bool> {
+    let verified: VerifiedExport = serde_json::from_slice(&workspace.read(&export.manifest)?)?;
+    ensure!(
+        verified.binding == workspace.binding()
+            && verified.binding == export.binding
+            && verified.workbook == export.workbook,
+        "delivery publication binding mismatch"
+    );
+    let plan = frozen_plan(
+        workspace,
+        &FrozenExport {
+            manifest: verified.frozen_manifest,
+        },
+    )?;
+    let name = plan.config.export.validated_name()?;
+    let pointer = name.map_or_else(
+        || "current-export.json".to_owned(),
+        |name| format!("current-named-{name}.json"),
+    );
+    ensure!(
+        export.canonical_pointer == workspace.root().join(pointer),
+        "delivery publication scope mismatch"
+    );
+    let destination = if let Some(name) = name {
+        ensure!(
+            !path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .is_some_and(|stem| stem.eq_ignore_ascii_case(name)),
+            "named export delivery must not replace the legacy workbook"
+        );
+        path.with_file_name(format!("{name}.xlsx"))
+    } else {
+        path.to_path_buf()
+    };
+    publish(&destination, export)
+}
 
 pub(super) fn publish(path: &Path, export: &PublishedExport) -> Result<bool> {
     ensure!(

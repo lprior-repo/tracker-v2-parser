@@ -7,7 +7,9 @@ use anyhow::{Context, Result};
 use calamine::{Reader, open_workbook_auto};
 use track_scrapper_v2::{
     export::{ExportLayout, ExportOptions, StagedExport},
-    model::{AthleteProfileDetails, AthleteRecord, Coach, EvidencedPerformance, Source, Sport},
+    model::{
+        AthleteProfileDetails, AthleteRecord, Coach, EvidencedPerformance, School, Source, Sport,
+    },
 };
 
 fn athlete() -> AthleteRecord {
@@ -18,7 +20,12 @@ fn athlete() -> AthleteRecord {
         grade: None,
         graduation_year: Some(2027),
         needs_review: false,
-        schools: Vec::new(),
+        schools: vec![School {
+            id: "published-wi-school".into(),
+            name: "Published WI School".into(),
+            state: Some("WI".into()),
+            ..Default::default()
+        }],
         coaches: Vec::new(),
         profiles: Vec::new(),
         performances: Vec::new(),

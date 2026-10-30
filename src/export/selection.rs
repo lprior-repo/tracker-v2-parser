@@ -21,6 +21,21 @@ pub(super) fn in_scope(record: &AthleteRecord, options: &ExportOptions) -> bool 
     state && year
 }
 
+pub(super) fn confirmed_state(record: &AthleteRecord, options: &ExportOptions) -> bool {
+    record
+        .schools
+        .iter()
+        .filter_map(|school| school.state.as_deref())
+        .map(str::trim)
+        .filter(|state| !state.is_empty())
+        .any(|state| {
+            options
+                .states
+                .iter()
+                .any(|selected| selected.trim().eq_ignore_ascii_case(state))
+        })
+}
+
 pub(super) fn requires_review(record: &AthleteRecord) -> bool {
     record.needs_review
         || record.name.trim().is_empty()

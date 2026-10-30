@@ -159,10 +159,13 @@ impl AthleticOperations {
         if let Some(path) = &self.runtime.published_workbook {
             let path = path.clone();
             let export = published.clone();
+            let owned = workspace.clone();
             effects::record!(ctx, "deliver-verified-workbook", || async move {
                 self.runtime
                     .blocking
-                    .run(move || crate::durable::delivery::publish(&path, &export))
+                    .run(move || {
+                        crate::durable::delivery::publish_configured(&path, &owned, &export)
+                    })
                     .await
             })?;
         }

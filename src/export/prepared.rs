@@ -50,7 +50,7 @@ pub fn prepare_chunk(records: &[AthleteRecord], options: &ExportOptions) -> Resu
     let records = records
         .iter()
         .filter(|record| {
-            selection::in_scope(record, options)
+            selection::confirmed_state(record, options)
                 && record
                     .graduation_year
                     .is_some_and(|year| options.graduation_years.contains(&year))

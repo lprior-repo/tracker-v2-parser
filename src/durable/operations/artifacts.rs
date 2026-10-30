@@ -201,7 +201,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub(in crate::durable) fn root(&self) -> &Path {
         &self.root
     }
 

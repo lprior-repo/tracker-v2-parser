@@ -21,6 +21,7 @@ impl ExportSnapshot<'_> {
         self.usable = false;
         let rows: Vec<(Option<String>, i64)> = sqlx::query_as(include_str!("review.sql"))
             .bind(&self.states)
+            .bind(&self.years)
             .bind(after_id)
             .bind(i64::try_from(max_rows)?)
             .fetch_all(&mut *self.transaction)

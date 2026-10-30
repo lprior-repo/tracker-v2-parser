@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{num::NonZeroUsize, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -42,6 +42,8 @@ pub struct Sources {
 pub struct Limits {
     pub requests_per_second: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_results_every: Option<NonZeroUsize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub contact_requests_per_second: Option<f64>,
     pub max_pages: usize,
     pub max_attempts: u32,
@@ -52,6 +54,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             requests_per_second: 1.0,
+            public_results_every: None,
             contact_requests_per_second: None,
             max_pages: 100,
             max_attempts: 3,
@@ -63,6 +66,8 @@ impl Default for Limits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExportSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub review_sheet: bool,
     pub rows_per_file: usize,
@@ -73,11 +78,27 @@ pub struct ExportSettings {
 impl Default for ExportSettings {
     fn default() -> Self {
         Self {
+            name: None,
             review_sheet: false,
             rows_per_file: 100_000,
             per_athlete_sheets: false,
             layout: crate::export::ExportLayout::default(),
         }
+    }
+}
+
+impl ExportSettings {
+    pub(crate) fn validated_name(&self) -> Result<Option<&str>> {
+        if let Some(name) = &self.name {
+            ensure!(
+                (1..=80).contains(&name.len())
+                    && name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+                "export name must contain 1..80 ASCII letters, digits, hyphens or underscores"
+            );
+        }
+        Ok(self.name.as_deref())
     }
 }
 
@@ -121,6 +142,7 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<()> {
+        self.export.validated_name()?;
         self.acquisition.validate()?;
         self.validate_limits()?;
         ensure!(
@@ -170,6 +192,12 @@ impl Config {
     }
 
     fn validate_limits(&self) -> Result<()> {
+        ensure!(
+            self.limits
+                .public_results_every
+                .is_none_or(|value| value.get() <= 128),
+            "public_results_every must be in 1..=128"
+        );
         let rate = self.limits.requests_per_second;
         ensure!(
             rate.is_finite() && rate > 0.0 && rate <= 3.0,

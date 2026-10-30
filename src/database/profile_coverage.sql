@@ -127,6 +127,7 @@ WITH cohort AS MATERIALIZED (
     JOIN school_anchors s ON s.source=j.source AND s.school_id=j.school_id
     LEFT JOIN durable_page_operations d ON d.page_id=j.id AND d.run_generation=$8
     WHERE ($8::text IS NULL OR NOT COALESCE(d.state IN ('completed','blocked','rejected','exhausted') OR (d.state='deferred' AND d.retry_at_ms > $9),false))
+      AND ($11::boolean OR d.state IS DISTINCT FROM 'deferred')
       AND ($8::text IS NULL OR NOT EXISTS (
         SELECT 1 FROM durable_page_operations active JOIN scrape_pages owned ON owned.id=active.page_id
         WHERE active.state='active' AND owned.id=ANY($10::bigint[]) AND owned.source=j.source

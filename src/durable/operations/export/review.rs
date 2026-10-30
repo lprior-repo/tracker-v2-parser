@@ -21,7 +21,7 @@ pub(super) fn rows(workspace: &Workspace, plan: &FrozenPlan) -> Result<Option<Ve
         .context("enabled Review is missing frozen row count")?;
     ensure!(
         expected <= review::MAX_ROWS,
-        "frozen review exceeds 10000 rows"
+        "frozen review exceeds 100000 rows"
     );
     let rows = plan
         .chunks

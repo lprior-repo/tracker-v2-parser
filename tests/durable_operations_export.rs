@@ -12,7 +12,7 @@ use track_scrapper_v2::{
         render_export, verify_export,
     },
     export::ExportLayout,
-    model::{ParsedPage, Source},
+    model::{ParsedPage, School, Source},
 };
 
 fn config() -> Config {
@@ -24,7 +24,10 @@ fn config() -> Config {
 }
 
 async fn seed(database: &Database) -> Result<()> {
-    sqlx::query("INSERT INTO athletes(name,state,graduation_year) SELECT 'Athlete '||n,'WI',2027 FROM generate_series(1,999) n").execute(database.pool()).await?;
+    let school: i64 = sqlx::query_scalar("INSERT INTO schools(source,source_id,name,state,source_url) VALUES('milesplit','1000','Published WI School','WI','https://wi.milesplit.com/teams/1000') RETURNING id")
+        .fetch_one(database.pool()).await?;
+    sqlx::query("WITH seeded AS (INSERT INTO athletes(name,state,graduation_year,school_id) SELECT 'Athlete '||n,'WI',2027,$1 FROM generate_series(1,999) n RETURNING id,name,state,graduation_year,school_id) INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url,name,school_id,state,graduation_year) SELECT id,'milesplit',(1000000+id)::text,'https://wi.milesplit.com/athletes/'||(1000000+id)::text,name,school_id,state,graduation_year FROM seeded")
+        .bind(school).execute(database.pool()).await?;
     for (id, event, mark) in [
         ("11", "100 Meters", "11.00"),
         ("22", "800 Meters", "2:00.00"),
@@ -33,11 +36,19 @@ async fn seed(database: &Database) -> Result<()> {
         performance.athlete_id = id.into();
         performance.result_id = Some(format!("result-{id}"));
         performance.event = event.into();
+        let mut athlete = records::athlete(id);
+        athlete.school_id = Some("1000".into());
         records::persist(
             database,
             &records::target(Source::MileSplit, id),
             &ParsedPage {
-                athletes: vec![records::athlete(id)],
+                schools: vec![School {
+                    id: "1000".into(),
+                    name: "Published WI School".into(),
+                    state: Some("WI".into()),
+                    ..Default::default()
+                }],
+                athletes: vec![athlete],
                 performances: vec![performance],
                 ..ParsedPage::default()
             },

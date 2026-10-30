@@ -117,9 +117,15 @@ postal order. Raw JSON and overflow sheets are omitted.
 Set `review_sheet = true` under `[export]` to add exactly one second `Review`
 worksheet. The default is `false`, which preserves the one-sheet workbook. Review
 contains scoped failed/blocked checkpoints, exact source IDs, bounded diagnostics,
-durable retry state/time, and investigation guidance. Disabled providers' existing
+durable retry state/time, and investigation guidance. It also flags selected-cohort
+athletes with no saved results or public PR rows whose retained progression
+section explicitly shows a subscription prompt. These entries retain the
+successful capture status and point to alternate public results; they do not
+invent marks or authorize retrying restricted sections. Disabled providers' existing
 failures and unscoped discovery roots remain visible. Saved access stops require
-human handling; the sheet never authorizes bypassing restrictions. Both tabs are
+human handling; the sheet never authorizes bypassing restrictions. Review permits
+at most 100,000 rows and 64 MiB of serialized diagnostics, read in 1,000-row
+snapshot batches. Both tabs are
 frozen together and verified cell by cell before publication. Compact prepared
 cells are retained across batches; raw profile JSON and result records are
 discarded after each batch. The total athlete count must fit `rows_per_file` and
@@ -255,6 +261,9 @@ Library fixture replay takes an explicit `evidence_root`; it does not discover
 capture directories from environment variables or the home directory.
 Unsupported sensitive JavaScript expressions cause their entire script body to
 be removed before retention, followed by another complete redaction pass.
+The recognized WIAA New Relic SPA 1.324.0 telemetry loader is removed entirely
+before assignment classification; its configuration is never retained. Unknown
+computed scripts and ambiguous boundaries still fail closed.
 Public DOM and separate athletic JSON remain available; unsupported sensitive
 syntax outside safely located scripts fails the capture instead of retaining
 partial secrets. Retained evidence is sanitized, not an archival original.
@@ -710,6 +719,16 @@ directory seeds or contact backfill and do not expand into media, articles or
 broad meet discovery. Optional contact requests that exhaust their attempt
 budget retain their failure details and allow the next school to proceed;
 unfinished team or athlete stages still prevent a false completion.
+Durable focused workflows perform one school-chain sweep: saved deferrals remain
+intact while the workflow advances through contact refresh into public results.
+The public-results phase resumes deferred work and reserves every eighth
+selection by default for public discovery, prioritizing meet/results work on that turn.
+Set `limits.public_results_every` to an integer from 1 through 128 to change that
+reservation frequency; omitting it preserves the default and older request hashes.
+Other turns retain school/profile/contact priority, with fallback when a class
+has no eligible work. Contact failures therefore cannot indefinitely starve
+published results. Phase advancement describes scheduling progress, not complete
+athlete or PR coverage.
 Roster profiles with no graduation year receive a base-page check to establish
 their year. Result follow-ups and the recruiting worksheet require the selected
 graduation year; known nonmatching athletes remain outside that work.
@@ -732,6 +751,43 @@ preserves existing pacing and acquisition hashes.
 The configured page budget and access-stop guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish
 statewide completeness.
+
+### Editable run configurations
+
+Use `config/runs/wisconsin.toml` and `config/runs/next-states.toml` as run profiles.
+Both use the same Rust workflow and database. Edit values in the TOML file, then
+start a new generation; a running generation keeps its frozen configuration.
+
+| Value | Purpose |
+| --- | --- |
+| `states` | Selected state codes; the next-states profile includes MI, MN, IA, IL and CO |
+| `graduation_years` | Explicit published class years, such as `[2027]` or `[2028, 2029]` |
+| `season` | Competition season used for discovery; independent of graduation year |
+| `limits.requests_per_second` | Shared global request ceiling, at most 3 |
+| `limits.contact_requests_per_second` | Contact request ceiling within the global limit |
+| `limits.concurrency` | At most 3 simultaneous acquisition slots, shared across campaigns |
+| `limits.public_results_every` | Public discovery reservation frequency, from 1 to 128 |
+| `limits.max_pages` | Work units per durable batch |
+| `limits.max_attempts` | Attempts per retry cycle, from 1 to 3; cooldown/deadline still apply |
+| `export.name` | Separate publication name for this state/cohort set |
+| `export.rows_per_file` | Single-sheet athlete capacity, at most 1,000,000 |
+
+```sh
+env -u CI moon run pipeline:run -- durable crawl --config config/runs/next-states.toml --generation next-states-2027-20261030 --hours 24 --max-batches 10000
+```
+
+For 2028/2029, copy a run profile, set `graduation_years = [2028, 2029]` and choose
+a different `export.name`, such as `next-states-2028-2029`. No Rust changes are
+needed. Keep years together in one campaign per state set: overlapping year runs
+share school/unknown-year work and must not compete for the same checkpoints.
+Operational duration and batch-count bounds use `--hours` and `--max-batches`.
+Saved access-stop reviews belong to the actual operator configuration; templates
+do not grant access or reset stops.
+
+Named exports use independent canonical pointers and workbook filenames within
+the configured publication directory. A name cannot be reassigned to a different
+state/cohort set. Existing unnamed requests retain their original target so an
+already-running Wisconsin workflow can resume without changing its input binding.
 
 `collect_contacts = true` enables the existing school-contact parser/backfill
 while retaining authority-scoped contact access stops. Its default is false.

@@ -158,11 +158,17 @@ impl AthleticCrawl {
                         return Ok(progress);
                     }
                     let now = effects::now!(ctx)?;
-                    let selected = effects::record!(
-                        ctx,
-                        &format!("select-page-{index:06}"),
-                        || page::select(&self.runtime.database, &request.config, scope, now)
-                    )?;
+                    let selected =
+                        effects::record!(ctx, &format!("select-page-{index:06}"), || {
+                            page::select_scheduled(
+                                &self.runtime.database,
+                                &request.config,
+                                scope,
+                                now,
+                                &[],
+                                page::Scheduling::for_turn(&request.config, index),
+                            )
+                        })?;
                     let Some(page) = selected else {
                         progress.queue = QueueState::NoEligiblePage;
                         return Ok(progress);
@@ -185,7 +191,11 @@ impl AthleticCrawl {
 }
 
 fn next_phase(request: &CrawlRequest, progress: &BatchProgress, due: Option<i64>) -> CrawlPhase {
-    if progress.queue == QueueState::Processing || due.is_some() {
+    if progress.queue == QueueState::Processing
+        || (due.is_some()
+            && !(request.phase == CrawlPhase::SchoolChains
+                && request.config.acquisition.profile_coverage_only()))
+    {
         return request.phase;
     }
     match request.phase {
@@ -199,3 +209,6 @@ fn next_phase(request: &CrawlRequest, progress: &BatchProgress, due: Option<i64>
         CrawlPhase::PublicResults | CrawlPhase::Complete => CrawlPhase::Complete,
     }
 }
+
+#[cfg(test)]
+mod tests;

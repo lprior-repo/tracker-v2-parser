@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ExportLayout, StagedExport, capacity};
 
-pub const MAX_ROWS: usize = 10_000;
-pub const MAX_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_ROWS: usize = 100_000;
+pub const MAX_BYTES: usize = 64 * 1024 * 1024;
 
 pub const HEADERS: [&str; 18] = [
     "Checkpoint ID",
@@ -38,6 +38,7 @@ pub const HEADERS: [&str; 18] = [
 pub enum ReviewStatus {
     Failed,
     Blocked,
+    Succeeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +69,7 @@ impl ReviewRow {
         self.url = sanitize::url(&self.url)?;
         self.error = sanitize::error(&self.error)?;
         self.next_action = match (self.status, self.durable_state.as_str()) {
+            (ReviewStatus::Succeeded, _) => "Check alternate public results using the exact athlete source ID; preserve captured evidence. Do not retry restricted sections or infer missing marks.",
             (ReviewStatus::Blocked, _) => "Human handling required; preserve the access stop.",
             (ReviewStatus::Failed, "deferred") => "Wait for automatic retry at the recorded time; preserve attempt counters and saved stops.",
             (ReviewStatus::Failed, "rejected") => "Investigate rejected checkpoint; fix the cause before an authorized retry.",
@@ -107,6 +109,7 @@ impl ReviewRow {
             match self.status {
                 ReviewStatus::Failed => "failed",
                 ReviewStatus::Blocked => "blocked",
+                ReviewStatus::Succeeded => "succeeded",
             }
             .into(),
             self.attempts.to_string(),
@@ -124,7 +127,7 @@ impl ReviewRow {
 pub fn validate(rows: &[ReviewRow]) -> Result<()> {
     ensure!(
         rows.len() <= MAX_ROWS,
-        "review exceeds 10000 checkpoint rows"
+        "review exceeds 100000 checkpoint rows"
     );
     let bytes = rows.iter().try_fold(0_usize, |bytes, row| {
         let next = serde_json::to_vec(row)?.len();
@@ -132,7 +135,7 @@ pub fn validate(rows: &[ReviewRow]) -> Result<()> {
             .checked_add(next)
             .context("review storage byte counter overflow")
     })?;
-    ensure!(bytes <= MAX_BYTES, "review exceeds 16 MiB storage capacity");
+    ensure!(bytes <= MAX_BYTES, "review exceeds 64 MiB storage capacity");
     ensure!(
         rows.windows(2)
             .all(|pair| pair.first().map(|row| row.checkpoint_id)

@@ -12,6 +12,7 @@ pub(super) enum CoverageMode<'a> {
         generation: &'a str,
         now_ms: i64,
         owned: &'a [i64],
+        allow_deferred: bool,
     },
 }
 
@@ -83,7 +84,8 @@ impl Database {
                 generation,
                 now_ms,
                 owned,
-            } => Some((generation, now_ms, owned)),
+                allow_deferred,
+            } => Some((generation, now_ms, owned, allow_deferred)),
             CoverageMode::Ready | CoverageMode::Exhausted => None,
         };
         let row: Option<(i64, serde_json::Value)> =
@@ -95,9 +97,10 @@ impl Database {
                 .bind(exhausted)
                 .bind(LOWER_48.as_slice())
                 .bind(include_contacts)
-                .bind(durable.map(|(generation, _, _)| generation))
-                .bind(durable.map(|(_, now, _)| now))
-                .bind(durable.map_or(&[][..], |(_, _, owned)| owned))
+                .bind(durable.map(|(generation, _, _, _)| generation))
+                .bind(durable.map(|(_, now, _, _)| now))
+                .bind(durable.map_or(&[][..], |(_, _, owned, _)| owned))
+                .bind(durable.is_none_or(|(_, _, _, allow)| allow))
                 .fetch_optional(&self.pool)
                 .await
                 .context("selecting published school-chain coverage checkpoint")?;

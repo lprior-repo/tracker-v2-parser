@@ -203,9 +203,10 @@ impl StagedExport {
             .filter(|record| selection::in_scope(record, &self.options))
             .filter(|record| {
                 self.layout != ExportLayout::SingleSheet
-                    || record
-                        .graduation_year
-                        .is_some_and(|year| self.options.graduation_years.contains(&year))
+                    || (selection::confirmed_state(record, &self.options)
+                        && record
+                            .graduation_year
+                            .is_some_and(|year| self.options.graduation_years.contains(&year)))
             })
             .collect::<Vec<_>>();
         if self.layout == ExportLayout::SingleSheet {

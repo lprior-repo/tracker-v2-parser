@@ -131,7 +131,7 @@ fn append(workspace: &Workspace, mut plan: FrozenPlan, batch: &Batch) -> Result<
             .context("frozen review row counter overflow")?;
         ensure!(
             count <= crate::export::review::MAX_ROWS,
-            "frozen review exceeds 10000 rows"
+            "frozen review exceeds 100000 rows"
         );
         plan.review_rows = Some(count);
         let bytes = batch.review.iter().try_fold(
@@ -145,7 +145,7 @@ fn append(workspace: &Workspace, mut plan: FrozenPlan, batch: &Batch) -> Result<
         )?;
         ensure!(
             bytes <= crate::export::review::MAX_BYTES,
-            "frozen review exceeds 16 MiB"
+            "frozen review exceeds 64 MiB"
         );
         plan.review_bytes = Some(bytes);
     } else {

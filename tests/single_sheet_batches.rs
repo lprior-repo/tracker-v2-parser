@@ -20,7 +20,12 @@ fn athlete(id: i64, event: &str, mark: &str) -> AthleteRecord {
         grade: None,
         graduation_year: Some(2027),
         needs_review: false,
-        schools: Vec::new(),
+        schools: vec![School {
+            id: "published-wi-school".into(),
+            name: "Published WI School".into(),
+            state: Some("WI".into()),
+            ..Default::default()
+        }],
         coaches: Vec::new(),
         profiles: Vec::new(),
         performances: vec![EvidencedPerformance {
