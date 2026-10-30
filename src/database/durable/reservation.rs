@@ -3,7 +3,7 @@ use sqlx::PgConnection;
 
 use super::{Database, lock_request};
 use crate::durable::page::{
-    PageOutcome, PageRequest, PageReservation, ReservationDecision, RetryPolicy,
+    IndexRefreshPermit, PageOutcome, PageRequest, PageReservation, ReservationDecision, RetryPolicy,
 };
 
 impl Database {
@@ -12,12 +12,16 @@ impl Database {
         request: &PageRequest,
         now_ms: i64,
         permit: Option<&crate::acquisition::LegacyFailurePermit>,
+        index: Option<&IndexRefreshPermit>,
         policy: &RetryPolicy,
     ) -> Result<ReservationDecision> {
         crate::durable::page::validate_request(request)?;
         policy.check(request)?;
         let mut transaction = self.pool.begin().await?;
-        let mode = permit.map_or(Mode::Acquire, Mode::Reviewed);
+        let mode = Mode::Configured {
+            reviewed: permit,
+            index,
+        };
         let result = reserve(&mut transaction, request, now_ms, mode, policy).await;
         super::super::finish(transaction, result).await
     }
@@ -63,10 +67,17 @@ impl Database {
 enum Mode<'a> {
     Acquire,
     Offline,
-    Reviewed(&'a crate::acquisition::LegacyFailurePermit),
+    Configured {
+        reviewed: Option<&'a crate::acquisition::LegacyFailurePermit>,
+        index: Option<&'a IndexRefreshPermit>,
+    },
 }
 
-async fn register(connection: &mut PgConnection, request: &PageRequest) -> Result<()> {
+async fn register(
+    connection: &mut PgConnection,
+    request: &PageRequest,
+    completed_index_replay: bool,
+) -> Result<()> {
     let (cursor, attempts, status): (serde_json::Value, i32, String) =
         sqlx::query_as("SELECT cursor,attempts,status FROM scrape_pages WHERE id=$1 FOR UPDATE")
             .bind(request.binding.page_id)
@@ -77,8 +88,8 @@ async fn register(connection: &mut PgConnection, request: &PageRequest) -> Resul
         serde_json::to_value(target)? == serde_json::to_value(&request.target)?,
         "durable target does not match checkpoint"
     );
-    let other_owner: Option<String> = sqlx::query_scalar("SELECT d.operation_id FROM durable_page_operations d JOIN durable_page_attempts a ON a.operation_id=d.operation_id WHERE d.page_id=$1 AND d.operation_id<>$2 AND a.state IN ('reserved','captured','parsed') ORDER BY d.created_at LIMIT 1")
-        .bind(request.binding.page_id).bind(&request.binding.operation_id).fetch_optional(&mut *connection).await?;
+    let other_owner: Option<String> = sqlx::query_scalar("SELECT d.operation_id FROM durable_page_operations d JOIN durable_page_attempts a ON a.operation_id=d.operation_id WHERE d.page_id=$1 AND d.operation_id<>$2 AND a.state IN ('reserved','captured','parsed') AND NOT ($3 AND EXISTS(SELECT 1 FROM durable_page_operations saved WHERE saved.operation_id=$2 AND saved.page_id=$1 AND saved.state='completed' AND saved.outcome IS NOT NULL)) ORDER BY d.created_at LIMIT 1")
+        .bind(request.binding.page_id).bind(&request.binding.operation_id).bind(completed_index_replay).fetch_optional(&mut *connection).await?;
     ensure!(
         other_owner.is_none(),
         "another durable operation owns unfinished work for this page; explicit handoff required"
@@ -102,7 +113,9 @@ async fn reserve(
     mode: Mode<'_>,
     policy: &RetryPolicy,
 ) -> Result<ReservationDecision> {
-    register(connection, request).await?;
+    let completed_index_replay =
+        matches!(mode, Mode::Configured { index: Some(permit), .. } if permit.permits(request));
+    register(connection, request, completed_index_replay).await?;
     let (state, cycle, attempts, due, outcome) = lock_request(connection, request).await?;
     if let Some(outcome) =
         outcome.filter(|_| state != "deferred" || due.is_some_and(|at| at > now_ms))
@@ -124,7 +137,7 @@ async fn reserve(
     if !matches!(mode, Mode::Offline)
         && legacy.is_some_and(|detail| {
             !crate::durable::page::transient_detail(&detail)
-                && !matches!(mode, Mode::Reviewed(permit) if permit.permits(request, &detail))
+                && !matches!(mode, Mode::Configured { reviewed: Some(permit), .. } if permit.permits(request, &detail))
         })
     {
         let outcome = PageOutcome::Rejected {
@@ -168,8 +181,10 @@ async fn reserve(
             .context("durable attempt overflow")?
     };
     let attempt_id = crate::durable::page::attempt_identity(request, cycle, ordinal)?;
+    let refresh_succeeded = matches!(mode, Mode::Offline)
+        || matches!(mode, Mode::Configured { index: Some(permit), .. } if permit.permits(request));
     let total_attempts: i32 = sqlx::query_scalar("UPDATE scrape_pages SET attempts=attempts+1,status='pending' WHERE id=$1 AND (status IN ('pending','failed') OR ($2 AND status='succeeded')) RETURNING attempts")
-        .bind(request.binding.page_id).bind(matches!(mode, Mode::Offline)).fetch_one(&mut *connection).await.context("reserving durable page attempt")?;
+        .bind(request.binding.page_id).bind(refresh_succeeded).fetch_one(&mut *connection).await.context("reserving durable page attempt")?;
     sqlx::query("INSERT INTO durable_page_attempts(attempt_id,operation_id,cycle,ordinal,total_attempts) VALUES($1,$2,$3,$4,$5)")
         .bind(&attempt_id).bind(&request.binding.operation_id).bind(cycle).bind(ordinal).bind(total_attempts).execute(&mut *connection).await?;
     sqlx::query("UPDATE durable_page_operations SET state='active',cycle=$2,cycle_attempts=$3,retry_at_ms=NULL,outcome=NULL WHERE operation_id=$1")

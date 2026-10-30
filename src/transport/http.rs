@@ -93,6 +93,13 @@ impl Transport {
             .await
             .context("source HTTP response body timed out")
             .and_then(std::convert::identity);
+        #[cfg(test)]
+        let captured = captured.map(|mut capture| {
+            if self.http_test_url.is_some() {
+                capture.url = url.as_str().to_owned();
+            }
+            capture
+        });
         if access_stop_status(status) {
             return captured
                 .map(Hop::Complete)

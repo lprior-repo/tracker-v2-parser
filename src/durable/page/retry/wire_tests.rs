@@ -36,7 +36,7 @@ async fn configured_retry_binding_mismatch_has_no_database_or_http_effects() -> 
             );
             assert!(
                 database
-                    .durable_reserve_configured(&other_request, now, None, &policy)
+                    .durable_reserve_configured(&other_request, now, None, None, &policy)
                     .await
                     .is_err()
             );

@@ -110,7 +110,8 @@ pub async fn reserve_configured(
 ) -> Result<ReservationDecision> {
     let policy = super::RetryPolicy::configured(config, request)?;
     let permit = crate::acquisition::LegacyFailurePermit::bind(config, request)?;
+    let index = super::IndexRefreshPermit::bind(config, request)?;
     database
-        .durable_reserve_configured(request, now_ms, permit.as_ref(), &policy)
+        .durable_reserve_configured(request, now_ms, permit.as_ref(), index.as_ref(), &policy)
         .await
 }

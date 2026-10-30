@@ -791,6 +791,8 @@ Omitting `[run]` preserves the existing defaults: 24 hours, 10,000 batches and a
 deadline, batch count, cooldown and scraper settings; editing the file does not
 change a running generation. New crawl submissions pass the same deadline and
 cooldown into WIAA contact refresh; a child does not receive a fresh run window.
+Fresh WIAA directory operations can refetch their official index pages while
+preserving cumulative attempts, prior receipts and normal access-stop checks.
 Changing `season` or graduation years also does not
 refresh already successful profile sections; it changes discovery and cohort scope.
 The request-rate, concurrency, memory and admission ceilings remain safety bounds.
