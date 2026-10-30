@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use sqlx::Row;
+use sqlx::{Postgres, Row, Transaction};
 
 use super::{Admission, LEASE_POLL_INTERVAL, PersistentPacing, Spacing, WireScope};
 
@@ -24,14 +24,7 @@ impl PersistentPacing {
         .execute(&mut *transaction)
         .await
         .context("ensuring persistent provider and origin pacing rows")?;
-        let locked = sqlx::query(
-            "SELECT pacing_key FROM durable_wire_pacing \
-             WHERE pacing_key = ANY($1) ORDER BY pacing_key FOR UPDATE",
-        )
-        .bind(scope.keys.as_slice())
-        .fetch_all(&mut *transaction)
-        .await?;
-        ensure!(locked.len() == 2, "persistent pacing scope lost a row");
+        lock_scope(&mut transaction, scope).await?;
         let row = sqlx::query(
             "SELECT GREATEST(0, CEIL(EXTRACT(EPOCH FROM \
              (MAX(next_allowed_at) - clock_timestamp())) * 1000000))::bigint AS wait_micros, \
@@ -81,6 +74,15 @@ impl PersistentPacing {
     }
 
     pub(super) async fn complete(&self, scope: &WireScope, token: &str) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("opening wire pacing completion transaction")?;
+        sqlx::query("SET LOCAL lock_timeout = '5s'")
+            .execute(&mut *transaction)
+            .await?;
+        lock_scope(&mut transaction, scope).await?;
         let changed = sqlx::query(
             "WITH clock AS (SELECT clock_timestamp() AS now) \
              UPDATE durable_wire_pacing SET \
@@ -93,13 +95,28 @@ impl PersistentPacing {
         .bind(scope.interval_micros)
         .bind(token)
         .bind(matches!(scope.spacing, Spacing::RequestStarts))
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await
         .context("persisting completed wire request cooldown")?;
         ensure!(
             changed.rows_affected() == 2,
             "wire pacing lease changed before completion"
         );
-        Ok(())
+        transaction
+            .commit()
+            .await
+            .context("committing completed wire request cooldown")
     }
+}
+
+async fn lock_scope(transaction: &mut Transaction<'_, Postgres>, scope: &WireScope) -> Result<()> {
+    let locked = sqlx::query(
+        "SELECT pacing_key FROM durable_wire_pacing \
+         WHERE pacing_key = ANY($1) ORDER BY pacing_key FOR UPDATE",
+    )
+    .bind(scope.keys.as_slice())
+    .fetch_all(&mut **transaction)
+    .await?;
+    ensure!(locked.len() == 2, "persistent pacing scope lost a row");
+    Ok(())
 }

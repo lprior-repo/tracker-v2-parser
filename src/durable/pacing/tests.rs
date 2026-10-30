@@ -5,6 +5,8 @@ use anyhow::Result;
 use super::{Spacing, WireScope, admitted_token};
 use crate::{durable::effects, model::Source};
 
+mod locking;
+
 #[test]
 fn contention_budget_exhaustion_keeps_a_typed_retryable_cause_and_preserves_reserved_tokens()
 -> Result<()> {
