@@ -78,9 +78,10 @@ fn inspect(
 }
 
 fn discarded_telemetry_loader(body: &str) -> bool {
-    let Some((configuration, loader)) = body.trim().split_once(
-        "/*! For license information please see nr-loader-spa-1.324.0.min.js.LICENSE.txt */",
-    ) else {
+    let Some(license) = telemetry_version(body).and_then(reviewed_telemetry_license) else {
+        return false;
+    };
+    let Some((configuration, loader)) = body.trim().split_once(license) else {
         return false;
     };
     let loader = loader.trim();
@@ -88,6 +89,18 @@ fn discarded_telemetry_loader(body: &str) -> bool {
         && configuration.contains(";(window.NREUM||(NREUM={})).loader_config=")
         && loader.starts_with("(()=>{")
         && loader.ends_with("})()})();")
+}
+
+fn reviewed_telemetry_license(version: &str) -> Option<&'static str> {
+    match version {
+        "1.324.0" => Some(
+            "/*! For license information please see nr-loader-spa-1.324.0.min.js.LICENSE.txt */",
+        ),
+        "1.324.1" => Some(
+            "/*! For license information please see nr-loader-spa-1.324.1.min.js.LICENSE.txt */",
+        ),
+        _ => None,
+    }
 }
 
 fn rejection_metadata(body: &str) -> String {
@@ -99,7 +112,7 @@ fn rejection_metadata(body: &str) -> String {
         body.trim().starts_with("(window.NREUM||(NREUM={})).init="),
         body.contains(";(window.NREUM||(NREUM={})).loader_config="),
         version.is_some(),
-        version == Some("1.324.0"),
+        version.and_then(reviewed_telemetry_license).is_some(),
         body.trim().ends_with("})()})();"),
         [
             "/cdn-cgi/challenge-platform/",
