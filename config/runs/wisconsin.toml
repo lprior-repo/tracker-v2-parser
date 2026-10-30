@@ -34,3 +34,4 @@ per_athlete_sheets = false
 mode = "public_results"
 profile_coverage_only = false
 collect_contacts = true
+reviewed_legacy_failures = ["wiaa_script_sanitization"]

@@ -37,7 +37,7 @@ mod drain;
 
 const MAX_PAGE_REQUESTS: usize = 512;
 const CONCURRENT_REQUESTS: usize = 8;
-const PENDING_REQUESTS: usize = 32;
+const PENDING_REQUESTS: usize = MAX_PAGE_REQUESTS;
 const AUXILIARY_POLICY: &str = "sandbox allow-scripts allow-same-origin allow-forms; worker-src 'none'; frame-src 'none'; connect-src http: https:";
 const AUDIT_SCRIPT: &str = r"(() => {
     const report = globalThis.__trackBlockedBinding;

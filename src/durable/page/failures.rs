@@ -63,6 +63,11 @@ pub fn classify(failure: &Failure) -> FailureClass {
 }
 
 pub(super) fn transient_detail(detail: &str) -> bool {
+    let queue_saturation = matches!(
+        detail,
+        "browser interception failed: browser request admission budget exceeded: no available capacity"
+            | "page cleanup also failed: browser acquisition incomplete: admission ended before quiescence: channel closed: browser interception failed: browser request admission budget exceeded: no available capacity"
+    );
     let invalid_interception = detail.starts_with("browser interception failed:")
         && detail.contains("Error -32602: Invalid InterceptionId.");
     let detail = detail.to_ascii_lowercase();
@@ -91,6 +96,7 @@ pub(super) fn transient_detail(detail: &str) -> bool {
                     )
             })
         || invalid_interception
+        || queue_saturation
 }
 
 pub(super) fn bounded_detail(detail: &str) -> String {

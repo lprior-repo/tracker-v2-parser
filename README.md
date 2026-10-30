@@ -807,6 +807,16 @@ the saved computed-script sanitization error on canonical public WIAA directory
 URLs. Existing completed outcomes remain immutable and attempt counts continue.
 The default is an empty list. Login, CAPTCHA, access denials and challenge markers
 remain excluded; this setting does not clear blocked checkpoints.
+The Wisconsin run template includes this reviewed repair setting. Existing frozen
+generations retain their original configuration and need a fresh recovery scope
+to revisit their saved rejections. Exact uncaptured browser queue-saturation
+failures can also be retried in a fresh scope; combined destination-block errors,
+captured invalid responses and saved access stops remain excluded from that retry.
+Browser request admission retains at most the 512-request page budget in its
+pending queue, so it can detect an excess burst without waiting for a consumer.
+The 512-request page limit and eight request workers remain unchanged; shutdown
+still reports any request that could not be admitted. Smaller queues apply
+backpressure without blocking quiescence or stop commands.
 
 Named exports use independent canonical pointers and workbook filenames within
 the configured publication directory. A name cannot be reassigned to a different

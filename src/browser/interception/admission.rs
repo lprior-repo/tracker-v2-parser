@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -5,10 +6,13 @@ use std::sync::{
 
 use anyhow::{Context, Result, anyhow, ensure};
 use chromiumoxide::{cdp::browser_protocol::fetch::EventRequestPaused, listeners::EventStream};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use tokio::sync::{mpsc, oneshot};
 
 use super::MAX_PAGE_REQUESTS;
+
+#[cfg(test)]
+mod tests;
 
 enum Command {
     Quiesce(oneshot::Sender<()>),
@@ -68,27 +72,61 @@ impl Admission {
         for _ in 0..MAX_PAGE_REQUESTS.saturating_add(4) {
             tokio::select! {
                 biased;
+                command = self.commands.recv() => {
+                    if self.control(command.context("browser admission owner abandoned its guard")?)?.is_break() {
+                        return Ok(count);
+                    }
+                }
                 event = self.events.next() => {
                     let Some(event) = event else { return Ok(count); };
                     ensure!(count < MAX_PAGE_REQUESTS, "browser acquisition incomplete: request budget exceeded");
                     count = count.saturating_add(1);
-                    if let Some(pending) = &self.pending {
-                        pending.try_send(event).context("browser request admission budget exceeded")?;
-                    } else {
-                        self.blocked.store(true, Ordering::Release);
+                    if self.enqueue(event).await?.is_break() {
+                        return Ok(count);
                     }
-                }
-                command = self.commands.recv() => match command.context("browser admission owner abandoned its guard")? {
-                    Command::Quiesce(reply) => {
-                        drop(self.pending.take());
-                        reply.send(()).map_err(|()| anyhow!("browser quiescence owner disappeared"))?;
-                    }
-                    Command::Stop => return Ok(count),
                 }
             }
         }
         Err(anyhow!(
             "browser acquisition incomplete: admission control budget exceeded"
         ))
+    }
+
+    async fn enqueue(&mut self, event: Arc<EventRequestPaused>) -> Result<ControlFlow<()>> {
+        let Some(pending) = &self.pending else {
+            self.blocked.store(true, Ordering::Release);
+            return Ok(ControlFlow::Continue(()));
+        };
+        let command = tokio::select! {
+            biased;
+            command = self.commands.recv() => Some(command.context("browser admission owner abandoned its guard")?),
+            result = pending.send(event) => {
+                result.context("browser request admission receiver closed")?;
+                None
+            }
+        };
+        match command {
+            Some(command) => {
+                self.blocked.store(true, Ordering::Release);
+                self.control(command)
+            }
+            None => Ok(ControlFlow::Continue(())),
+        }
+    }
+
+    fn control(&mut self, command: Command) -> Result<ControlFlow<()>> {
+        if self.events.next().now_or_never().flatten().is_some() {
+            self.blocked.store(true, Ordering::Release);
+        }
+        match command {
+            Command::Quiesce(reply) => {
+                drop(self.pending.take());
+                reply
+                    .send(())
+                    .map_err(|()| anyhow!("browser quiescence owner disappeared"))?;
+                Ok(ControlFlow::Continue(()))
+            }
+            Command::Stop => Ok(ControlFlow::Break(())),
+        }
     }
 }

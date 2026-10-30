@@ -175,6 +175,12 @@ fn given_run_templates_when_loaded_then_operational_settings_are_explicit() -> R
         include_str!("../../../config/runs/next-states.toml"),
     ] {
         let config = Config::parse(input)?;
+        if config.states == ["WI"] {
+            assert_eq!(
+                serde_json::to_value(&config.acquisition)?["reviewed_legacy_failures"],
+                serde_json::json!(["wiaa_script_sanitization"])
+            );
+        }
         let settings = config
             .run
             .ok_or_else(|| anyhow::anyhow!("run settings missing"))?;
