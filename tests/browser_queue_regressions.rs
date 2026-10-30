@@ -176,6 +176,7 @@ async fn given_precapture_stop_when_persisted_then_both_authorities_are_blocked_
                 ),
                 capture: None,
                 blocked: true,
+                retryable: false,
                 detail: "login destination requires human review".into(),
             };
             database.fail_acquisition(&job, &failure).await?;
@@ -223,6 +224,7 @@ async fn given_non_http_login_rejection_when_origin_is_unavailable_then_original
                 stopped_origin: Some("https://a.example.edu".into()),
                 capture: None,
                 blocked: true,
+                retryable: false,
                 detail: "browser destination requires human access review".into(),
             };
             database.fail_acquisition(&job, &failure).await?;

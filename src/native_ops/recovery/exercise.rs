@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use super::{cli, fixtures, io, journal, pipeline, review, runtime::Runtime, workbook};
 
 pub(super) async fn run(runtime: &mut Runtime, identity: &str) -> Result<Value> {
+    let capacity = super::capacity::prove(runtime, identity).await?;
     let mut workflow = cli::prove(runtime, identity).await?;
     let reviews = review::seed(runtime).await?;
     io::save(
@@ -94,6 +95,6 @@ pub(super) async fn run(runtime: &mut Runtime, identity: &str) -> Result<Value> 
         &isolation,
     )?;
     Ok(
-        json!({"offline_invocation_ids":replays.iter().take(2).map(|(_,id,_)|id).collect::<Vec<_>>(),"export_invocation_id":id,"domain":counts,"export":verified,"workflow_cli":workflow,"workflow_restore":workflow_restore,"pipeline":pipeline,"pipeline_restore":pipeline_restore,"journal":retained,"delivery_copy_isolation":isolation,"service_settings_after_restore":settings,"backup_restore":serde_json::from_slice::<Value>(&io::read(&runtime.args.evidence.join("restart-proof.json"),io::JSON_LIMIT)?)?}),
+        json!({"capacity_retry":capacity,"offline_invocation_ids":replays.iter().take(2).map(|(_,id,_)|id).collect::<Vec<_>>(),"export_invocation_id":id,"domain":counts,"export":verified,"workflow_cli":workflow,"workflow_restore":workflow_restore,"pipeline":pipeline,"pipeline_restore":pipeline_restore,"journal":retained,"delivery_copy_isolation":isolation,"service_settings_after_restore":settings,"backup_restore":serde_json::from_slice::<Value>(&io::read(&runtime.args.evidence.join("restart-proof.json"),io::JSON_LIMIT)?)?}),
     )
 }

@@ -129,7 +129,7 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
 #[test]
 fn only_exact_uncaptured_invalid_interception_id_errors_are_transient_and_blocks_dominate() {
     let mut failure=crate::transport::Failure {
-        blocked:false,capture:None,stopped_origin:None,
+        blocked:false,retryable:false,capture:None,stopped_origin:None,
         detail:"browser interception failed: Error -32602: Invalid InterceptionId.: Error -32602: Invalid InterceptionId.".into(),
     };
     assert_eq!(page::classify(&failure), FailureClass::Transient);

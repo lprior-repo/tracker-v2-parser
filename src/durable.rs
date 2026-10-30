@@ -1,5 +1,6 @@
 mod admission;
 pub mod blocking;
+pub(crate) mod capacity_proof;
 pub mod cli;
 mod delivery;
 mod effects;
@@ -11,6 +12,7 @@ mod runtime;
 mod services;
 mod wiaa;
 
+pub(crate) use effects::transient as retryable_error;
 pub use runtime::serve;
 pub use services::{AthleticCrawl, AthleticOperations, AthleticPage};
 

@@ -25,6 +25,8 @@ impl PersistentPacing {
             pool: self.pool.clone(),
             wire_context: None,
             spacing: self.spacing,
+            #[cfg(test)]
+            admission_test_polls: self.admission_test_polls,
         };
         if let Some(context) = &self.wire_context {
             pacing.wire_context = Some(WireContext::new(

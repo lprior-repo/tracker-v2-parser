@@ -125,6 +125,16 @@ impl Transport {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_pacing_test_polls(mut self, polls: usize) -> Result<Self> {
+        let pacing = self
+            .persistent_pacing
+            .clone()
+            .context("pacing test requires persistent PostgreSQL pacing")?;
+        self.replace_pacing(pacing.with_admission_test_polls(polls));
+        Ok(self)
+    }
+
+    #[cfg(test)]
     pub(super) async fn paced_wire<T, F>(
         &self,
         target: &Target,

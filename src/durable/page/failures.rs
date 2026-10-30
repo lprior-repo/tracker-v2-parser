@@ -54,7 +54,7 @@ pub fn classify(failure: &Failure) -> FailureClass {
     {
         return FailureClass::Transient;
     }
-    if failure.capture.is_none() && transient_detail(&failure.detail) {
+    if failure.capture.is_none() && (failure.retryable || transient_detail(&failure.detail)) {
         return FailureClass::Transient;
     }
     FailureClass::Rejected

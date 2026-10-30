@@ -40,10 +40,24 @@ pub(super) use current_time as now;
 pub(super) use recorded as record;
 
 pub(super) fn classify(error: anyhow::Error) -> HandlerError {
-    let transient = error.chain().any(|cause| {
+    if transient(&error) {
+        HandlerError::from(error)
+    } else {
+        TerminalError::new(format!("{error:#}")).into()
+    }
+}
+
+pub fn transient(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
         if cause
             .downcast_ref::<crate::school_address_download::DownloadTransient>()
             .is_some()
+            || cause
+                .downcast_ref::<super::blocking::BlockingStageUnavailable>()
+                .is_some()
+            || cause
+                .downcast_ref::<tokio::time::error::Elapsed>()
+                .is_some()
         {
             return true;
         }
@@ -84,12 +98,7 @@ pub(super) fn classify(error: anyhow::Error) -> HandlerError {
         cause
             .downcast_ref::<crate::durable::AcquisitionBusy>()
             .is_some()
-    });
-    if transient {
-        HandlerError::from(error)
-    } else {
-        TerminalError::new(format!("{error:#}")).into()
-    }
+    })
 }
 
 pub(super) async fn acquisition(

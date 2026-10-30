@@ -1,5 +1,6 @@
 use std::path::Path;
 
+mod admission;
 mod retry_clock;
 mod sanitization;
 mod stop;

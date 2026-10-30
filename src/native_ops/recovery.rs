@@ -1,4 +1,5 @@
 mod backup;
+mod capacity;
 mod cli;
 mod control;
 mod database;

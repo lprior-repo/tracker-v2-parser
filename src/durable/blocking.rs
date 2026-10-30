@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     sync::{Mutex, MutexGuard},
     task::Poll,
     time::Duration,
@@ -13,6 +14,23 @@ use tokio::{
 
 const MAX_TASKS: usize = 8;
 const DRAIN_BUDGET: Duration = Duration::from_secs(90);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockingStageUnavailable {
+    Busy,
+    Stopping,
+}
+
+impl fmt::Display for BlockingStageUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Busy => "owned blocking stage capacity of 8 is exhausted",
+            Self::Stopping => "owned blocking stage intake has stopped",
+        })
+    }
+}
+
+impl std::error::Error for BlockingStageUnavailable {}
 
 #[derive(Default)]
 struct State {
@@ -90,11 +108,12 @@ impl BlockingStages {
         {
             let mut state = self.state()?;
             state.reap();
-            ensure!(!state.stopping, "owned blocking stage intake has stopped");
-            ensure!(
-                state.tasks.len() < MAX_TASKS,
-                "owned blocking stage capacity of 8 is exhausted"
-            );
+            if state.stopping {
+                return Err(BlockingStageUnavailable::Stopping.into());
+            }
+            if state.tasks.len() >= MAX_TASKS {
+                return Err(BlockingStageUnavailable::Busy.into());
+            }
             drop(state.tasks.spawn_blocking(move || {
                 let result = operation();
                 let error = result

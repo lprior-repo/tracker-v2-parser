@@ -42,6 +42,7 @@ pub struct Failure {
     pub stopped_origin: Option<Box<str>>,
     pub capture: Option<Capture>,
     pub blocked: bool,
+    pub retryable: bool,
     pub detail: Box<str>,
 }
 
@@ -362,6 +363,7 @@ fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {
             .into_boxed_str(),
             capture: Some(capture),
             blocked,
+            retryable: false,
         });
     }
     Ok(capture)
@@ -432,6 +434,7 @@ pub(crate) fn failure(error: &anyhow::Error) -> Failure {
             .map(|origin| origin.to_owned().into_boxed_str()),
         capture: None,
         blocked,
+        retryable: crate::durable::retryable_error(error),
         detail: detail.into_boxed_str(),
     }
 }

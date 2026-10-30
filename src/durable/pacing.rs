@@ -6,6 +6,9 @@ pub use wire::WireRequest;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+#[cfg(test)]
+mod tests;
+
 use std::{future::Future, time::Duration};
 
 use anyhow::{Context, Result, ensure};
@@ -25,6 +28,8 @@ pub struct PersistentPacing {
     pool: PgPool,
     wire_context: Option<wire::WireContext>,
     spacing: Spacing,
+    #[cfg(test)]
+    admission_test_polls: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -52,12 +57,20 @@ impl PersistentPacing {
             pool,
             wire_context: None,
             spacing: Spacing::CompletedHeaders,
+            #[cfg(test)]
+            admission_test_polls: None,
         }
     }
 
     #[must_use]
     pub const fn with_start_spacing(mut self) -> Self {
         self.spacing = Spacing::RequestStarts;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_admission_test_polls(mut self, polls: usize) -> Self {
+        self.admission_test_polls = Some(polls.min(MAX_ADMISSION_POLLS));
         self
     }
 
@@ -107,7 +120,12 @@ impl PersistentPacing {
 
     #[tracing::instrument(skip_all, fields(max_polls = MAX_ADMISSION_POLLS, max_wait_seconds = MAX_ADMISSION_WAIT.as_secs(), lease_poll_millis = LEASE_POLL_INTERVAL.as_millis()))]
     async fn admit(&self, scope: &WireScope) -> Result<String> {
-        let admission = stream::iter(0..MAX_ADMISSION_POLLS)
+        let max_polls = MAX_ADMISSION_POLLS;
+        #[cfg(test)]
+        let max_polls = self
+            .admission_test_polls
+            .map_or(max_polls, std::convert::identity);
+        let admission = stream::iter(0..max_polls)
             .map(Ok::<_, anyhow::Error>)
             .try_fold(None, |token, _| async move {
                 if token.is_some() {
@@ -124,8 +142,14 @@ impl PersistentPacing {
         let result = tokio::time::timeout(MAX_ADMISSION_WAIT, admission)
             .await
             .context("persistent wire admission exceeded bounded wait budget")??;
-        result.context("persistent wire admission exceeded bounded contention budget")
+        admitted_token(result)
     }
+}
+
+fn admitted_token(token: Option<String>) -> Result<String> {
+    token
+        .ok_or(super::AcquisitionBusy)
+        .context("persistent wire admission exceeded bounded contention budget")
 }
 
 impl WireScope {

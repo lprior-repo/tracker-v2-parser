@@ -655,6 +655,16 @@ native qualification sends `offline_replay` operations through Restate twice,
 verifies stable identities/results/checkpoints, then exports and reopens the
 workbook and checks every manifest part's byte length and SHA-256.
 
+Export workers retain at most eight owned blocking tasks. A full registry or a
+worker closing its intake returns a typed transient error, so Restate retries
+the unfinished recorded step with backoff. Completed blocking work remains
+owned until its task handle is reaped; cancellation does not free a slot early.
+Runtime timeouts, temporary database capacity failures and disk-full errors also
+retry. Invalid inputs, artifact mismatches and source access stops remain
+terminal. Configured crawl deadlines and finite retry budgets still apply;
+durability preserves checkpoints and published exports, rather than promising
+that every possible failure can finish without operator intervention.
+
 macOS temporary-directory paths can contain a `/var` symlink. Migration backup
 inputs must use canonical, existing paths: source symlinks and symlinked parents
 are intentionally rejected. Test fixture roots are canonicalized before creating
