@@ -1,4 +1,5 @@
-use super::send;
+use super::{RunOverrides, send};
+use crate::config::{Config, RunSettings};
 use crate::durable::{
     model::{CrawlPhase, CrawlRequest},
     operations::OperationRequest,
@@ -6,30 +7,18 @@ use crate::durable::{
 use anyhow::{Context, Result};
 use std::path::Path;
 
-pub async fn start_crawl(
+pub(super) async fn start_crawl(
     config: &Path,
     generation: String,
-    hours: u32,
-    max_batches: u32,
+    run: RunOverrides,
     ingress: &str,
 ) -> Result<()> {
-    let value = CrawlRequest {
+    let value = crawl_request(
+        Config::load(config)?,
         generation,
-        config: crate::config::Config::load(config)?,
-        deadline_ms: chrono::Utc::now()
-            .timestamp_millis()
-            .checked_add(
-                i64::from(hours)
-                    .checked_mul(3_600_000)
-                    .context("crawl duration overflow")?,
-            )
-            .context("crawl deadline overflow")?,
-        cooldown_ms: 60_000,
-        batch: 0,
-        max_batches,
-        phase: CrawlPhase::SchoolChains,
-    };
-    value.validate(chrono::Utc::now().timestamp_millis())?;
+        run,
+        chrono::Utc::now().timestamp_millis(),
+    )?;
     let key = value.workflow_key();
     let response = send(
         ingress,
@@ -45,6 +34,48 @@ pub async fn start_crawl(
         )?
     );
     Ok(())
+}
+
+pub(super) fn crawl_request(
+    mut config: Config,
+    generation: String,
+    overrides: RunOverrides,
+    now_ms: i64,
+) -> Result<CrawlRequest> {
+    let defaults = RunSettings::default();
+    let settings = config.run.map_or(defaults, std::convert::identity);
+    let run = RunSettings {
+        hours: overrides
+            .hours
+            .map_or(settings.hours, std::convert::identity),
+        max_batches: overrides
+            .max_batches
+            .map_or(settings.max_batches, std::convert::identity),
+        cooldown_seconds: overrides
+            .cooldown_seconds
+            .map_or(settings.cooldown_seconds, std::convert::identity),
+    };
+    run.validate()?;
+    config.run = Some(run);
+    let value = CrawlRequest {
+        generation,
+        config,
+        deadline_ms: now_ms
+            .checked_add(
+                i64::from(run.hours)
+                    .checked_mul(3_600_000)
+                    .context("crawl duration overflow")?,
+            )
+            .context("crawl deadline overflow")?,
+        cooldown_ms: i64::from(run.cooldown_seconds)
+            .checked_mul(1_000)
+            .context("crawl cooldown overflow")?,
+        batch: 0,
+        max_batches: run.max_batches,
+        phase: CrawlPhase::SchoolChains,
+    };
+    value.validate(now_ms)?;
+    Ok(value)
 }
 
 pub async fn submit_operation(ingress: &str, value: OperationRequest) -> Result<()> {

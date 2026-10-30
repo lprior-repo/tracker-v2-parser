@@ -2,6 +2,11 @@ states = ["MI", "MN", "IA", "IL", "CO"]
 graduation_years = [2027]
 season = 2026
 
+[run]
+hours = 24
+max_batches = 10000
+cooldown_seconds = 60
+
 [limits]
 requests_per_second = 3.0
 contact_requests_per_second = 3.0

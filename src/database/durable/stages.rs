@@ -5,6 +5,7 @@ use crate::{
     database::Job,
     durable::page::{
         CaptureRef, FailureClass, FailureRecord, PageOutcome, PageReservation, ParsedRef,
+        RetryPolicy,
     },
 };
 
@@ -95,6 +96,17 @@ impl Database {
         reservation: &PageReservation,
         failure: FailureRecord<'_>,
     ) -> Result<PageOutcome> {
+        self.durable_fail_with_policy(reservation, failure, &RetryPolicy::default())
+            .await
+    }
+
+    pub(crate) async fn durable_fail_with_policy(
+        &self,
+        reservation: &PageReservation,
+        failure: FailureRecord<'_>,
+        policy: &RetryPolicy,
+    ) -> Result<PageOutcome> {
+        policy.check(&reservation.request)?;
         let FailureRecord {
             class,
             detail,
@@ -125,7 +137,7 @@ impl Database {
             transaction.commit().await?;
             return Ok(outcome);
         }
-        let outcome = failure_outcome(reservation, class, detail, now_ms)?;
+        let outcome = failure_outcome(reservation, class, detail, now_ms, policy)?;
         let job = Job {
             id: reservation.request.binding.page_id,
             target: reservation.request.target.clone(),
@@ -158,6 +170,7 @@ fn failure_outcome(
     class: FailureClass,
     detail: &str,
     now_ms: i64,
+    policy: &RetryPolicy,
 ) -> Result<PageOutcome> {
     let detail = detail.to_owned();
     match class {
@@ -165,7 +178,11 @@ fn failure_outcome(
         FailureClass::Rejected => Ok(PageOutcome::Rejected { detail }),
         FailureClass::Transient => {
             let scope = &reservation.request.binding.scope;
-            let delay = if reservation.ordinal == 3 {
+            ensure!(
+                reservation.ordinal <= policy.attempts(),
+                "durable ordinal exceeds configured retry attempts"
+            );
+            let delay = if reservation.ordinal == policy.attempts() {
                 scope.cooldown_ms
             } else {
                 i64::from(reservation.ordinal)

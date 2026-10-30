@@ -156,10 +156,7 @@ impl Actor {
                 Command::Drain(reply) => self.reply_checkpoint(reply).await?,
                 Command::Stop => { self.checkpoint().await?; return Ok(false); }
                 #[cfg(test)]
-                Command::Hold { ready, release } => {
-                    ready.send(()).map_err(|()| anyhow!("native sink pause requester cancelled"))?;
-                    timeout(DEADLINE, release).await.context("native sink test pause expired")??;
-                }
+                Command::Hold { expected, ready, release } => self.hold(expected, ready, release).await?,
             },
             observed = self.pending.next(), if !self.pending.is_empty() => {
                 self.record(observed.context("native observation disappeared")??);

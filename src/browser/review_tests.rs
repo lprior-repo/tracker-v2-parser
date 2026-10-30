@@ -1165,15 +1165,19 @@ async fn given_page_close_failure_when_acquisition_finishes_then_context_is_disp
 }
 
 #[tokio::test]
-async fn given_queued_unaccepted_native_socket_when_checkpoint_runs_then_listener_queue_is_drained_before_acknowledgement()
+async fn given_received_unobserved_native_request_when_checkpoint_runs_then_denial_is_recorded_before_acknowledgement()
 -> Result<()> {
     let sink = super::native::NativeSink::start(TcpListener::bind("127.0.0.1:0").await?)?;
     let scenario = async {
-        let release = sink.pause().await?;
-        let mut socket = TcpStream::connect(sink.address()?).await?;
-        socket.write_all(b"G").await?;
+        let connected = async {
+            let mut socket = TcpStream::connect(sink.address()?).await?;
+            socket.write_all(b"G").await?;
+            Ok::<_, anyhow::Error>(socket)
+        };
+        let (release, mut socket) = tokio::try_join!(sink.pause_after_prefix(b'G'), connected)?;
         assert_eq!(sink.denied_connections(), 0);
         let status = sink.status();
+        assert_eq!(status.counts(), (1, 0, 0));
         let mut checkpoint = Box::pin(status.checkpoint());
         assert!(futures::poll!(checkpoint.as_mut()).is_pending());
         release
@@ -1181,6 +1185,8 @@ async fn given_queued_unaccepted_native_socket_when_checkpoint_runs_then_listene
             .map_err(|()| anyhow::anyhow!("sink pause owner disappeared"))?;
         assert_eq!(checkpoint.await?, 1);
         assert_eq!(sink.denied_connections(), 1);
+        assert_eq!(status.counts(), (1, 0, 0));
+        assert_eq!(status.denial_kinds(), (1, 0, 0));
         let mut byte = [0; 1];
         assert_eq!(
             timeout(Duration::from_secs(5), socket.read(&mut byte)).await??,

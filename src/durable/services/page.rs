@@ -45,14 +45,16 @@ impl AthleticPage {
         }
         let database = &self.runtime.database;
         let now = effects::now!(&ctx)?;
-        let reservation = match effects::record!(&ctx, "reserve-page-attempt", || page::reserve(
-            database,
-            &input.request,
-            now
-        ))? {
-            ReservationDecision::Reserved { reservation } => reservation,
-            ReservationDecision::Settled { outcome } => return Ok(Json(outcome)),
-        };
+        let reservation =
+            match effects::record!(&ctx, "reserve-page-attempt", || page::reserve_configured(
+                database,
+                &input.config,
+                &input.request,
+                now
+            ))? {
+                ReservationDecision::Reserved { reservation } => reservation,
+                ReservationDecision::Settled { outcome } => return Ok(Json(outcome)),
+            };
         let capture = match effects::record!(&ctx, "fetch-and-retain-page", || async {
             let mut transport = transport(&input.config, &input.request)?
                 .with_persistent_pacing(database.pool().clone());
@@ -70,12 +72,13 @@ impl AthleticPage {
                 &reservation.request.binding.operation_id,
                 &reservation.attempt_id,
             )?;
-            let result = page::fetch(
+            let result = page::fetch_configured(
                 database,
                 &self.runtime.artifact_root,
                 &reservation,
                 &mut transport,
                 chrono::Utc::now().timestamp_millis(),
+                &input.config,
             )
             .await;
             let result = finish(result, transport.close().await);

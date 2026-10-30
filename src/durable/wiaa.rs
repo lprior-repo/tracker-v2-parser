@@ -1,4 +1,5 @@
 mod directory;
+mod scope;
 
 use anyhow::{Context as _, Result, ensure};
 use futures::{TryStreamExt, stream};
@@ -24,6 +25,7 @@ impl AthleticOperations {
         ctx: &Context<'_>,
         workspace: &Workspace,
         config: &Config,
+        bounds: Option<(i64, i64)>,
     ) -> HandlerResult<OperationResult> {
         ensure_wisconsin(config).terminal()?;
         effects::record!(ctx, "check-wiaa-access-stops", || {
@@ -33,14 +35,7 @@ impl AthleticOperations {
         config.sources.milesplit.transport = TransportMode::Http;
         config.sources.athleticnet.transport = TransportMode::Http;
         let now = effects::now!(ctx)?;
-        let scope = PageScope {
-            run_generation: model::digest(&(workspace.binding(), "wiaa-directory")).terminal()?,
-            config_sha256: model::page_config_digest(&config).terminal()?,
-            deadline_ms: now
-                .checked_add(86_400_000)
-                .ok_or_else(|| TerminalError::new("WIAA deadline overflow"))?,
-            cooldown_ms: 60_000,
-        };
+        let scope = scope::bind(&config, workspace.binding(), bounds, now).terminal()?;
         let source = config
             .enabled_sources()
             .into_iter()

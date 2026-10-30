@@ -18,6 +18,7 @@ pub(super) enum Command {
     Stop,
     #[cfg(test)]
     Hold {
+        expected: Option<u8>,
         ready: oneshot::Sender<()>,
         release: oneshot::Receiver<()>,
     },

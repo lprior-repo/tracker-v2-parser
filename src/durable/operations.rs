@@ -26,6 +26,11 @@ pub enum OperationSpec {
     WiaaDirectory {
         config: Config,
     },
+    WiaaDirectoryRun {
+        config: Config,
+        deadline_ms: i64,
+        cooldown_ms: i64,
+    },
     SchoolDirectory {
         csv: Artifact,
         manifest: Artifact,

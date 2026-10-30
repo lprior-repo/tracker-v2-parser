@@ -2,9 +2,26 @@ use anyhow::{Context, Result, ensure};
 use sqlx::PgConnection;
 
 use super::{Database, lock_request};
-use crate::durable::page::{PageOutcome, PageRequest, PageReservation, ReservationDecision};
+use crate::durable::page::{
+    PageOutcome, PageRequest, PageReservation, ReservationDecision, RetryPolicy,
+};
 
 impl Database {
+    pub(crate) async fn durable_reserve_configured(
+        &self,
+        request: &PageRequest,
+        now_ms: i64,
+        permit: Option<&crate::acquisition::LegacyFailurePermit>,
+        policy: &RetryPolicy,
+    ) -> Result<ReservationDecision> {
+        crate::durable::page::validate_request(request)?;
+        policy.check(request)?;
+        let mut transaction = self.pool.begin().await?;
+        let mode = permit.map_or(Mode::Acquire, Mode::Reviewed);
+        let result = reserve(&mut transaction, request, now_ms, mode, policy).await;
+        super::super::finish(transaction, result).await
+    }
+
     pub async fn durable_reserve(
         &self,
         request: &PageRequest,
@@ -12,7 +29,14 @@ impl Database {
     ) -> Result<ReservationDecision> {
         crate::durable::page::validate_request(request)?;
         let mut transaction = self.pool.begin().await?;
-        let result = reserve(&mut transaction, request, now_ms, Mode::Acquire).await;
+        let result = reserve(
+            &mut transaction,
+            request,
+            now_ms,
+            Mode::Acquire,
+            &RetryPolicy::default(),
+        )
+        .await;
         super::super::finish(transaction, result).await
     }
 
@@ -23,15 +47,23 @@ impl Database {
     ) -> Result<ReservationDecision> {
         crate::durable::page::validate_request(request)?;
         let mut transaction = self.pool.begin().await?;
-        let result = reserve(&mut transaction, request, now_ms, Mode::Offline).await;
+        let result = reserve(
+            &mut transaction,
+            request,
+            now_ms,
+            Mode::Offline,
+            &RetryPolicy::default(),
+        )
+        .await;
         super::super::finish(transaction, result).await
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
+#[derive(Clone, Copy)]
+enum Mode<'a> {
     Acquire,
     Offline,
+    Reviewed(&'a crate::acquisition::LegacyFailurePermit),
 }
 
 async fn register(connection: &mut PgConnection, request: &PageRequest) -> Result<()> {
@@ -67,7 +99,8 @@ async fn reserve(
     connection: &mut PgConnection,
     request: &PageRequest,
     now_ms: i64,
-    mode: Mode,
+    mode: Mode<'_>,
+    policy: &RetryPolicy,
 ) -> Result<ReservationDecision> {
     register(connection, request).await?;
     let (state, cycle, attempts, due, outcome) = lock_request(connection, request).await?;
@@ -88,8 +121,11 @@ async fn reserve(
     }
     let legacy: Option<String> = sqlx::query_scalar("SELECT last_error FROM scrape_pages WHERE id=$1 AND attempts>0 AND NOT EXISTS(SELECT 1 FROM durable_page_attempts WHERE operation_id=$2)")
         .bind(request.binding.page_id).bind(&request.binding.operation_id).fetch_optional(&mut *connection).await?.flatten();
-    if mode == Mode::Acquire
-        && legacy.is_some_and(|detail| !crate::durable::page::transient_detail(&detail))
+    if !matches!(mode, Mode::Offline)
+        && legacy.is_some_and(|detail| {
+            !crate::durable::page::transient_detail(&detail)
+                && !matches!(mode, Mode::Reviewed(permit) if permit.permits(request, &detail))
+        })
     {
         let outcome = PageOutcome::Rejected {
             detail: "legacy failure is not classified transient; original checkpoint preserved"
@@ -115,12 +151,16 @@ async fn reserve(
         ),
         "durable run deadline exceeds 24 hours"
     );
-    let cycle = if attempts == 3 {
+    ensure!(
+        attempts <= policy.attempts(),
+        "durable cycle exceeds configured retry attempts"
+    );
+    let cycle = if attempts == policy.attempts() {
         cycle.checked_add(1).context("durable cycle overflow")?
     } else {
         cycle
     };
-    let ordinal = if attempts == 3 {
+    let ordinal = if attempts == policy.attempts() {
         1
     } else {
         attempts
@@ -129,7 +169,7 @@ async fn reserve(
     };
     let attempt_id = crate::durable::page::attempt_identity(request, cycle, ordinal)?;
     let total_attempts: i32 = sqlx::query_scalar("UPDATE scrape_pages SET attempts=attempts+1,status='pending' WHERE id=$1 AND (status IN ('pending','failed') OR ($2 AND status='succeeded')) RETURNING attempts")
-        .bind(request.binding.page_id).bind(mode == Mode::Offline).fetch_one(&mut *connection).await.context("reserving durable page attempt")?;
+        .bind(request.binding.page_id).bind(matches!(mode, Mode::Offline)).fetch_one(&mut *connection).await.context("reserving durable page attempt")?;
     sqlx::query("INSERT INTO durable_page_attempts(attempt_id,operation_id,cycle,ordinal,total_attempts) VALUES($1,$2,$3,$4,$5)")
         .bind(&attempt_id).bind(&request.binding.operation_id).bind(cycle).bind(ordinal).bind(total_attempts).execute(&mut *connection).await?;
     sqlx::query("UPDATE durable_page_operations SET state='active',cycle=$2,cycle_attempts=$3,retry_at_ms=NULL,outcome=NULL WHERE operation_id=$1")

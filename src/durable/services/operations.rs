@@ -38,7 +38,17 @@ impl AthleticOperations {
         })?;
         let result = match &request.spec {
             OperationSpec::Export { config } => self.export(&ctx, &workspace, config).await?,
-            OperationSpec::WiaaDirectory { config } => self.wiaa(&ctx, &workspace, config).await?,
+            OperationSpec::WiaaDirectory { config } => {
+                self.wiaa(&ctx, &workspace, config, None).await?
+            }
+            OperationSpec::WiaaDirectoryRun {
+                config,
+                deadline_ms,
+                cooldown_ms,
+            } => {
+                self.wiaa(&ctx, &workspace, config, Some((*deadline_ms, *cooldown_ms)))
+                    .await?
+            }
             OperationSpec::OfflineReplay {
                 config,
                 target,

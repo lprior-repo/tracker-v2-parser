@@ -89,6 +89,8 @@ impl AthleticCrawl {
             .context("pipeline index overflow")
             .terminal()?;
         let now = effects::now!(ctx)?;
+        let scheduling =
+            page::Scheduling::for_batch_turn(&request.config, request.batch, index).terminal()?;
         let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || {
             page::select_scheduled(
                 &self.runtime.database,
@@ -96,14 +98,14 @@ impl AthleticCrawl {
                 scope,
                 now,
                 owned,
-                page::Scheduling::for_turn(&request.config, index),
+                scheduling,
             )
         })?;
         let Some(page) = selected else {
             return Ok(None);
         };
         effects::record!(ctx, &format!("reserve-page-{index:06}"), || {
-            page::reserve(&self.runtime.database, &page, now)
+            page::reserve_configured(&self.runtime.database, &request.config, &page, now)
         })?;
         let id = page.binding.page_id;
         let handle = ctx

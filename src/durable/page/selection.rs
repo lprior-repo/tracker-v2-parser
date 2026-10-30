@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 
 use super::{PageRequest, PageScope, ReservationDecision};
 use crate::{config::Config, database::Database};
@@ -11,6 +11,15 @@ pub enum Scheduling {
 }
 
 impl Scheduling {
+    pub fn for_batch_turn(config: &Config, batch: u32, turn: usize) -> Result<Self> {
+        let offset = usize::try_from(batch)
+            .context("scheduling batch exceeds addressable range")?
+            .checked_mul(config.limits.max_pages)
+            .and_then(|offset| offset.checked_add(turn))
+            .context("scheduling turn overflow")?;
+        Ok(Self::for_turn(config, offset))
+    }
+
     pub const fn for_turn(config: &Config, turn: usize) -> Self {
         let interval = match config.limits.public_results_every {
             Some(value) => value.get(),
@@ -79,6 +88,10 @@ pub async fn select_scheduled(
 }
 
 #[cfg(test)]
+mod batch_tests;
+#[cfg(test)]
+mod reviewed_legacy_tests;
+#[cfg(test)]
 mod tests;
 
 pub async fn reserve(
@@ -87,4 +100,17 @@ pub async fn reserve(
     now_ms: i64,
 ) -> Result<ReservationDecision> {
     database.durable_reserve(request, now_ms).await
+}
+
+pub async fn reserve_configured(
+    database: &Database,
+    config: &Config,
+    request: &PageRequest,
+    now_ms: i64,
+) -> Result<ReservationDecision> {
+    let policy = super::RetryPolicy::configured(config, request)?;
+    let permit = crate::acquisition::LegacyFailurePermit::bind(config, request)?;
+    database
+        .durable_reserve_configured(request, now_ms, permit.as_ref(), &policy)
+        .await
 }

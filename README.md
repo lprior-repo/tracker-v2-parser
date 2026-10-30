@@ -763,26 +763,48 @@ start a new generation; a running generation keeps its frozen configuration.
 | `states` | Selected state codes; the next-states profile includes MI, MN, IA, IL and CO |
 | `graduation_years` | Explicit published class years, such as `[2027]` or `[2028, 2029]` |
 | `season` | Competition season used for discovery; independent of graduation year |
+| `run.hours` | Duration from submission, from 1 to 24 hours |
+| `run.max_batches` | Maximum number of durable batches, from 1 to 10,000 |
+| `run.cooldown_seconds` | Delay between retry cycles, from 15 to 3,600 seconds |
+| `acquisition.profile_coverage_only` | `true` sweeps saved school chains; use `false` to discover an empty state/cohort |
+| `acquisition.collect_contacts` | Discover and parse published school contacts |
 | `limits.requests_per_second` | Shared global request ceiling, at most 3 |
 | `limits.contact_requests_per_second` | Contact request ceiling within the global limit |
 | `limits.concurrency` | At most 3 simultaneous acquisition slots, shared across campaigns |
-| `limits.public_results_every` | Public discovery reservation frequency, from 1 to 128 |
+| `limits.public_results_every` | Public discovery reservation frequency across batch boundaries, from 1 to 128 |
 | `limits.max_pages` | Work units per durable batch |
 | `limits.max_attempts` | Attempts per retry cycle, from 1 to 3; cooldown/deadline still apply |
 | `export.name` | Separate publication name for this state/cohort set |
 | `export.rows_per_file` | Single-sheet athlete capacity, at most 1,000,000 |
 
 ```sh
-env -u CI moon run pipeline:run -- durable crawl --config config/runs/next-states.toml --generation next-states-2027-20261030 --hours 24 --max-batches 10000
+env -u CI moon run pipeline:run -- durable crawl --config config/runs/next-states.toml --generation next-states-2027-20261030
 ```
 
 For 2028/2029, copy a run profile, set `graduation_years = [2028, 2029]` and choose
 a different `export.name`, such as `next-states-2028-2029`. No Rust changes are
 needed. Keep years together in one campaign per state set: overlapping year runs
 share school/unknown-year work and must not compete for the same checkpoints.
-Operational duration and batch-count bounds use `--hours` and `--max-batches`.
+Optional `--hours`, `--max-batches` and `--cooldown-seconds` override the TOML values.
+Omitting `[run]` preserves the existing defaults: 24 hours, 10,000 batches and a
+60-second retry-cycle cooldown. Each submitted generation freezes its resolved
+deadline, batch count, cooldown and scraper settings; editing the file does not
+change a running generation. New crawl submissions pass the same deadline and
+cooldown into WIAA contact refresh; a child does not receive a fresh run window.
+Changing `season` or graduation years also does not
+refresh already successful profile sections; it changes discovery and cohort scope.
+The request-rate, concurrency, memory and admission ceilings remain safety bounds.
 Saved access-stop reviews belong to the actual operator configuration; templates
 do not grant access or reset stops.
+
+After a reviewed WIAA script-sanitizer repair, an operator can add
+`reviewed_legacy_failures = ["wiaa_script_sanitization"]` to `[acquisition]`
+with `mode = "public_results"` and `collect_contacts = true`. Start a fresh
+operation or generation with that file. This permits another attempt only for
+the saved computed-script sanitization error on canonical public WIAA directory
+URLs. Existing completed outcomes remain immutable and attempt counts continue.
+The default is an empty list. Login, CAPTCHA, access denials and challenge markers
+remain excluded; this setting does not clear blocked checkpoints.
 
 Named exports use independent canonical pointers and workbook filenames within
 the configured publication directory. A name cannot be reassigned to a different

@@ -1,5 +1,7 @@
 mod client;
 mod commands;
+#[cfg(test)]
+mod tests;
 
 use super::{
     model::CrawlRequest,
@@ -17,6 +19,16 @@ pub struct DurableArgs {
     command: DurableCommand,
 }
 
+#[derive(Args, Debug, Clone, Copy, Default)]
+pub(super) struct RunOverrides {
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=24))]
+    hours: Option<u32>,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=10_000))]
+    max_batches: Option<u32>,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(15..=3_600))]
+    cooldown_seconds: Option<u32>,
+}
+
 #[derive(Subcommand)]
 enum DurableCommand {
     Crawl {
@@ -24,10 +36,8 @@ enum DurableCommand {
         config: PathBuf,
         #[arg(long)]
         generation: String,
-        #[arg(long, default_value_t = 24, value_parser = clap::value_parser!(u32).range(1..=24))]
-        hours: u32,
-        #[arg(long, default_value_t = 10_000, value_parser = clap::value_parser!(u32).range(1..=10_000))]
-        max_batches: u32,
+        #[command(flatten)]
+        run: RunOverrides,
         #[arg(long, default_value = "http://127.0.0.1:18095")]
         ingress: String,
     },
@@ -81,10 +91,9 @@ impl DurableArgs {
             DurableCommand::Crawl {
                 config,
                 generation,
-                hours,
-                max_batches,
+                run,
                 ingress,
-            } => start_crawl(&config, generation, hours, max_batches, &ingress).await,
+            } => start_crawl(&config, generation, run, &ingress).await,
             DurableCommand::Export {
                 config,
                 operation_id,

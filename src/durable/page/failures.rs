@@ -1,14 +1,15 @@
-use super::{FailureClass, FailureRecord, FetchDecision, PageReservation};
+use super::{FailureClass, FailureRecord, FetchDecision, PageReservation, RetryPolicy};
 use crate::{database::Database, model::Capture, transport::Failure};
 use anyhow::Result;
 use std::path::Path;
 
-pub(super) async fn record(
+pub(super) async fn record_with_policy(
     database: &Database,
     root: &Path,
     reservation: &PageReservation,
     failure: Failure,
     now_ms: i64,
+    policy: &RetryPolicy,
 ) -> Result<FetchDecision> {
     if failure.blocked {
         super::stopped::save(root, reservation, &failure, now_ms).await?;
@@ -28,7 +29,7 @@ pub(super) async fn record(
         }
     }
     let outcome = database
-        .durable_fail(
+        .durable_fail_with_policy(
             reservation,
             FailureRecord {
                 class: classify(&failure),
@@ -37,6 +38,7 @@ pub(super) async fn record(
                 stopped_origin: failure.stopped_origin.as_deref(),
                 observed_at_ms: now_ms,
             },
+            policy,
         )
         .await?;
     Ok(FetchDecision::Settled { outcome })

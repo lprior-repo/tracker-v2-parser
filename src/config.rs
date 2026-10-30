@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{model::Source, scope::LOWER_48};
 
+mod run;
+pub use run::RunSettings;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportMode {
@@ -105,6 +107,8 @@ impl ExportSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunSettings>,
     pub acquisition: crate::acquisition::AcquisitionPolicy,
     pub states: Vec<String>,
     pub graduation_years: Vec<i32>,
@@ -117,6 +121,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            run: None,
             acquisition: crate::acquisition::AcquisitionPolicy::default(),
             states: LOWER_48.iter().map(|state| (*state).to_owned()).collect(),
             graduation_years: vec![2027],
@@ -142,6 +147,9 @@ impl Config {
     }
 
     pub fn validate(&mut self) -> Result<()> {
+        if let Some(run) = self.run {
+            run.validate()?;
+        }
         self.export.validated_name()?;
         self.acquisition.validate()?;
         self.validate_limits()?;

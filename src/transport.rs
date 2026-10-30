@@ -5,6 +5,8 @@ mod persistent;
 pub(crate) mod policy;
 mod redact;
 pub(crate) mod robots;
+#[cfg(test)]
+mod sanitization_tests;
 
 use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
 
@@ -332,16 +334,21 @@ fn finish_response(capture: Capture, denied: bool) -> Result<Capture, Failure> {
 pub(crate) fn sanitize_response(mut capture: Capture) -> Result<Capture, Failure> {
     let blocked = access_stop_status(capture.status) || denied_capture(&capture);
     capture.body = redact::body(&capture.body).map_err(|error| {
-        let mut failure = failure(&error);
-        if blocked {
-            failure.detail = format!(
-                "source returned HTTP {}; sanitizing response failed: {}",
-                capture.status, failure.detail
+        let detail = if blocked {
+            format!(
+                "source returned HTTP {}; sanitizing response failed: {error:#}",
+                capture.status
             )
-            .into_boxed_str();
-            failure.blocked = true;
+        } else {
+            format!("{error:#}")
+        };
+        Failure {
+            stopped_origin: None,
+            capture: None,
+            blocked,
+            retryable: false,
+            detail: detail.into_boxed_str(),
         }
-        failure
     })?;
     Ok(capture)
 }

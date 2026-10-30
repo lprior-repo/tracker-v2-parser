@@ -10,6 +10,10 @@ use crate::{
 
 pub(crate) const EXCLUSION: &str = "public-results/v1";
 
+mod legacy;
+pub(crate) use legacy::LegacyFailurePermit;
+pub use legacy::ReviewedLegacyFailure;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AcquisitionPolicy {
@@ -22,6 +26,8 @@ pub enum AcquisitionPolicy {
         collect_contacts: bool,
         #[serde(default)]
         profile_coverage_only: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reviewed_legacy_failures: Vec<ReviewedLegacyFailure>,
     },
 }
 
@@ -112,12 +118,22 @@ impl AcquisitionPolicy {
     pub(crate) fn validate(&self) -> Result<()> {
         if let Self::PublicResults {
             reviewed_media_stops,
+            reviewed_legacy_failures,
+            collect_contacts,
             ..
         } = self
         {
             ensure!(
                 reviewed_media_stops.len() <= 32,
                 "at most 32 media stops may be reviewed"
+            );
+            ensure!(
+                reviewed_legacy_failures.len() <= 1,
+                "at most one legacy technical failure review is supported"
+            );
+            ensure!(
+                reviewed_legacy_failures.is_empty() || *collect_contacts,
+                "reviewed WIAA technical failures require contact acquisition"
             );
         }
         Ok(())

@@ -56,9 +56,7 @@ impl AthleticCrawl {
         let progress = if request.phase == CrawlPhase::ContactRefresh {
             let operation = OperationRequest {
                 operation_id: format!("{}-wiaa", request.workflow_key()),
-                spec: OperationSpec::WiaaDirectory {
-                    config: request.config.clone(),
-                },
+                spec: wiaa_spec(&request),
             };
             ctx.service_client::<AthleticOperationsClient>()
                 .execute(Json(operation))
@@ -158,6 +156,9 @@ impl AthleticCrawl {
                         return Ok(progress);
                     }
                     let now = effects::now!(ctx)?;
+                    let scheduling =
+                        page::Scheduling::for_batch_turn(&request.config, request.batch, index)
+                            .terminal()?;
                     let selected =
                         effects::record!(ctx, &format!("select-page-{index:06}"), || {
                             page::select_scheduled(
@@ -166,7 +167,7 @@ impl AthleticCrawl {
                                 scope,
                                 now,
                                 &[],
-                                page::Scheduling::for_turn(&request.config, index),
+                                scheduling,
                             )
                         })?;
                     let Some(page) = selected else {
@@ -207,6 +208,20 @@ fn next_phase(request: &CrawlRequest, progress: &BatchProgress, due: Option<i64>
         }
         CrawlPhase::SchoolChains | CrawlPhase::ContactRefresh => CrawlPhase::PublicResults,
         CrawlPhase::PublicResults | CrawlPhase::Complete => CrawlPhase::Complete,
+    }
+}
+
+fn wiaa_spec(request: &CrawlRequest) -> OperationSpec {
+    if request.config.run.is_some() {
+        OperationSpec::WiaaDirectoryRun {
+            config: request.config.clone(),
+            deadline_ms: request.deadline_ms,
+            cooldown_ms: request.cooldown_ms,
+        }
+    } else {
+        OperationSpec::WiaaDirectory {
+            config: request.config.clone(),
+        }
     }
 }
 

@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use super::{BatchProgress, CrawlPhase, CrawlRequest, QueueState, next_phase};
 use crate::config::Config;
+use crate::durable::operations::OperationSpec;
 
 fn request(phase: CrawlPhase, focused: bool, contacts: bool) -> Result<CrawlRequest> {
     Ok(CrawlRequest {
@@ -72,5 +73,33 @@ fn broad_school_runs_still_wait_for_deferrals_and_contact_refresh_advances_norma
         ),
         CrawlPhase::PublicResults
     );
+    Ok(())
+}
+
+#[test]
+fn wiaa_contact_refresh_propagates_resolved_bounds_only_for_new_configured_runs() -> Result<()> {
+    let mut legacy = request(CrawlPhase::ContactRefresh, true, true)?;
+    let original = super::wiaa_spec(&legacy);
+    assert!(matches!(original, OperationSpec::WiaaDirectory { .. }));
+    let encoded = serde_json::to_string(&original)?;
+    let decoded: OperationSpec = serde_json::from_str(&encoded)?;
+    assert_eq!(serde_json::to_string(&decoded)?, encoded);
+    legacy.config.run = Some(crate::config::RunSettings {
+        hours: 1,
+        max_batches: 10,
+        cooldown_seconds: 120,
+    });
+    legacy.deadline_ms = 3_601_000;
+    legacy.cooldown_ms = 120_000;
+    let OperationSpec::WiaaDirectoryRun {
+        config,
+        deadline_ms,
+        cooldown_ms,
+    } = super::wiaa_spec(&legacy)
+    else {
+        anyhow::bail!("bounded WIAA operation missing")
+    };
+    assert_eq!((deadline_ms, cooldown_ms), (3_601_000, 120_000));
+    assert_eq!(config.run, legacy.config.run);
     Ok(())
 }

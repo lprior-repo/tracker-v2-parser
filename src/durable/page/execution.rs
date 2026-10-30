@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 
 use super::{
     CaptureRef, FailureClass, FailureRecord, FetchDecision, PageOutcome, PageReservation,
-    ParseDecision, ParsedRef, artifacts,
+    ParseDecision, ParsedRef, RetryPolicy, artifacts,
 };
 use crate::{
     database::Database,
@@ -19,6 +19,26 @@ pub async fn fetch(
     transport: &mut Transport,
     now_ms: i64,
 ) -> Result<FetchDecision> {
+    fetch_with_policy(
+        database,
+        root,
+        reservation,
+        transport,
+        now_ms,
+        &RetryPolicy::default(),
+    )
+    .await
+}
+
+pub(super) async fn fetch_with_policy(
+    database: &Database,
+    root: &Path,
+    reservation: &PageReservation,
+    transport: &mut Transport,
+    now_ms: i64,
+    policy: &RetryPolicy,
+) -> Result<FetchDecision> {
+    policy.check(&reservation.request)?;
     let started = tokio::time::Instant::now();
     let (capture, _, outcome) = database.durable_stages(reservation).await?;
     if let Some(outcome) = outcome {
@@ -32,7 +52,15 @@ pub async fn fetch(
         if let Err(failure) =
             crate::transport::prepare_response(reservation.request.target.kind, restored)
         {
-            return super::failures::record(database, root, reservation, failure, now_ms).await;
+            return super::failures::record_with_policy(
+                database,
+                root,
+                reservation,
+                failure,
+                now_ms,
+                policy,
+            )
+            .await;
         }
         database
             .durable_record_capture(reservation, &capture)
@@ -41,7 +69,7 @@ pub async fn fetch(
     }
     if now_ms >= reservation.request.binding.scope.deadline_ms {
         let outcome = database
-            .durable_fail(
+            .durable_fail_with_policy(
                 reservation,
                 FailureRecord {
                     class: FailureClass::Transient,
@@ -50,6 +78,7 @@ pub async fn fetch(
                     stopped_origin: None,
                     observed_at_ms: now_ms,
                 },
+                policy,
             )
             .await?;
         return Ok(FetchDecision::Settled { outcome });
@@ -61,9 +90,27 @@ pub async fn fetch(
     let fetched = transport.fetch(&reservation.request.target).await;
     let completed_at_ms = completion_time(now_ms, started.elapsed())?;
     match fetched {
-        Ok(capture) => retain_response(database, root, reservation, capture, completed_at_ms).await,
+        Ok(capture) => {
+            retain_response_with_policy(
+                database,
+                root,
+                reservation,
+                capture,
+                completed_at_ms,
+                policy,
+            )
+            .await
+        }
         Err(failure) => {
-            super::failures::record(database, root, reservation, failure, completed_at_ms).await
+            super::failures::record_with_policy(
+                database,
+                root,
+                reservation,
+                failure,
+                completed_at_ms,
+                policy,
+            )
+            .await
         }
     }
 }
@@ -75,11 +122,40 @@ pub(super) async fn retain_response(
     capture: Capture,
     now_ms: i64,
 ) -> Result<FetchDecision> {
+    retain_response_with_policy(
+        database,
+        root,
+        reservation,
+        capture,
+        now_ms,
+        &RetryPolicy::default(),
+    )
+    .await
+}
+
+async fn retain_response_with_policy(
+    database: &Database,
+    root: &Path,
+    reservation: &PageReservation,
+    capture: Capture,
+    now_ms: i64,
+    policy: &RetryPolicy,
+) -> Result<FetchDecision> {
     match crate::transport::sanitize_response(capture) {
         Ok(capture) => retain(database, root, reservation, capture, now_ms)
             .await
             .map(|capture| FetchDecision::Captured { capture }),
-        Err(failure) => super::failures::record(database, root, reservation, failure, now_ms).await,
+        Err(failure) => {
+            super::failures::record_with_policy(
+                database,
+                root,
+                reservation,
+                failure,
+                now_ms,
+                policy,
+            )
+            .await
+        }
     }
 }
 

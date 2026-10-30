@@ -3,6 +3,7 @@ use std::ops::Range;
 use anyhow::{Context, Result, ensure};
 use lol_html::{HtmlRewriter, MemorySettings, Settings, element, html_content::TextChunk, text};
 use regex::Regex;
+use sha2::{Digest, Sha256};
 
 use super::{ASSIGNMENT, ENTITY, decode_key, html_assignments};
 
@@ -64,11 +65,13 @@ fn inspect(
     }
     ensure!(
         !ambiguous_computed(body),
-        "cannot safely classify computed script assignments"
+        "cannot safely classify computed script assignments [{}]",
+        rejection_metadata(body)
     );
     ensure!(
         identified(body, secret)?,
-        "cannot safely classify sensitive script"
+        "cannot safely classify sensitive script [{}]",
+        rejection_metadata(body)
     );
     ranges.push(range);
     Ok(())
@@ -85,6 +88,44 @@ fn discarded_telemetry_loader(body: &str) -> bool {
         && configuration.contains(";(window.NREUM||(NREUM={})).loader_config=")
         && loader.starts_with("(()=>{")
         && loader.ends_with("})()})();")
+}
+
+fn rejection_metadata(body: &str) -> String {
+    let version = telemetry_version(body);
+    format!(
+        "script_bytes={};sha256={:x};nreum_prefix={};loader_config={};license={};pinned_license={};closure={};challenge_marker={};vendor_version={}",
+        body.len(),
+        Sha256::digest(body.as_bytes()),
+        body.trim().starts_with("(window.NREUM||(NREUM={})).init="),
+        body.contains(";(window.NREUM||(NREUM={})).loader_config="),
+        version.is_some(),
+        version == Some("1.324.0"),
+        body.trim().ends_with("})()})();"),
+        [
+            "/cdn-cgi/challenge-platform/",
+            "grecaptcha",
+            "g-recaptcha",
+            "cf-turnstile"
+        ]
+        .into_iter()
+        .any(|marker| body.contains(marker)),
+        version.map_or("unknown", core::convert::identity)
+    )
+}
+
+fn telemetry_version(body: &str) -> Option<&str> {
+    let suffix = body
+        .split_once("/*! For license information please see nr-loader-spa-")?
+        .1;
+    let version = suffix.split_once(".min.js.LICENSE.txt */")?.0;
+    let valid = version.len() <= 20
+        && version.split('.').count() == 3
+        && version.split('.').all(|component| {
+            !component.is_empty()
+                && component.len() <= 6
+                && component.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    valid.then_some(version)
 }
 
 fn identified(body: &str, secret: &Regex) -> Result<bool> {
