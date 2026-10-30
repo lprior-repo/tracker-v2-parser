@@ -665,6 +665,15 @@ terminal. Configured crawl deadlines and finite retry budgets still apply;
 durability preserves checkpoints and published exports, rather than promising
 that every possible failure can finish without operator intervention.
 
+For unattended macOS workers, keep the live workbook and manifest under the
+private Application Support runtime. A LaunchAgent opening a file in Documents
+can wait indefinitely for a macOS folder-access prompt, retaining blocking tasks
+across Restate retries. Create user-facing symbolic links from the workspace to
+the live workbook and manifest when setting up the worker. Atomic replacement of
+the private files keeps those links current without background Documents access.
+Keep worker configuration snapshots private and preserve the prior snapshot
+when changing the delivery path. No additional folder permission is required.
+
 macOS temporary-directory paths can contain a `/var` symlink. Migration backup
 inputs must use canonical, existing paths: source symlinks and symlinked parents
 are intentionally rejected. Test fixture roots are canonicalized before creating
