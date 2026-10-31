@@ -2,6 +2,7 @@ WITH missing_records AS MATERIALIZED (
     SELECT a.id FROM athletes a
     WHERE a.name IS NOT NULL AND a.graduation_year=ANY($2::integer[])
       AND NOT EXISTS (SELECT 1 FROM results r WHERE r.athlete_id=a.id)
+      AND NOT EXISTS (SELECT 1 FROM valid_reviewed_result_links l WHERE l.target_athlete_id=a.id)
 ), school_links AS MATERIALIZED (
     SELECT DISTINCT p.athlete_id,p.school_id,
            COALESCE((p.details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean
@@ -45,7 +46,7 @@ WITH missing_records AS MATERIALIZED (
           WHERE lower(btrim(selected.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))=school_state.state)
     GROUP BY a.athlete_id
 ), candidates AS MATERIALIZED (
-    SELECT p.*, durable.state AS durable_state, durable.retry_at_ms, p.cursor->'context' AS context,
+    SELECT p.*, p.cursor->'context' AS context,
            availability.id IS NOT NULL AS availability_diagnostic,
            s.name AS observed_school, a.name AS observed_athlete,
            COALESCE(availability.scope_state,NULLIF(btrim(p.cursor->'context'->>'acquisition_state'),''),
@@ -60,7 +61,6 @@ WITH missing_records AS MATERIALIZED (
     LEFT JOIN schools s ON s.source=p.source AND s.source_id=p.cursor->'context'->>'school_id'
     LEFT JOIN athlete_sources a ON a.source=p.source AND a.source_id=p.cursor->'context'->>'athlete_id'
     LEFT JOIN schools athlete_school ON athlete_school.id=a.school_id
-    LEFT JOIN LATERAL (SELECT state,retry_at_ms FROM durable_page_operations WHERE page_id=p.id ORDER BY created_at DESC,operation_id DESC LIMIT 1) durable ON TRUE
     WHERE p.id>$3::bigint AND (p.status IN ('failed','blocked') OR availability.id IS NOT NULL)
 ), scoped AS MATERIALIZED (
     SELECT * FROM candidates p
@@ -75,12 +75,13 @@ WITH missing_records AS MATERIALIZED (
         'athlete',COALESCE(observed_athlete,''),'athlete_source_id',COALESCE(context->>'athlete_id',''),
         'url',url,'status',status,'attempts',attempts,
         'error',CASE WHEN availability_diagnostic THEN 'No public PR/result rows in captured profile evidence; source progression is restricted. This does not establish career absence.' ELSE COALESCE(last_error,'') END,
-        'durable_state',COALESCE(durable_state,''),
-        'retry_after',COALESCE(to_char(to_timestamp(retry_at_ms::double precision/1000) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),''),
+        'durable_state',COALESCE(durable.state,''),
+        'retry_after',COALESCE(to_char(to_timestamp(durable.retry_at_ms::double precision/1000) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),''),
         'last_success',COALESCE(to_char(last_success AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),''),
         'created',to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
         'next_action','','ai_guidance',''
     ) AS document FROM scoped
+    LEFT JOIN LATERAL (SELECT state,retry_at_ms FROM durable_page_operations WHERE page_id=scoped.id ORDER BY created_at DESC,operation_id DESC LIMIT 1) durable ON TRUE
 )
 SELECT CASE WHEN octet_length(document::text)<=65536 THEN document::text END,
        octet_length(document::text)::bigint

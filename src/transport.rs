@@ -509,6 +509,8 @@ mod tests {
         for (url, status, blocked) in [
             ("https://school.example.edu/staff", 403, true),
             ("https://school.example.edu/staff", 500, false),
+            ("https://school.example.edu/staff", 522, false),
+            ("https://school.example.edu/staff", 526, false),
             ("https://school.example.edu/login", 200, true),
         ] {
             let failure = super::prepare_response(PageKind::Contacts, contact_capture(url, status))

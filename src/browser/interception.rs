@@ -259,17 +259,35 @@ async fn fulfill(
             AUXILIARY_POLICY,
         ));
     }
-    let params = FulfillRequestParams::builder()
+    let status = response.status;
+    let params = fulfillment_params(event, response)?;
+    timeout(COMMAND_TIMEOUT, page.execute(params))
+        .await
+        .context("fulfilling browser request timed out")?
+        .with_context(|| {
+            format!(
+                "fulfilling browser {:?} response with HTTP {status}",
+                event.resource_type
+            )
+        })?;
+    Ok(())
+}
+
+fn fulfillment_params(
+    event: &EventRequestPaused,
+    response: exchange::Response,
+) -> Result<FulfillRequestParams> {
+    let phrase = reqwest::StatusCode::from_u16(response.status)?
+        .canonical_reason()
+        .map_or("Upstream response", std::convert::identity);
+    FulfillRequestParams::builder()
         .request_id(event.request_id.clone())
         .response_code(response.status)
+        .response_phrase(phrase)
         .response_headers(response.headers)
         .body(exchange::encoded_body(&response.body))
         .build()
-        .map_err(|error| anyhow!(error))?;
-    timeout(COMMAND_TIMEOUT, page.execute(params))
-        .await
-        .context("fulfilling browser request timed out")??;
-    Ok(())
+        .map_err(|error| anyhow!(error))
 }
 
 #[cfg(test)]

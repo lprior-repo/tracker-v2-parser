@@ -20,6 +20,7 @@ use tokio::{
 use super::Browser;
 use crate::model::{PageContext, PageKind, Source, Target};
 
+mod protocol;
 mod regressions;
 
 type Routes = BTreeMap<String, (u16, String, String, String)>;

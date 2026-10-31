@@ -72,7 +72,12 @@ pub(super) fn profile_link(value: &str) -> Result<(Source, String)> {
             .windows(2)
             .find(|pair| pair.first() == Some(&"athletes"))
             .and_then(|pair| pair.get(1))
-            .map(|id| (Source::MileSplit, (*id).to_owned()))
+            .and_then(|part| match part.split_once('-') {
+                Some((id, slug)) if !slug.is_empty() && !slug.contains('%') => Some(id),
+                Some(_) => None,
+                None => Some(*part),
+            })
+            .map(|id| (Source::MileSplit, id.to_owned()))
     } else {
         None
     };

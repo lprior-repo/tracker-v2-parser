@@ -1,3 +1,5 @@
+#[path = "reviewed_result_links/availability.rs"]
+mod availability;
 #[allow(dead_code)]
 mod support;
 use anyhow::{Context, Result, ensure};
