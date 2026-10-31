@@ -73,6 +73,28 @@ async fn active_lease_polling_releases_three_rps_slots_after_slow_headers() -> R
                 assert_eq!(response?.status().as_u16(), 200);
             }
             assert_eq!(arrivals.len(), 4);
+            let fixture_intervals_micros = arrivals
+                .windows(2)
+                .map(|pair| pair[1].1.duration_since(pair[0].1).as_micros())
+                .collect::<Vec<_>>();
+            let operation_ids = (0..4)
+                .map(|index| format!("{index:064x}"))
+                .collect::<Vec<_>>();
+            let admission_rows = sqlx::query_as::<_, (String, i64, Option<i64>)>(
+                "SELECT operation_id, \
+                 round(EXTRACT(EPOCH FROM started_at) * 1000000)::bigint AS started_at_unix_micros, \
+                 round(EXTRACT(EPOCH FROM (started_at - LAG(started_at) OVER (ORDER BY started_at))) \
+                   * 1000000)::bigint AS interval_micros \
+                 FROM durable_wire_requests WHERE operation_id = ANY($1) ORDER BY started_at",
+            )
+            .bind(&operation_ids)
+            .fetch_all(pool)
+            .await?;
+            assert_eq!(admission_rows.len(), 4, "durable admission rows: {admission_rows:?}");
+            eprintln!(
+                "three-RPS timing evidence: fixture_receive_intervals_micros={fixture_intervals_micros:?}; \
+                 persisted_admissions=(operation_id,started_at_unix_micros,interval_micros)={admission_rows:?}"
+            );
             for pair in arrivals.windows(2) {
                 assert!(pair[1].1.duration_since(pair[0].1) >= Duration::from_millis(323));
             }
