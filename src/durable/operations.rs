@@ -2,6 +2,7 @@ mod artifacts;
 mod bundle;
 mod export;
 mod imports;
+mod research;
 
 use std::path::PathBuf;
 
@@ -49,6 +50,12 @@ pub enum OperationSpec {
         manifest: Artifact,
     },
     ReviewedIdentity {
+        manifest: Artifact,
+    },
+    ReviewedResearch {
+        manifest: Artifact,
+    },
+    ReviewedResultLinks {
         manifest: Artifact,
     },
     OfflineReplay {

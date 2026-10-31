@@ -20,7 +20,7 @@ async fn given_persisted_results_when_replay_restarts_then_migrations_preserve_o
         let tables: Vec<String> = sqlx::query_scalar(
             "SELECT tablename::text FROM pg_tables WHERE schemaname=current_schema() AND tablename <> '_sqlx_migrations' ORDER BY tablename")
             .fetch_all(&test.pool).await?;
-        assert_eq!(tables, vec!["athlete_sources", "athletes", "contacts", "durable_operation_receipts", "durable_page_attempts", "durable_page_operations", "durable_page_receipts", "durable_wire_pacing", "durable_wire_requests", "results", "schools", "scrape_pages"]);
+        assert_eq!(tables, vec!["athlete_sources", "athletes", "contacts", "durable_operation_receipts", "durable_page_attempts", "durable_page_operations", "durable_page_receipts", "durable_wire_pacing", "durable_wire_requests", "results", "reviewed_result_links", "schools", "scrape_pages"]);
         Ok(())
     })).await
 }

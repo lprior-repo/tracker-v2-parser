@@ -1,4 +1,4 @@
-use super::super::manifest::{Inventory, TABLES, Table};
+use super::super::manifest::{CORE_TABLES, Inventory, PREVIOUS_TABLES, TABLES, Table};
 use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
 use sha2::{Digest, Sha256};
@@ -7,9 +7,9 @@ use std::collections::BTreeSet;
 
 #[tracing::instrument(skip_all)]
 pub async fn collect(connection: &mut PgConnection, count: usize) -> Result<Inventory> {
-    ensure!(matches!(count, 7 | 13), "unsupported inventory scope");
+    let scope = tables_for_count(count)?;
     check_tables(connection, count).await?;
-    let tables = stream::iter(TABLES.into_iter().take(count).map(Ok::<_, anyhow::Error>))
+    let tables = stream::iter(scope.iter().copied().map(Ok::<_, anyhow::Error>))
         .try_fold(
             (connection, Vec::new()),
             |(connection, mut tables), (name, key)| async move {
@@ -51,7 +51,7 @@ pub async fn collect(connection: &mut PgConnection, count: usize) -> Result<Inve
 
 #[tracing::instrument(skip_all)]
 pub async fn check_tables(connection: &mut PgConnection, count: usize) -> Result<()> {
-    ensure!(matches!(count, 7 | 13), "unsupported inventory scope");
+    let scope = tables_for_count(count)?;
     let actual = sqlx::query_scalar::<_, String>(
         "SELECT tablename::text FROM pg_tables WHERE schemaname='public'",
     )
@@ -59,18 +59,36 @@ pub async fn check_tables(connection: &mut PgConnection, count: usize) -> Result
     .await?
     .into_iter()
     .collect::<BTreeSet<_>>();
-    let core = TABLES
-        .iter()
-        .take(7)
-        .map(|(name, _)| (*name).to_owned())
-        .collect::<BTreeSet<_>>();
-    let full = TABLES
+    let expected = scope
         .iter()
         .map(|(name, _)| (*name).to_owned())
         .collect::<BTreeSet<_>>();
+    let known = [
+        CORE_TABLES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<BTreeSet<_>>(),
+        PREVIOUS_TABLES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<BTreeSet<_>>(),
+        TABLES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<BTreeSet<_>>(),
+    ];
     ensure!(
-        actual == full || (count == 7 && actual == core),
+        actual == expected || (count == 7 && known.contains(&actual)),
         "public table set differs from known application schema; refusing unverified database scope"
     );
     Ok(())
+}
+
+fn tables_for_count(count: usize) -> Result<&'static [(&'static str, &'static str)]> {
+    match count {
+        7 => Ok(&CORE_TABLES),
+        13 => Ok(&PREVIOUS_TABLES),
+        14 => Ok(&TABLES),
+        _ => anyhow::bail!("unsupported inventory scope"),
+    }
 }

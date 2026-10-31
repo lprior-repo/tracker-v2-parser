@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     archive, database, files,
-    manifest::{FORMAT, Inventory, Manifest, TABLES, Table},
+    manifest::{FORMAT, Inventory, Manifest, PREVIOUS, PREVIOUS_TABLES, TABLES, Table},
     paths, restore,
 };
 
@@ -96,7 +96,7 @@ fn bundle(root: &Path) -> Result<()> {
 }
 
 #[test]
-fn given_complete_bundle_when_native_archive_roundtrips_then_all_thirteen_fingerprints_survive()
+fn given_complete_bundle_when_native_archive_roundtrips_then_all_fourteen_fingerprints_survive()
 -> Result<()> {
     let source = temporary()?;
     bundle(source.path())?;
@@ -106,14 +106,90 @@ fn given_complete_bundle_when_native_archive_roundtrips_then_all_thirteen_finger
     let target = temporary()?;
     let (manifest, inventory) = archive::unpack(&archive, target.path())?;
     assert_eq!(manifest.format, FORMAT);
-    assert_eq!(inventory.tables.len(), 13);
+    assert_eq!(inventory.tables.len(), 14);
     assert!(
         inventory
             .tables
             .iter()
             .any(|table| table.name == "durable_wire_requests")
     );
+    assert_eq!(
+        inventory.tables.last().map(|table| table.name.as_str()),
+        Some("reviewed_result_links")
+    );
     assert!(archive::write(source.path(), &archive).is_err());
+    Ok(())
+}
+
+#[test]
+fn given_previous_v2_bundle_when_native_archive_roundtrips_then_exact_thirteen_table_scope_survives()
+-> Result<()> {
+    let source = temporary()?;
+    bundle(source.path())?;
+    let mut inventory: Inventory = files::load(
+        &source.path().join("inventory.json"),
+        super::manifest::SMALL,
+    )?;
+    inventory.tables.truncate(PREVIOUS_TABLES.len());
+    std::fs::remove_file(source.path().join("inventory.json"))?;
+    files::json(&source.path().join("inventory.json"), &inventory)?;
+    let mut manifest: Manifest =
+        files::load(&source.path().join("manifest.json"), 64 * 1024 * 1024)?;
+    manifest.format = PREVIOUS.into();
+    std::fs::remove_file(source.path().join("manifest.json"))?;
+    manifest.files = files::list(source.path())?
+        .iter()
+        .map(|path| files::fingerprint(source.path(), path))
+        .collect::<Result<Vec<_>>>()?;
+    files::json(&source.path().join("manifest.json"), &manifest)?;
+    let work = temporary()?;
+    let archive = work.path().join("previous-v2.tar.gz");
+    archive::write(source.path(), &archive)?;
+    let target = temporary()?;
+    let (manifest, actual) = archive::unpack(&archive, target.path())?;
+    assert_eq!(manifest.format, PREVIOUS);
+    assert_eq!(actual.tables.len(), 13);
+    assert_eq!(
+        actual
+            .tables
+            .iter()
+            .map(|table| table.name.as_str())
+            .collect::<Vec<_>>(),
+        PREVIOUS_TABLES
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+#[test]
+fn given_current_v3_bundle_missing_audited_table_when_restored_then_validation_fails() -> Result<()>
+{
+    let source = temporary()?;
+    bundle(source.path())?;
+    let mut inventory: Inventory = files::load(
+        &source.path().join("inventory.json"),
+        super::manifest::SMALL,
+    )?;
+    inventory.tables.pop();
+    std::fs::remove_file(source.path().join("inventory.json"))?;
+    files::json(&source.path().join("inventory.json"), &inventory)?;
+    let mut manifest: Manifest =
+        files::load(&source.path().join("manifest.json"), 64 * 1024 * 1024)?;
+    std::fs::remove_file(source.path().join("manifest.json"))?;
+    manifest.files = files::list(source.path())?
+        .iter()
+        .map(|path| files::fingerprint(source.path(), path))
+        .collect::<Result<Vec<_>>>()?;
+    files::json(&source.path().join("manifest.json"), &manifest)?;
+    let work = temporary()?;
+    let archive = work.path().join("missing-v3-table.tar.gz");
+    archive::write(source.path(), &archive)?;
+    let target = temporary()?;
+    let error =
+        archive::unpack(&archive, target.path()).expect_err("v3 must include audited table");
+    assert!(format!("{error:#}").contains("table inventory"));
     Ok(())
 }
 

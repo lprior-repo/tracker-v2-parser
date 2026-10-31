@@ -118,7 +118,7 @@ async fn restore_database(
     let mut connection = database::connect(database).await?;
     let mut snapshot = connection.begin().await?;
     database::prepare_snapshot(&mut snapshot).await?;
-    let actual = database::inventory(&mut snapshot, if legacy { 7 } else { 13 }).await?;
+    let actual = database::inventory(&mut snapshot, expected.tables.len()).await?;
     ensure!(
         &actual == expected,
         "restored logical table hashes or counts differ from source inventory"

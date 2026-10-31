@@ -70,13 +70,58 @@ WITH school_links AS (
     JOIN contacts c ON c.school_id = s.id AND c.kind = 'coach'
     GROUP BY sl.athlete_id
 ), performance_data AS (
-    SELECT p.athlete_id,
+    SELECT owner.athlete_id,
            jsonb_agg(jsonb_build_object(
-               'source', r.source, 'url', r.source_url, 'performance', r.raw
+               'source', r.source,
+               'url', r.source_url,
+               'performance', CASE WHEN owner.reviewed_link IS NULL THEN r.raw ELSE
+                   jsonb_build_object(
+                       'athlete_id', owner.source_athlete_id,
+                       'event', r.event,
+                       'mark', r.raw_mark,
+                       'reported_status', NULL,
+                       'source_values', COALESCE(r.raw->'raw','{}'::jsonb)
+                           || jsonb_build_object('reviewed_result_link', jsonb_build_object(
+                               'reviewed_by', owner.reviewed_by,
+                               'researcher', owner.researcher,
+                               'reviewed_at', owner.reviewed_at,
+                               'manifest_sha256', owner.manifest_sha256,
+                               'evidence', owner.evidence
+                           )),
+                       'sport', CASE WHEN r.sport='xc' THEN 'cross_country' ELSE r.sport END,
+                       'result_id', r.source_result_id,
+                       'source_row', r.raw->>'source_row',
+                       'school_id', COALESCE(represented_school.source_id,r.raw->>'school_id'),
+                       'meet_id', r.meet_id,
+                       'meet_name', COALESCE(r.meet_name,r.raw->'raw'->>'meet_name'),
+                       'date', COALESCE(r.meet_date,r.raw->>'date'),
+                       'wind', r.wind,
+                       'timing', r.timing,
+                       'course', r.course,
+                       'is_personal_record', r.is_personal_record,
+                       'is_relay', r.is_relay,
+                       'season', r.season,
+                       'grade', r.grade,
+                       'gender', r.gender
+                   ) END
            ) ORDER BY r.source, r.id) AS performances
-    FROM results r JOIN athlete_sources p ON p.id = r.athlete_source_id
-    JOIN selected a ON a.id = p.athlete_id
-    GROUP BY p.athlete_id
+    FROM (
+        SELECT r.id,p.athlete_id,p.source_id AS source_athlete_id,
+               NULL::bigint AS reviewed_link,NULL::text AS reviewed_by,
+               NULL::text AS researcher,NULL::timestamptz AS reviewed_at,
+               NULL::text AS manifest_sha256,NULL::jsonb AS evidence
+        FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id
+        UNION ALL
+        SELECT r.id,l.target_athlete_id,p.source_id,l.result_id,l.reviewed_by,
+               l.researcher,l.reviewed_at,l.manifest_sha256,l.evidence
+        FROM valid_reviewed_result_links l
+        JOIN results r ON r.id=l.result_id
+        JOIN athlete_sources p ON p.id=l.target_athlete_source_id
+    ) owner
+    JOIN results r ON r.id=owner.id
+    LEFT JOIN schools represented_school ON represented_school.id=r.represented_school_id
+    JOIN selected a ON a.id = owner.athlete_id
+    GROUP BY owner.athlete_id
 )
 SELECT jsonb_build_object(
     'id', a.id, 'name', a.name, 'gender', a.gender, 'grade', a.grade,

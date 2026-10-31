@@ -3,8 +3,13 @@ WITH school_ids AS MATERIALIZED (
 ), bounded_profiles AS MATERIALIZED (
     SELECT id FROM athlete_sources WHERE athlete_id=$1 ORDER BY id LIMIT 10001
 ), bounded_results AS MATERIALIZED (
-    SELECT r.id FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id
-    WHERE p.athlete_id=$1 ORDER BY r.id LIMIT 10001
+    SELECT id FROM (
+        SELECT r.id FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id
+        WHERE p.athlete_id=$1
+        UNION
+        SELECT r.id FROM valid_reviewed_result_links l JOIN results r ON r.id=l.result_id
+        WHERE l.target_athlete_id=$1
+    ) observed ORDER BY id LIMIT 10001
 ), bounded_schools AS MATERIALIZED (
     SELECT s.id FROM schools s JOIN school_ids ids ON ids.id=s.id ORDER BY s.id LIMIT 10001
 ), bounded_contacts AS MATERIALIZED (
@@ -28,6 +33,8 @@ WITH school_ids AS MATERIALIZED (
         + COALESCE(octet_length(to_jsonb(r.source)::text)::bigint,0)
         + COALESCE(octet_length(to_jsonb(r.source_url)::text)::bigint,0)
         + COALESCE(octet_length(r.raw::text)::bigint,0)
+        + COALESCE((SELECT octet_length(l.evidence::text)::bigint
+                    FROM valid_reviewed_result_links l WHERE l.result_id=r.id),0)
     FROM results r JOIN bounded_results ids ON ids.id=r.id
     UNION ALL
     SELECT 'athlete schools', 1024::bigint

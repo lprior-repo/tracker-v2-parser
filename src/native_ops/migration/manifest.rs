@@ -1,12 +1,13 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(super) const FORMAT: &str = "track-scrapper-migration-v2";
+pub(super) const FORMAT: &str = "track-scrapper-migration-v3";
+pub(super) const PREVIOUS: &str = "track-scrapper-migration-v2";
 pub(super) const LEGACY: &str = "track-scrapper-migration-v1";
 pub(super) const MAX_FILES: usize = 250_000;
 pub(super) const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 pub(super) const SMALL: u64 = 1024 * 1024;
-pub(super) const TABLES: [(&str, &str); 13] = [
+pub(super) const CORE_TABLES: [(&str, &str); 7] = [
     ("_sqlx_migrations", "version"),
     ("athletes", "id"),
     ("athlete_sources", "id"),
@@ -14,6 +15,15 @@ pub(super) const TABLES: [(&str, &str); 13] = [
     ("results", "id"),
     ("contacts", "id"),
     ("scrape_pages", "id"),
+];
+pub(super) const PREVIOUS_TABLES: [(&str, &str); 13] = [
+    CORE_TABLES[0],
+    CORE_TABLES[1],
+    CORE_TABLES[2],
+    CORE_TABLES[3],
+    CORE_TABLES[4],
+    CORE_TABLES[5],
+    CORE_TABLES[6],
     ("durable_page_operations", "operation_id"),
     ("durable_page_attempts", "attempt_id"),
     ("durable_page_receipts", "operation_id"),
@@ -21,6 +31,31 @@ pub(super) const TABLES: [(&str, &str); 13] = [
     ("durable_wire_pacing", "pacing_key"),
     ("durable_wire_requests", "wire_id"),
 ];
+pub(super) const TABLES: [(&str, &str); 14] = [
+    PREVIOUS_TABLES[0],
+    PREVIOUS_TABLES[1],
+    PREVIOUS_TABLES[2],
+    PREVIOUS_TABLES[3],
+    PREVIOUS_TABLES[4],
+    PREVIOUS_TABLES[5],
+    PREVIOUS_TABLES[6],
+    PREVIOUS_TABLES[7],
+    PREVIOUS_TABLES[8],
+    PREVIOUS_TABLES[9],
+    PREVIOUS_TABLES[10],
+    PREVIOUS_TABLES[11],
+    PREVIOUS_TABLES[12],
+    ("reviewed_result_links", "source_result_key"),
+];
+
+pub(super) fn inventory_scope(format: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match format {
+        FORMAT => Some(&TABLES),
+        PREVIOUS => Some(&PREVIOUS_TABLES),
+        LEGACY => Some(&CORE_TABLES),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +108,7 @@ pub(super) fn digest(value: &str) -> bool {
 impl Manifest {
     pub fn validate(&self, actual: &[Fingerprint], inventory: &Inventory) -> Result<()> {
         ensure!(
-            matches!(self.format.as_str(), FORMAT | LEGACY),
+            inventory_scope(&self.format).is_some(),
             "unsupported migration format"
         );
         ensure!(
@@ -102,7 +137,7 @@ impl Manifest {
             "unsupported fixed archive paths"
         );
         ensure!(
-            (self.format == FORMAT && self.artifacts_dir.as_deref() == Some("durable-artifacts"))
+            (self.format != LEGACY && self.artifacts_dir.as_deref() == Some("durable-artifacts"))
                 || (self.format == LEGACY && self.artifacts_dir.is_none()),
             "artifact scope differs from archive version"
         );
@@ -127,18 +162,14 @@ impl Manifest {
                 .all(|name| self.files.iter().any(|file| file.path == *name)),
             "required payload is missing"
         );
-        let count = if self.format == LEGACY {
-            7
-        } else {
-            TABLES.len()
-        };
+        let scope = inventory_scope(&self.format).context("unsupported migration format")?;
         ensure!(
-            inventory.tables.len() == count
+            inventory.tables.len() == scope.len()
                 && inventory
                     .tables
                     .iter()
-                    .zip(TABLES)
-                    .all(|(table, (name, _))| table.name == name && digest(&table.sha256)),
+                    .zip(scope.iter())
+                    .all(|(table, (name, _))| table.name == *name && digest(&table.sha256)),
             "invalid table inventory"
         );
         Ok(())

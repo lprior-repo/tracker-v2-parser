@@ -44,7 +44,9 @@ async fn save(
          ON CONFLICT(school_id,kind,source_key) DO UPDATE SET \
          effective_from=COALESCE(EXCLUDED.effective_from,contacts.effective_from), \
          effective_until=COALESCE(EXCLUDED.effective_until,contacts.effective_until), \
-         email=EXCLUDED.email,raw=EXCLUDED.raw,last_checked=clock_timestamp()",
+         email=EXCLUDED.email,raw=CASE WHEN contacts.raw ? 'manual_research' \
+         THEN jsonb_set(EXCLUDED.raw,'{manual_research}',contacts.raw->'manual_research',true) \
+         ELSE EXCLUDED.raw END,last_checked=clock_timestamp()",
     ).bind(school).bind(&coach.name).bind(&coach.role).bind(&coach.email)
         .bind(coach.sport.map(crate::model::Sport::as_str)).bind(url)
         .bind(raw.get("effective_from").and_then(serde_json::Value::as_str))

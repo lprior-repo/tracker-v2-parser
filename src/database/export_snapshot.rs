@@ -287,7 +287,7 @@ impl<'a> ExportSnapshot<'a> {
 
     async fn check_components(&mut self, id: i64) -> Result<()> {
         let counts: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT 'athlete observations',count(*)::bigint FROM (SELECT r.id FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id WHERE p.athlete_id=$1 LIMIT 10001) r \
+            "SELECT 'athlete observations',count(*)::bigint FROM (SELECT id FROM (SELECT r.id FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id WHERE p.athlete_id=$1 UNION SELECT r.id FROM valid_reviewed_result_links l JOIN results r ON r.id=l.result_id WHERE l.target_athlete_id=$1) observed LIMIT 10001) r \
              UNION ALL SELECT 'athlete profiles',count(*)::bigint FROM (SELECT id FROM athlete_sources WHERE athlete_id=$1 LIMIT 10001) p"
         ).bind(id).fetch_all(&mut *self.transaction).await?;
         counts.into_iter().try_for_each(|(kind, count)| {
@@ -351,7 +351,7 @@ impl<'a> ExportSnapshot<'a> {
     }
 
     async fn read_issues_batch(&mut self) -> Result<Option<Vec<ExportIssue>>> {
-        let (_, issues, _, _) = stream::iter(0..3)
+        let (_, issues, _, _) = stream::iter(0..5)
             .map(Ok::<_, anyhow::Error>)
             .try_fold(
                 (self, Vec::new(), 0_usize, false),
@@ -431,7 +431,7 @@ impl<'a> ExportSnapshot<'a> {
             0,
             0,
         );
-        self.issues_finished = self.issue_cursor.0 > 2;
+        self.issues_finished = self.issue_cursor.0 > 4;
         Ok(())
     }
 

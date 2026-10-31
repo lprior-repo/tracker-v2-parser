@@ -16,7 +16,7 @@ use track_scrapper_v2::{
 };
 
 #[tokio::test]
-async fn given_thirteen_populated_tables_when_native_backup_restores_then_hashes_and_stops_survive()
+async fn given_fourteen_populated_tables_when_native_backup_restores_then_hashes_and_stops_survive()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         let admin_url = std::env::var("TEST_MIGRATION_ADMIN_DATABASE_URL")
@@ -125,7 +125,7 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
     .await?;
     seed_ledgers(&database).await?;
     let expected = fingerprint(&database).await?;
-    assert_eq!(expected.len(), 13);
+    assert_eq!(expected.len(), 14);
     assert!(expected.iter().all(|(_, count, _)| *count > 0));
     database.close().await;
     shadow::install(&source_url, source).await?;
@@ -199,6 +199,15 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
         .await?,
         "blocked"
     );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM valid_reviewed_result_links WHERE source_result_key=repeat('f',64)"
+        )
+        .fetch_one(restored_db.pool())
+        .await?,
+        1,
+        "reviewed result association and its audit snapshot must remain valid after restore"
+    );
     assert!(destination.join("durable-artifacts").is_dir());
     assert!(destination.join("private.env").is_file());
     assert!(!std::fs::read_to_string(destination.join("private.env"))?.contains("password"));
@@ -215,6 +224,29 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
 async fn seed_ledgers(database: &Database) -> Result<()> {
     sqlx::raw_sql("INSERT INTO schools(source,source_id,name,state,source_url) VALUES('milesplit','migration-fixture','Migration School','OH','https://school.test/directory'); INSERT INTO contacts(school_id,kind,role,name,email,source_key,source_url,raw) SELECT id,'coach','Head Coach','Fixture Coach','coach@school.test',repeat('a',64),'https://school.test/staff','{}'::jsonb FROM schools WHERE source_id='migration-fixture'; INSERT INTO scrape_pages(source,url,page_key,cursor,status,last_error) VALUES('milesplit','https://school.test/blocked',repeat('d',64),'{\"source\":\"milesplit\",\"kind\":\"contacts\",\"url\":\"https://school.test/blocked\",\"context\":{\"state\":\"OH\",\"school_id\":\"migration-fixture\"}}','blocked','403 retained stop'); INSERT INTO durable_wire_pacing(pacing_key) VALUES('migration-fixture'); INSERT INTO durable_wire_requests(wire_id,operation_id,attempt_id,request_sha256,occurrence,source,origin,method,state) VALUES(repeat('a',64),repeat('b',64),repeat('c',64),repeat('d',64),1,'milesplit','https://school.test','GET','intent');")
         .execute(database.pool()).await?;
+    sqlx::raw_sql(
+        "WITH school AS (SELECT id FROM schools WHERE source_id='migration-fixture'), athlete AS (\
+         INSERT INTO athletes(name,gender,graduation_year,school_id,state) \
+         SELECT 'Fixture Athlete','M',2027,id,'OH' FROM school RETURNING id,school_id), \
+         profile AS (INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url,name,school_id,state,gender,grade,graduation_year) \
+         SELECT id,'milesplit','migration-athlete','https://athlete.test/profile/migration-athlete','Fixture Athlete',school_id,'OH','M','11',2027 FROM athlete \
+         RETURNING id,school_id) \
+         INSERT INTO results(source_result_key,athlete_id,athlete_source_id,represented_school_id,source,source_result_id,event,raw_mark,normalized_numeric,normalized_unit,sport,status,is_personal_record,is_relay,season,grade,gender,source_url,raw) \
+         SELECT repeat('f',64),NULL,NULL,profile.school_id,'milesplit','migration-result','100 Meters','12.50',1250,'centipoints','outdoor','valid',false,false,2026,'11','M','https://school.test/results/fixture','{}'::jsonb FROM profile"
+    )
+    .execute(database.pool())
+    .await?;
+    sqlx::raw_sql(
+        "INSERT INTO reviewed_result_links(source_result_key,target_athlete_source_id,reviewed_by,researcher,reviewed_at,authorization_quote,manifest_sha256,evidence,result_snapshot,target_snapshot) \
+         SELECT r.source_result_key,p.id,'codex','gpt-6-luna',clock_timestamp(),'Authorized migration durability fixture',repeat('1',64), \
+         jsonb_build_array(jsonb_build_object('url','https://school.test/results/fixture','quote','Fixture Athlete 100 Meters 12.50')), \
+         jsonb_build_object('result_id',r.id,'source_result_key',r.source_result_key,'source_result_id',r.source_result_id,'source',r.source,'athlete_source_id',r.athlete_source_id,'athlete_id',r.athlete_id,'represented_school_id',r.represented_school_id,'event',r.event,'raw_mark',r.raw_mark,'sport',r.sport,'meet_id',r.meet_id,'meet_name',r.meet_name,'meet_date',r.meet_date,'wind',r.wind,'timing',r.timing,'specification',r.specification,'course',r.course,'status',r.status,'is_personal_record',r.is_personal_record,'is_relay',r.is_relay,'season',r.season,'grade',r.grade,'gender',r.gender,'source_url',r.source_url,'raw',r.raw,'normalized_numeric',r.normalized_numeric,'normalized_unit',r.normalized_unit), \
+         jsonb_build_object('athlete_source_id',p.id,'source',p.source,'source_id',p.source_id,'profile_url',p.profile_url,'athlete_id',p.athlete_id,'profile_name',p.name,'profile_school_id',p.school_id,'profile_gender',p.gender,'profile_grade',p.grade,'profile_graduation_year',p.graduation_year,'athlete_name',a.name,'athlete_gender',a.gender,'athlete_graduation_year',a.graduation_year,'athlete_school_id',a.school_id,'athlete_state',a.state,'school_source',s.source,'school_source_id',s.source_id,'school_name',s.name,'school_state',s.state) \
+         FROM results r JOIN athlete_sources p ON p.source_id='migration-athlete' JOIN athletes a ON a.id=p.athlete_id JOIN schools s ON s.id=p.school_id \
+         WHERE r.source_result_key=repeat('f',64)"
+    )
+    .execute(database.pool())
+    .await?;
     operation_receipts::with_receipt(
         database.pool(),
         "migration-fixture",

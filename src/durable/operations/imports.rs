@@ -14,6 +14,8 @@ enum Input {
     Private(PrivateDirectory),
     Cooperatives(Artifact),
     Identity(Artifact),
+    Research(super::research::Reviewed),
+    ResultLinks(crate::reviewed_result_links::Prepared),
 }
 
 fn enrichment(report: &school_directory::EnrichmentReport) -> Value {
@@ -116,6 +118,12 @@ fn prepare(workspace: &Workspace, spec: &OperationSpec) -> Result<Input> {
             workspace.read(manifest)?;
             Ok(Input::Identity(manifest.clone()))
         }
+        OperationSpec::ReviewedResearch { manifest } => Ok(Input::Research(
+            super::research::prepare(workspace, manifest)?,
+        )),
+        OperationSpec::ReviewedResultLinks { manifest } => Ok(Input::ResultLinks(
+            crate::reviewed_result_links::prepare(workspace, manifest)?,
+        )),
         OperationSpec::DownloadPublicSchools { expected_sha256 } => {
             let path = workspace.path("downloaded-public-schools.csv")?;
             let artifact = Artifact {
@@ -167,6 +175,12 @@ async fn apply(connection: &mut sqlx::PgConnection, input: Input) -> Result<Valu
                 &manifest.sha256,
             )
             .await?,
+        )?),
+        Input::Research(reviewed) => Ok(serde_json::to_value(
+            super::research::apply(connection, reviewed).await?,
+        )?),
+        Input::ResultLinks(prepared) => Ok(serde_json::to_value(
+            crate::reviewed_result_links::apply(connection, prepared).await?,
         )?),
     }
 }

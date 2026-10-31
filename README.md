@@ -250,6 +250,51 @@ identity decision or preferred name; an unaccepted name retains the ordinary
 conflict/separation behavior. Published `sameAs` links retain the existing
 automatic identity safeguards.
 
+The Minnesota 2027 run template is `config/runs/minnesota.toml`; it uses a
+separate named export while retaining the same durable acquisition path.
+
+Public findings researched manually can be applied only through a Restate
+`reviewed_research` operation. The schema-1 manifest records the exact user
+authorization quote, `reviewed_by: "codex"`, `researcher: "gpt-6-luna"`, a UTC
+review time, and staged capture artifacts with their primary URLs, UTC capture
+times and capture kinds (`web_tool_text`, `browser_dom`, or `retained_html`).
+Evidence references are zero-based indexes into the manifest's evidence list.
+Address changes cite `evidence`; coach claims cite separate
+`name_role_evidence` and `email_evidence` lists, so claims drawn from different
+URLs retain both source records. Stage the manifest and every referenced capture
+under the worker's private artifact root, then submit an ordinary
+`OperationRequest` with `spec.kind = "reviewed_research"` and its staged manifest
+descriptor using `durable operation --request ...`.
+
+The importer bounds and verifies every artifact before opening its database
+transaction and rejects unknown fields, stale school IDs/names/cities/states,
+duplicate targets, invalid public URLs, and mismatched capture hashes or lengths.
+School addresses and postal codes are filled only when blank; conflicting
+populated values reject the complete transaction. Coach claims require an exact
+provider school identity, published name, sport, gender, role and email. Existing
+contacts are retained, and the existing source-claim key (source URL, name,
+role, sport and normalized email) prevents exact duplicate claims. Each saved field records the honest AI reviewer,
+research model, manifest hash, source URL, evidence hash, capture time and user
+authorization quote. This operation does not merge athlete identities. Later
+crawler observations preserve manually reviewed nonblank address fields while
+allowing unresearched blank fields, such as a missing postal code, to be filled.
+Conflicting street, postal or school identity claims leave the reviewed values in
+place and append `needs_review` entries under
+`schools.address_provenance.manual_research_conflicts`. Coach audit records live
+under `contacts.raw.manual_research` and survive exact source-claim replays.
+
+
+A separate `reviewed_result_links` operation attributes an existing unassigned
+MileSplit XC result to an exact existing athlete profile. Its bounded schema-1
+manifest retains the published row coordinates, result facts, target identity,
+and hashed source evidence. The transaction rejects stale or conflicting
+facts, known gender mismatches and existing source owners. It keeps the original
+result, PR flag and profile identities unchanged. Exports use a link only while
+both stored snapshots still match; changed evidence produces a Review entry.
+Each result accepts one immutable reviewed claim. Reassigning that claim to
+another athlete requires a separate audited correction workflow, which is not
+implemented by this importer.
+
 
 Before parsing a source response, the durable worker retains its
 transport-sanitized bytes under their SHA-256 content address inside its private
@@ -505,16 +550,19 @@ it does not back up athletes, results, checkpoints, retained HTML, or workbooks.
 GitHub carries the code and migrations, not the live database or credentials.
 
 The Rust migration tools run through Moon and require PostgreSQL command-line tools.
-Use the same PostgreSQL major version on both machines. A version-two backup captures
-all six application tables, six durability tables and SQLx migration history from
-one exported database snapshot, plus retained evidence, the selected configuration,
-saved exports and the explicitly selected durable artifact directory. It does
+Use the same PostgreSQL major version on both machines. A version-three backup captures
+the six application tables, six durability tables, SQLx migration history, and
+reviewed result-link audit records from one exported database snapshot, plus retained
+evidence, the selected configuration, saved exports and the explicitly selected
+durable artifact directory. It does
 not copy role passwords, `.env`, browser profiles, old backup directories, or
 unrelated Downloads. Backup and restore share the same credential-filename
 rejection policy. Original evidence paths remain provenance; portable evidence
 files are named by SHA-256.
-Version-two archives verify every capture and parse artifact referenced by that
-snapshot. A missing or corrupt referenced blob prevents publication. Restate's
+Version-three and compatible version-two archives verify every capture and parse
+artifact referenced by that snapshot. Version-two archives retain their exact
+13-table inventory scope and do not claim to fingerprint reviewed result-link
+records. A missing or corrupt referenced blob prevents publication. Restate's
 server journals and configuration require a separate stopped-server backup.
 Legacy version-one archives verify their original seven-table inventory only;
 their durability records and artifacts are not certified by that format.
@@ -586,8 +634,8 @@ fingerprints before publishing the restored files. It never cleans or drops an
 existing database. A failed restore identifies any newly created partial target.
 
 The new data directory contains `config.toml`, `evidence`, `exports`, and a private
-`.env` configured for the destination, plus `durable-artifacts` for version-two
-bundles and a JSON-string `private.env` for the Rust worker installer. Build from
+`.env` configured for the destination, plus `durable-artifacts` for version-two and
+version-three bundles and a JSON-string `private.env` for the Rust worker installer. Build from
 the repository root, then start
 a dedicated worker from that data directory so its dotenv loader reads the
 restored database settings. Use a separate Restate server with its own data
