@@ -111,12 +111,14 @@ WITH school_links AS (
                NULL::text AS researcher,NULL::timestamptz AS reviewed_at,
                NULL::text AS manifest_sha256,NULL::jsonb AS evidence
         FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id
+        JOIN selected a ON a.id=p.athlete_id
         UNION ALL
         SELECT r.id,l.target_athlete_id,p.source_id,l.result_id,l.reviewed_by,
                l.researcher,l.reviewed_at,l.manifest_sha256,l.evidence
         FROM valid_reviewed_result_links l
         JOIN results r ON r.id=l.result_id
         JOIN athlete_sources p ON p.id=l.target_athlete_source_id
+        JOIN selected a ON a.id=l.target_athlete_id
     ) owner
     JOIN results r ON r.id=owner.id
     LEFT JOIN schools represented_school ON represented_school.id=r.represented_school_id
