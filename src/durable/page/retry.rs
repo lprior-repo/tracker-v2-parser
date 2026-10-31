@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, ensure};
 
-use super::{FetchDecision, PageRequest, PageReservation};
+use super::{FetchDecision, PageOutcome, PageRequest, PageReservation};
 use crate::{config::Config, database::Database, transport::Transport};
 
 pub struct RetryPolicy {
@@ -45,6 +45,15 @@ impl RetryPolicy {
         Ok(())
     }
 
+    pub(crate) fn exhausted(&self, attempts: i64, detail: &str) -> PageOutcome {
+        PageOutcome::Exhausted {
+            detail: format!(
+                "acquisition attempt budget exhausted ({attempts}/{}); {detail}",
+                self.attempts
+            ),
+        }
+    }
+
     pub const fn attempts(&self) -> i32 {
         self.attempts
     }
@@ -82,3 +91,9 @@ mod test_support;
 mod tests;
 #[cfg(test)]
 mod wire_tests;
+
+#[cfg(test)]
+mod budget_tests;
+
+#[cfg(test)]
+mod budget_wire_tests;

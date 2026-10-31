@@ -137,7 +137,9 @@ impl Database {
             transaction.commit().await?;
             return Ok(outcome);
         }
-        let outcome = failure_outcome(reservation, class, detail, now_ms, policy)?;
+        let attempts =
+            super::reservation::attempts_used(&mut transaction, &reservation.request).await?;
+        let outcome = failure_outcome(reservation, class, detail, now_ms, policy, attempts)?;
         let job = Job {
             id: reservation.request.binding.page_id,
             target: reservation.request.target.clone(),
@@ -171,6 +173,7 @@ fn failure_outcome(
     detail: &str,
     now_ms: i64,
     policy: &RetryPolicy,
+    attempts: i64,
 ) -> Result<PageOutcome> {
     let detail = detail.to_owned();
     match class {
@@ -178,22 +181,17 @@ fn failure_outcome(
         FailureClass::Rejected => Ok(PageOutcome::Rejected { detail }),
         FailureClass::Transient => {
             let scope = &reservation.request.binding.scope;
-            ensure!(
-                reservation.ordinal <= policy.attempts(),
-                "durable ordinal exceeds configured retry attempts"
-            );
-            let delay = if reservation.ordinal == policy.attempts() {
-                scope.cooldown_ms
-            } else {
-                i64::from(reservation.ordinal)
-                    .checked_mul(1000)
-                    .context("retry delay overflow")?
-            };
+            let delay = i64::from(reservation.ordinal)
+                .checked_mul(1000)
+                .context("retry delay overflow")?;
             let retry_at_ms = now_ms
                 .checked_add(delay)
                 .context("retry deadline overflow")?;
             if retry_at_ms >= scope.deadline_ms {
                 return Ok(PageOutcome::Exhausted { detail });
+            }
+            if attempts >= i64::from(policy.attempts()) {
+                return Ok(policy.exhausted(attempts, &detail));
             }
             Ok(PageOutcome::Deferred {
                 retry_at_ms,

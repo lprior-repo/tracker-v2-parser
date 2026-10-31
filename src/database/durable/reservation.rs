@@ -7,6 +7,22 @@ use crate::durable::page::{
 };
 
 impl Database {
+    pub(crate) async fn durable_failure_detail(
+        &self,
+        request: &PageRequest,
+    ) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT last_error FROM scrape_pages WHERE id=$1")
+            .bind(request.binding.page_id)
+            .fetch_one(&self.pool)
+            .await
+            .context("reading retained page failure")
+    }
+
+    pub(crate) async fn durable_acquisition_attempts(&self, request: &PageRequest) -> Result<i64> {
+        let mut connection = self.pool.acquire().await?;
+        attempts_used(&mut connection, request).await
+    }
+
     pub(crate) async fn durable_reserve_configured(
         &self,
         request: &PageRequest,
@@ -117,16 +133,36 @@ async fn reserve(
         matches!(mode, Mode::Configured { index: Some(permit), .. } if permit.permits(request));
     register(connection, request, completed_index_replay).await?;
     let (state, cycle, attempts, due, outcome) = lock_request(connection, request).await?;
-    if let Some(outcome) =
-        outcome.filter(|_| state != "deferred" || due.is_some_and(|at| at > now_ms))
-    {
+    if let Some(outcome) = outcome.as_ref().filter(|_| state != "deferred") {
         return Ok(ReservationDecision::Settled {
-            outcome: serde_json::from_value(outcome)?,
+            outcome: serde_json::from_value(outcome.clone())?,
         });
     }
     if let Some(reservation) = unfinished(connection, request).await? {
         return Ok(ReservationDecision::Reserved {
             reservation: Box::new(reservation),
+        });
+    }
+    let used = attempts_used(connection, request).await?;
+    if used >= i64::from(policy.attempts()) {
+        let detail: Option<String> =
+            sqlx::query_scalar("SELECT last_error FROM scrape_pages WHERE id=$1")
+                .bind(request.binding.page_id)
+                .fetch_one(&mut *connection)
+                .await?;
+        let outcome = policy.exhausted(
+            used,
+            detail
+                .as_deref()
+                .map_or("retained attempts preserved", |value| value),
+        );
+        sqlx::query("UPDATE durable_page_operations SET state='exhausted',retry_at_ms=NULL,outcome=$2 WHERE operation_id=$1")
+            .bind(&request.binding.operation_id).bind(serde_json::to_value(&outcome)?).execute(connection).await?;
+        return Ok(ReservationDecision::Settled { outcome });
+    }
+    if let Some(outcome) = outcome.filter(|_| due.is_some_and(|at| at > now_ms)) {
+        return Ok(ReservationDecision::Settled {
+            outcome: serde_json::from_value(outcome)?,
         });
     }
     if now_ms >= request.binding.scope.deadline_ms {
@@ -164,22 +200,9 @@ async fn reserve(
         ),
         "durable run deadline exceeds 24 hours"
     );
-    ensure!(
-        attempts <= policy.attempts(),
-        "durable cycle exceeds configured retry attempts"
-    );
-    let cycle = if attempts == policy.attempts() {
-        cycle.checked_add(1).context("durable cycle overflow")?
-    } else {
-        cycle
-    };
-    let ordinal = if attempts == policy.attempts() {
-        1
-    } else {
-        attempts
-            .checked_add(1)
-            .context("durable attempt overflow")?
-    };
+    let ordinal = attempts
+        .checked_add(1)
+        .context("durable attempt overflow")?;
     let attempt_id = crate::durable::page::attempt_identity(request, cycle, ordinal)?;
     let refresh_succeeded = matches!(mode, Mode::Offline)
         || matches!(mode, Mode::Configured { index: Some(permit), .. } if permit.permits(request));
@@ -227,4 +250,18 @@ async fn exhausted(
     sqlx::query("UPDATE durable_page_operations SET state='exhausted',retry_at_ms=NULL,outcome=$2 WHERE operation_id=$1")
         .bind(&request.binding.operation_id).bind(serde_json::to_value(&outcome)?).execute(connection).await?;
     Ok(ReservationDecision::Settled { outcome })
+}
+
+pub(super) async fn attempts_used(
+    connection: &mut PgConnection,
+    request: &PageRequest,
+) -> Result<i64> {
+    let generation = request.binding.scope.run_generation.as_str();
+    let campaign = ["-schools", "-contacts", "-results", "-complete"]
+        .into_iter()
+        .find_map(|suffix| generation.strip_suffix(suffix))
+        .map_or(generation, |value| value);
+    sqlx::query_scalar("SELECT count(*) FROM durable_page_attempts a JOIN durable_page_operations d USING(operation_id) WHERE d.page_id=$1 AND d.run_generation IN ($2,$2||'-schools',$2||'-contacts',$2||'-results',$2||'-complete')")
+        .bind(request.binding.page_id).bind(campaign)
+        .fetch_one(connection).await.context("counting durable acquisition attempts")
 }

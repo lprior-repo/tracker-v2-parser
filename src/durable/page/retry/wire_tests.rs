@@ -75,7 +75,7 @@ async fn configured_retry_binding_mismatch_has_no_database_or_http_effects() -> 
     .await
 }
 
-fn connection(
+pub(super) fn connection(
     root: &std::path::Path,
     fixture: &WireFixture,
     database: &Database,
@@ -92,7 +92,8 @@ fn connection(
 }
 
 #[tokio::test]
-async fn configured_fetch_failure_uses_cycle_limit_and_public_library_keeps_three() -> Result<()> {
+async fn configured_fetch_failure_exhausts_total_limit_and_public_library_keeps_three() -> Result<()>
+{
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
@@ -112,9 +113,8 @@ async fn configured_fetch_failure_uses_cycle_limit_and_public_library_keeps_thre
             })
             .await?;
             let mut transport = connection(root.path(), &fixture, &database)?;
-            let started = tokio::time::Instant::now();
             let FetchDecision::Settled {
-                outcome: PageOutcome::Deferred { retry_at_ms, .. },
+                outcome: PageOutcome::Exhausted { detail },
             } = super::fetch_configured(
                 &database,
                 root.path(),
@@ -127,11 +127,7 @@ async fn configured_fetch_failure_uses_cycle_limit_and_public_library_keeps_thre
             else {
                 anyhow::bail!("configured deferral missing")
             };
-            assert!(retry_at_ms >= now + scope.cooldown_ms);
-            assert!(
-                retry_at_ms
-                    <= now + scope.cooldown_ms + i64::try_from(started.elapsed().as_millis())?
-            );
+            assert!(detail.contains("acquisition attempt budget exhausted (1/1)"));
             transport.close().await?;
             assert_eq!(fixture.finish().await?.len(), 1);
             let request = page::bind_target(&database, target(2), &scope).await?;

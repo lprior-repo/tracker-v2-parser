@@ -1,6 +1,7 @@
 use std::path::Path;
 
 mod admission;
+mod budget_fetch;
 mod capacity;
 mod retry_clock;
 mod sanitization;

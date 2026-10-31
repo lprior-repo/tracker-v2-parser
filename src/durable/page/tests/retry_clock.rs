@@ -18,7 +18,7 @@ async fn slow_http_failure_retains_full_first_retry_interval_after_request_compl
 }
 
 #[tokio::test]
-async fn slow_third_http_failure_retains_full_cycle_cooldown_after_request_completion() -> Result<()>
+async fn slow_third_http_failure_exhausts_the_total_budget_after_request_completion() -> Result<()>
 {
     delayed_failure(3).await
 }
@@ -73,17 +73,21 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
             let fetched =
                 page::fetch(&database, root.path(), &reservation, &mut connection, now).await?;
             let elapsed = i64::try_from(started.elapsed().as_millis())?;
+            if ordinal == 3 {
+                assert!(matches!(fetched, FetchDecision::Settled { outcome: PageOutcome::Exhausted { detail } } if detail.contains("acquisition attempt budget exhausted (3/3)")));
+                assert!(matches!(page::reserve(&database, &request, now + scope.cooldown_ms * 10).await?, ReservationDecision::Settled { outcome: PageOutcome::Exhausted { .. } }));
+                assert!(elapsed >= 500);
+                connection.close().await?;
+                assert_eq!(fixture.finish().await?.len(), 1);
+                return Ok(());
+            }
             let FetchDecision::Settled {
                 outcome: PageOutcome::Deferred { retry_at_ms, cycle },
             } = fetched
             else {
                 anyhow::bail!("deferred failure")
             };
-            let wait = if ordinal == 3 {
-                scope.cooldown_ms
-            } else {
-                1000
-            };
+            let wait = 1000;
             assert!(
                 elapsed >= 500,
                 "real transport must wait for delayed fixture"
@@ -116,8 +120,8 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
                 anyhow::bail!("due retry")
             };
             assert_eq!(next.total_attempts, ordinal + 1);
-            assert_eq!(next.cycle, if ordinal == 3 { 2 } else { 1 });
-            assert_eq!(next.ordinal, if ordinal == 3 { 1 } else { 2 });
+            assert_eq!(next.cycle, 1);
+            assert_eq!(next.ordinal, 2);
             connection.close().await?;
             assert_eq!(fixture.finish().await?.len(), 1);
             Ok(())

@@ -9,7 +9,7 @@ use crate::{
 use anyhow::Result;
 
 #[tokio::test]
-async fn configured_retry_cycles_honor_one_two_three_attempts_exact_delays_and_idempotent_replay()
+async fn configured_retry_total_budget_honors_one_two_three_attempts_and_idempotent_replay()
 -> Result<()> {
     with_database(|pool|Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
@@ -19,27 +19,32 @@ async fn configured_retry_cycles_honor_one_two_three_attempts_exact_delays_and_i
             let scope=scope(&config,now)?;
             let request=page::bind_target(&database,target(max),&scope).await?;
             let policy=RetryPolicy::configured(&config,&request)?;
-            for total in 1..=max*2+1 {
+            for total in 1..=max {
                 let ReservationDecision::Reserved {reservation}=page::reserve_configured(&database,&config,&request,now).await? else {anyhow::bail!("reservation missing")};
-                let expected_cycle=i32::try_from((total-1)/max+1)?;
-                let expected_ordinal=i32::try_from((total-1)%max+1)?;
-                assert_eq!((reservation.cycle,reservation.ordinal,reservation.total_attempts),(expected_cycle,expected_ordinal,i32::try_from(total)?));
+                assert_eq!((reservation.cycle,reservation.ordinal,reservation.total_attempts),(1,i32::try_from(total)?,i32::try_from(total)?));
                 let before=snapshot(&database).await?;
                 let ReservationDecision::Reserved {reservation:replayed}=page::reserve_configured(&database,&config,&request,now).await? else {anyhow::bail!("replay missing")};
                 assert_eq!(replayed.attempt_id,reservation.attempt_id);
                 assert_eq!(snapshot(&database).await?,before);
                 let outcome=database.durable_fail_with_policy(&reservation,failure(now),&policy).await?;
-                let PageOutcome::Deferred {retry_at_ms,cycle}=outcome else {anyhow::bail!("deferral missing")};
-                let delay=if expected_ordinal==i32::try_from(max)? {scope.cooldown_ms} else {i64::from(expected_ordinal)*1000};
-                assert_eq!(retry_at_ms,now+delay);
-                assert_eq!(cycle,expected_cycle);
-                let before=snapshot(&database).await?;
-                assert_eq!(database.durable_fail_with_policy(&reservation,failure(now+999_999),&policy).await?,outcome);
-                assert!(matches!(page::reserve_configured(&database,&config,&request,retry_at_ms-1).await?,ReservationDecision::Settled {outcome:PageOutcome::Deferred {retry_at_ms:saved,..}} if saved==retry_at_ms));
-                assert_eq!(snapshot(&database).await?,before);
-                now=retry_at_ms;
+                if total == max {
+                    assert!(matches!(&outcome,PageOutcome::Exhausted {detail} if detail.contains("acquisition attempt budget exhausted") && detail.contains("DNS lookup failed")));
+                    let before=snapshot(&database).await?;
+                    assert_eq!(database.durable_fail_with_policy(&reservation,failure(now+999_999),&policy).await?,outcome);
+                    assert!(matches!(page::reserve_configured(&database,&config,&request,now+scope.cooldown_ms*10).await?,ReservationDecision::Settled {outcome:PageOutcome::Exhausted {..}}));
+                    assert_eq!(snapshot(&database).await?,before);
+                } else {
+                    let PageOutcome::Deferred {retry_at_ms,cycle}=outcome else {anyhow::bail!("deferral missing")};
+                    assert_eq!(retry_at_ms,now+i64::from(total)*1000);
+                    assert_eq!(cycle,1);
+                    let before=snapshot(&database).await?;
+                    assert_eq!(database.durable_fail_with_policy(&reservation,failure(now+999_999),&policy).await?,outcome);
+                    assert!(matches!(page::reserve_configured(&database,&config,&request,retry_at_ms-1).await?,ReservationDecision::Settled {outcome:PageOutcome::Deferred {retry_at_ms:saved,..}} if saved==retry_at_ms));
+                    assert_eq!(snapshot(&database).await?,before);
+                    now=retry_at_ms;
+                }
             }
-            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,i32::try_from(max*2+1)?);
+            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,i32::try_from(max)?);
         }
         Ok(())
     })).await

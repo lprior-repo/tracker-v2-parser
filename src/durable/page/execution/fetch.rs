@@ -78,21 +78,10 @@ pub async fn fetch_with_policy(
                 .await?,
         });
     }
-    if now_ms >= reservation.request.binding.scope.deadline_ms {
-        let outcome = database
-            .durable_fail_with_policy(
-                reservation,
-                FailureRecord {
-                    class: FailureClass::Transient,
-                    detail: "durable fetch deadline reached",
-                    capture: None,
-                    stopped_origin: None,
-                    observed_at_ms: now_ms,
-                },
-                policy.retry,
-            )
-            .await?;
-        return Ok(FetchDecision::Settled { outcome });
+    if let Some(outcome) =
+        settle_acquisition_limit(database, reservation, now_ms, policy.retry).await?
+    {
+        return Ok(outcome);
     }
     transport.set_wire_context(
         &reservation.request.binding.operation_id,
@@ -124,6 +113,50 @@ pub async fn fetch_with_policy(
             .await
         }
     }
+}
+
+async fn settle_acquisition_limit(
+    database: &Database,
+    reservation: &PageReservation,
+    now_ms: i64,
+    policy: &RetryPolicy,
+) -> Result<Option<FetchDecision>> {
+    let attempts = database
+        .durable_acquisition_attempts(&reservation.request)
+        .await?;
+    let over_budget = attempts > i64::from(policy.attempts());
+    if !over_budget && now_ms < reservation.request.binding.scope.deadline_ms {
+        return Ok(None);
+    }
+    let retained_failure = if over_budget {
+        database
+            .durable_failure_detail(&reservation.request)
+            .await?
+    } else {
+        None
+    };
+    let detail = if over_budget {
+        retained_failure.as_deref().map_or(
+            "reserved acquisition exceeds the total page retry budget",
+            |detail| detail,
+        )
+    } else {
+        "durable fetch deadline reached"
+    };
+    let outcome = database
+        .durable_fail_with_policy(
+            reservation,
+            FailureRecord {
+                class: FailureClass::Transient,
+                detail,
+                capture: None,
+                stopped_origin: None,
+                observed_at_ms: now_ms,
+            },
+            policy,
+        )
+        .await?;
+    Ok(Some(FetchDecision::Settled { outcome }))
 }
 
 fn completion_time(now_ms: i64, elapsed: std::time::Duration) -> Result<i64> {

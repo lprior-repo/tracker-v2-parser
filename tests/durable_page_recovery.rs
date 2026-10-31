@@ -9,7 +9,7 @@ use track_scrapper_v2::{
 };
 
 #[tokio::test]
-async fn transient_bursts_defer_durably_preserve_counts_and_allow_the_next_school() -> Result<()> {
+async fn transient_failures_exhaust_three_total_attempts_and_allow_the_next_school() -> Result<()> {
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
@@ -42,10 +42,6 @@ async fn transient_bursts_defer_durably_preserve_counts_and_allow_the_next_schoo
                         },
                     )
                     .await?;
-                let PageOutcome::Deferred { retry_at_ms, cycle } = outcome else {
-                    anyhow::bail!("expected durable deferral")
-                };
-                assert_eq!(cycle, 1);
                 assert_eq!(
                     page::select(&database, &config, &scope, now)
                         .await?
@@ -55,30 +51,32 @@ async fn transient_bursts_defer_durably_preserve_counts_and_allow_the_next_schoo
                     second.url
                 );
                 let before = page_support::snapshots(&database).await?;
-                assert!(matches!(
-                    page::reserve(&database, &request, now).await?,
-                    ReservationDecision::Settled {
-                        outcome: PageOutcome::Deferred { .. }
-                    }
-                ));
+                assert!(matches!(page::reserve(&database, &request, now).await?, ReservationDecision::Settled { outcome: saved } if saved == outcome));
                 assert_eq!(page_support::snapshots(&database).await?, before);
-                now = retry_at_ms;
+                if ordinal < 3 {
+                    let PageOutcome::Deferred { retry_at_ms, cycle } = outcome else {
+                        anyhow::bail!("expected durable deferral before total budget")
+                    };
+                    assert_eq!(cycle, 1);
+                    now = retry_at_ms;
+                } else {
+                    assert!(matches!(outcome, PageOutcome::Exhausted { .. }));
+                }
             }
-            let reserved = page_support::reserve(&database, &request, now).await?;
-            assert_eq!(
-                (reserved.cycle, reserved.ordinal, reserved.total_attempts),
-                (2, 1, 4)
-            );
+            assert_eq!(database.durable_due(&scope.run_generation).await?, None);
+            let before = page_support::snapshots(&database).await?;
+            assert!(matches!(page::reserve(&database, &request, now + scope.cooldown_ms).await?, ReservationDecision::Settled { outcome: PageOutcome::Exhausted { .. } }));
+            assert_eq!(page_support::snapshots(&database).await?, before);
             let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE id=$1")
                 .bind(request.binding.page_id)
                 .fetch_one(&test.pool)
                 .await?;
-            assert_eq!(attempts, 4);
+            assert_eq!(attempts, 3);
             assert_eq!(
                 sqlx::query_scalar::<_, i64>("SELECT count(*) FROM durable_page_attempts")
                     .fetch_one(&test.pool)
                     .await?,
-                4
+                3
             );
             database.close().await;
             Ok(())
@@ -177,7 +175,7 @@ async fn another_generation_cannot_hijack_an_unfinished_page_even_after_the_old_
 }
 
 #[tokio::test]
-async fn due_earlier_contact_retries_rotate_behind_untouched_profiles_and_later_retry_rounds()
+async fn due_contact_retries_rotate_behind_untouched_profiles_and_stop_at_total_budget()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         use track_scrapper_v2::{config::Config,model::{Athlete,Capture,PageKind,ParsedPage,School}};
@@ -201,29 +199,31 @@ async fn due_earlier_contact_retries_rotate_behind_untouched_profiles_and_later_
         let first=page::select(&database,&config,&scope,now).await?.context("first school contact")?;
         assert_eq!(first.target.url,contact.url);
         let reserved=page_support::reserve(&database,&first,now).await?;
-        now=defer_round(&database,&reserved,now).await?;
+        now=finish_round(&database,&reserved,now).await?;
         assert_eq!(database.next_profile_coverage_job(None,3,&config.states,&config.graduation_years,true).await?.context("unchanged legacy school ordering")?.target.url,contact.url);
         let mut seen=std::collections::BTreeMap::<String,i32>::new();
         seen.insert(contact.url.clone(),1);
-        for expected in [&profile.url,&contact.url,&profile.url,&contact.url,&profile.url,&contact.url,&profile.url] {
+        for expected in [&profile.url,&contact.url,&profile.url,&contact.url,&profile.url] {
             let selected=page::select(&database,&config,&scope,now).await?.context("fair eligible page")?;
             assert_eq!(&selected.target.url,expected,"scope-local retry rounds must rotate before school ordering");
             let reservation=page_support::reserve(&database,&selected,now).await?;
             let attempts=seen.entry(expected.clone()).or_default();
             *attempts+=1;
-            assert_eq!((reservation.cycle,reservation.ordinal),((*attempts-1)/3+1,(*attempts-1)%3+1));
+            assert_eq!((reservation.cycle,reservation.ordinal),(1,*attempts));
             assert_eq!(reservation.total_attempts,*attempts);
-            now=defer_round(&database,&reservation,now).await?;
+            now=finish_round(&database,&reservation,now).await?;
         }
-        assert_eq!(seen.get(&contact.url),Some(&4));
-        assert_eq!(seen.get(&profile.url),Some(&4));
-        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts").fetch_one(&test.pool).await?,8);
+        assert_eq!(seen.get(&contact.url),Some(&3));
+        assert_eq!(seen.get(&profile.url),Some(&3));
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts").fetch_one(&test.pool).await?,6);
+        assert_eq!(database.durable_due(&scope.run_generation).await?,None);
+        assert!(page::select(&database,&config,&scope,now).await?.is_none());
         database.close().await;
         Ok(())
     })).await
 }
 
-async fn defer_round(
+async fn finish_round(
     database: &Database,
     reservation: &page::PageReservation,
     now: i64,
@@ -242,6 +242,10 @@ async fn defer_round(
         .await?
     {
         PageOutcome::Deferred { retry_at_ms, .. } => Ok(retry_at_ms),
+        PageOutcome::Exhausted { detail } if reservation.ordinal == 3 => {
+            assert!(detail.contains("3/3"));
+            Ok(now)
+        }
         outcome => anyhow::bail!("expected retry round, got {outcome:?}"),
     }
 }

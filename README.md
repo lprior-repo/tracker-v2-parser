@@ -765,7 +765,7 @@ start a new generation; a running generation keeps its frozen configuration.
 | `season` | Competition season used for discovery; independent of graduation year |
 | `run.hours` | Duration from submission, from 1 to 24 hours |
 | `run.max_batches` | Maximum number of durable batches, from 1 to 10,000 |
-| `run.cooldown_seconds` | Delay between retry cycles, from 15 to 3,600 seconds |
+| `run.cooldown_seconds` | Bound workflow cooldown, from 15 to 3,600 seconds; never replenishes page attempts |
 | `acquisition.profile_coverage_only` | `true` sweeps saved school chains; use `false` to discover an empty state/cohort |
 | `acquisition.collect_contacts` | Discover and parse published school contacts |
 | `limits.requests_per_second` | Shared global request ceiling, at most 3 |
@@ -773,7 +773,7 @@ start a new generation; a running generation keeps its frozen configuration.
 | `limits.concurrency` | At most 3 simultaneous acquisition slots, shared across campaigns |
 | `limits.public_results_every` | Public discovery reservation frequency across batch boundaries, from 1 to 128 |
 | `limits.max_pages` | Work units per durable batch |
-| `limits.max_attempts` | Attempts per retry cycle, from 1 to 3; cooldown/deadline still apply |
+| `limits.max_attempts` | Total acquisition attempts per page and crawl generation, from 1 to 3; shared across phases and batches |
 | `export.name` | Separate publication name for this state/cohort set |
 | `export.rows_per_file` | Single-sheet athlete capacity, at most 1,000,000 |
 
@@ -787,10 +787,15 @@ needed. Keep years together in one campaign per state set: overlapping year runs
 share school/unknown-year work and must not compete for the same checkpoints.
 Optional `--hours`, `--max-batches` and `--cooldown-seconds` override the TOML values.
 Omitting `[run]` preserves the existing defaults: 24 hours, 10,000 batches and a
-60-second retry-cycle cooldown. Each submitted generation freezes its resolved
+60-second bound cooldown. Each submitted generation freezes its resolved
 deadline, batch count, cooldown and scraper settings; editing the file does not
 change a running generation. New crawl submissions pass the same deadline and
 cooldown into WIAA contact refresh; a child does not receive a fresh run window.
+Failed pages stop after the configured total attempt limit and remain on Review.
+Cooldowns, restarts, phase changes and batch continuations do not reset that limit.
+Already over-budget pages settle without another acquisition; retained captures
+and parsed results can still finish without refetching. Earlier attempts and source
+access stops remain preserved.
 Fresh WIAA directory operations can refetch their official index pages while
 preserving cumulative attempts, prior receipts and normal access-stop checks.
 Changing `season` or graduation years also does not

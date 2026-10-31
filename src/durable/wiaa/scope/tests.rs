@@ -103,7 +103,7 @@ fn wiaa_scope_retains_legacy_operation_serialization_and_applies_explicit_run_se
 }
 
 #[tokio::test]
-async fn wiaa_run_bound_cooldown_is_used_by_actual_fetch_and_expired_bounds_make_zero_wire_requests()
+async fn wiaa_run_bound_retry_budget_is_used_by_actual_fetch_and_expired_bounds_make_zero_wire_requests()
 -> Result<()> {
     with_database(|pool| {
         Box::pin(async move {
@@ -124,9 +124,8 @@ async fn wiaa_run_bound_cooldown_is_used_by_actual_fetch_and_expired_bounds_make
             })
             .await?;
             let mut transport = connection(root.path(), &fixture, &database)?;
-            let started = tokio::time::Instant::now();
             let FetchDecision::Settled {
-                outcome: PageOutcome::Deferred { retry_at_ms, .. },
+                outcome: PageOutcome::Exhausted { detail },
             } = page::fetch_configured(
                 &database,
                 root.path(),
@@ -137,10 +136,10 @@ async fn wiaa_run_bound_cooldown_is_used_by_actual_fetch_and_expired_bounds_make
             )
             .await?
             else {
-                anyhow::bail!("configured cooldown missing")
+                anyhow::bail!("configured one-attempt budget did not exhaust")
             };
-            assert!(retry_at_ms >= now + 120_000);
-            assert!(retry_at_ms <= now + 120_000 + i64::try_from(started.elapsed().as_millis())?);
+            assert!(!detail.is_empty());
+            assert_eq!(database.durable_due(&scope.run_generation).await?, None);
             transport.close().await?;
             assert_eq!(fixture.finish().await?.len(), 1);
             let scope = bind(&config, "already-expired", Some((now - 1, 120_000)), now)?;
