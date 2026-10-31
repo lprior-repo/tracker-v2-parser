@@ -2,6 +2,7 @@ mod program;
 mod role;
 mod rules;
 mod scope;
+mod tables;
 
 use crate::model::CoachRole;
 use role::parse_role;
@@ -25,7 +26,14 @@ pub(super) fn parse(document: &Html, school_id: &str, school_name: &str) -> Resu
     );
     let rows = document
         .select(&rules.blocks)
-        .flat_map(|block| candidates(block, &rules, school_id, school_name, page_local));
+        .flat_map(|block| candidates(block, &rules, school_id, school_name, page_local))
+        .chain(tables::parse(
+            document,
+            &rules,
+            school_id,
+            school_name,
+            page_local,
+        )?);
     Ok(rows.fold(Vec::<Coach>::new(), |mut kept, coach| {
         if let Some(existing) = kept.iter_mut().find(|existing| {
             existing.email == coach.email
@@ -59,7 +67,7 @@ fn candidates(
     if parsed.is_none() && !rules.coach.is_match(&role) {
         return Vec::new();
     }
-    if rules.excluded.is_match(&role) {
+    if rules.excluded.is_match(&role) || rules.skiing_only(&role) {
         return Vec::new();
     }
     if parsed == Some(CoachRole::AthleticDirector) {
@@ -68,7 +76,7 @@ fn candidates(
     let (program, program_review) = program_text(block, rules, &role);
     let track = rules.track.is_match(&program);
     let cross = rules.cross.is_match(&program);
-    if !track && !cross {
+    if (!track && !cross) || rules.skiing_only(&program) {
         return Vec::new();
     }
     let names = published_names(block, rules);
@@ -118,7 +126,13 @@ fn published_role(block: ElementRef<'_>, rules: &Rules, content: &str) -> String
         .select(&rules.titles)
         .find(|title| !chrome(*title))
         .map_or_else(
-            || content.to_owned(),
+            || {
+                content
+                    .split_whitespace()
+                    .filter(|word| !word.contains('@'))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            },
             |title| {
                 let role = text(title);
                 if title.value().classes().any(|class| class == "fsTitles") {

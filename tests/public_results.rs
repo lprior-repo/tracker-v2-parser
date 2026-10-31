@@ -99,9 +99,32 @@ async fn given_real_public_page_denial_when_public_results_runs_then_all_source_
         sqlx::query("UPDATE scrape_pages SET status='blocked',attempts=1,last_error='HTTP 403 access denied',cursor=jsonb_set(cursor,'{public_results_exclusion}','\"public-results/v1\"') WHERE url LIKE '%/athletes/2'").execute(database.pool()).await?;
         let before: Vec<(i64,String,i32,Option<String>)> = sqlx::query_as("SELECT id,status,attempts,last_error FROM scrape_pages ORDER BY id").fetch_all(database.pool()).await?;
         let error=track_scrapper_v2::runner::durable::bootstrap(&database,&Config::parse(&config(REVIEWED))?).await.err().context("preserved source access stop")?;
-        assert!(format!("{error:#}").contains("blocked page requiring human review"));
+        let denied_id: i64 = sqlx::query_scalar("SELECT id FROM scrape_pages WHERE url='https://wi.milesplit.com/athletes/2'").fetch_one(database.pool()).await?;
+        assert_eq!(error.to_string(),format!("milesplit has a blocked page requiring human review: checkpoint {denied_id}, URL https://wi.milesplit.com/athletes/2"));
         let after: Vec<(i64,String,i32,Option<String>)> = sqlx::query_as("SELECT id,status,attempts,last_error FROM scrape_pages ORDER BY id").fetch_all(database.pool()).await?;
         assert_eq!(after,before);
+        database.close().await;
+        Ok(())
+    })).await
+}
+
+#[tokio::test]
+async fn given_unreviewed_media_stop_in_another_state_when_bootstrapping_then_exact_checkpoint_is_reported_without_mutation()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        database.enqueue(&[page(REVIEWED,PageKind::Athlete)],false).await?;
+        sqlx::query("UPDATE scrape_pages SET status='blocked',attempts=1,last_error='subscription media access gate'").execute(database.pool()).await?;
+        let checkpoint: i64 = sqlx::query_scalar("SELECT id FROM scrape_pages").fetch_one(database.pool()).await?;
+        let before: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p ORDER BY id").fetch_all(database.pool()).await?;
+        let unreviewed = config(REVIEWED).replace("states=['WI']","states=['MI']").replace(&format!("reviewed_media_stops=['{REVIEWED}']"),"reviewed_media_stops=[]");
+        let error = track_scrapper_v2::runner::durable::bootstrap(&database,&Config::parse(&unreviewed)?).await.expect_err("global source access stop must precede discovery");
+        assert_eq!(error.to_string(),format!("milesplit has a blocked page requiring human review: checkpoint {checkpoint}, URL {REVIEWED}"));
+        let after: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p ORDER BY id").fetch_all(database.pool()).await?;
+        assert_eq!(after,before);
+        let operations: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_page_operations").fetch_one(database.pool()).await?;
+        let wires: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_wire_requests").fetch_one(database.pool()).await?;
+        assert_eq!((operations,wires),(0,0));
         database.close().await;
         Ok(())
     })).await

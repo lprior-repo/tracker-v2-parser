@@ -1,0 +1,20 @@
+[
+  {
+    "fixture": "minnesota-stma-coach-tables.html",
+    "source_url": "https://hs.stma.k12.mn.us/athletics-activities/athletics-coaches",
+    "retrieved_at": "2026-10-31T22:19:39.939876+00:00",
+    "status": 200,
+    "original_sha256": "a6da12ca9dfedbd7adcfd6ce22175a98d29c1b7174c7ad2e04791be70bfe5763",
+    "fixture_sha256": "bf358adc98a3255ddf3b301617a25e57f416c168db752fbdcfa03cc51fcc10df",
+    "transformation": "Retained exact published coaching tables and associated accordion aria labels for Wayzata; inserted school identity wrapper for isolated parser regression. STMA surrounding collapsed-panel markup omitted. Does not establish current tenure."
+  },
+  {
+    "fixture": "minnesota-wayzata-coach-tables.html",
+    "source_url": "https://www.wayzataathletics.com/coaches-directory/",
+    "retrieved_at": "2026-10-31T22:19:39.941424+00:00",
+    "status": 200,
+    "original_sha256": "d818057bb937c15ae62de5aeb4f8983ee912a13fd8f553968780d57b808bf6c0",
+    "fixture_sha256": "24b74892c0d653b99d6f86a229ac5179c11a4f9b7ca07b4f480c8993722f7551",
+    "transformation": "Retained exact published coaching tables and associated accordion aria labels for Wayzata; inserted school identity wrapper for isolated parser regression. STMA surrounding collapsed-panel markup omitted. Does not establish current tenure."
+  }
+]

@@ -179,6 +179,13 @@ being silently discarded or presented as verified current contacts. Replaying a
 completed contact capture does not consume another automatic attempt, and an
 existing access stop for that contact authority still prevents replay.
 
+Public coaching tables can establish row-local claims through explicit sport,
+coach and email headers, or an unambiguous labeled coaching section. Hidden,
+merged, student and unrelated-sport rows do not establish coaching claims.
+Conflicting visible and linked mailboxes remain unresolved. Cross-country skiing
+is excluded unless the published role also explicitly establishes a running duty.
+The original school-affiliation and appointment-tenure review rules still apply.
+
 
 MileSplit profiles retain public sport/competition-level PRs, visible career
 results, biography/identity sections, JSON-LD, progression values, links and media
@@ -252,6 +259,10 @@ automatic identity safeguards.
 
 The Minnesota 2027 run template is `config/runs/minnesota.toml`; it uses a
 separate named export while retaining the same durable acquisition path.
+The full Michigan template is `config/runs/michigan.toml`, including both
+peninsulas. Existing reviewed media exclusions must be retained when preparing
+another state configuration; a remaining source stop reports its checkpoint and
+URL before new acquisition.
 
 Public findings researched manually can be applied only through a Restate
 `reviewed_research` operation. The schema-1 manifest records the exact user

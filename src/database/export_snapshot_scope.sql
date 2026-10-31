@@ -8,12 +8,16 @@ LEFT JOIN LATERAL (
            )) AS matches_state
     FROM (
         SELECT lower(btrim(s.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) AS state
-        FROM schools s
-        WHERE s.id IN (
-            SELECT p.school_id FROM athlete_sources p WHERE p.athlete_id=a.id AND p.school_id IS NOT NULL
-              AND NOT COALESCE((p.details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean
-                  AND p.details#>>'{source_values,current_affiliation,unverified_school_state}'=s.state,FALSE)
-        )
+        FROM athlete_sources p JOIN schools s ON s.id=p.school_id
+        WHERE p.athlete_id=a.id AND p.school_id IS NOT NULL
+          AND CASE WHEN cardinality($1::text[])=0
+            OR NULLIF(btrim(a.state,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'),'') IS NULL
+            OR EXISTS(SELECT 1 FROM unnest($1::text[]) selected(state)
+                WHERE lower(btrim(selected.state,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) IN
+                    (lower(btrim(a.state,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')),lower(btrim(s.state,U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))))
+          THEN NOT COALESCE((p.details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean
+              AND p.details#>>'{source_values,current_affiliation,unverified_school_state}'=s.state,FALSE)
+          ELSE FALSE END
     ) school_states
 ) ss ON true
 WHERE a.id > $3::bigint AND a.name IS NOT NULL

@@ -19,6 +19,8 @@ pub(super) struct Rules {
     pub(super) coach: Regex,
     pub(super) track: Regex,
     pub(super) cross: Regex,
+    pub(super) skiing: Regex,
+    pub(super) explicit_running: Regex,
     pub(super) other_sport: Regex,
     pub(super) excluded: Regex,
     pub(super) email: Regex,
@@ -52,6 +54,10 @@ impl Rules {
             coach: Regex::new(r"(?i)\bcoach(?:es|ing)?\b")?,
             track: Regex::new(r"(?i)\btrack\b|\bfield\s+(?:events?\s+)?coach\b")?,
             cross: Regex::new(r"(?i)\bcross[-\s]?country\b|\bxc\b")?,
+            skiing: Regex::new(r"(?i)\b(?:ski(?:ing)?|nordic)\b")?,
+            explicit_running: Regex::new(
+                r"(?i)\btrack\s*(?:and|&)\s*field\b|\bcross[-\s]?country\s+running\b|\bxc\s+running\b",
+            )?,
             other_sport: Regex::new(
                 r"(?i)\b(?:basketball|football|baseball|softball|volleyball|soccer|wrestling|golf|tennis|swimming|diving|lacrosse|hockey|cheerleading|water\s+polo)\b",
             )?,
@@ -61,5 +67,9 @@ impl Rules {
             email: email::pattern()?,
             halves: Regex::new(r#"\b(firstHalf|secondHalf)\s*=\s*(?:"([^"\\]*)"|'([^'\\]*)')"#)?,
         })
+    }
+
+    pub(super) fn skiing_only(&self, label: &str) -> bool {
+        self.skiing.is_match(label) && !self.explicit_running.is_match(label)
     }
 }
