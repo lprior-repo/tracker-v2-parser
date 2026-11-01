@@ -33,6 +33,7 @@ fn target() -> Target {
 
 fn scope() -> Result<PageScope> {
     Ok(PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: "native-wire-test".into(),
         config_sha256: "a".repeat(64),
         deadline_ms: chrono::Utc::now()

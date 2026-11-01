@@ -44,6 +44,7 @@ fn reviewed_legacy_permit_is_confined_to_official_contacts_and_exact_technical_f
 -> Result<()> {
     let config = config("reviewed_legacy_failures=['wiaa_script_sanitization']")?;
     let scope = PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: "reviewed-wiaa".into(),
         config_sha256: crate::durable::model::page_config_digest(&config)?,
         deadline_ms: 1_800_000_000_000,

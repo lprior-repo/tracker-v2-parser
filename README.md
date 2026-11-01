@@ -865,6 +865,17 @@ deadline, batch count, cooldown and scraper settings; editing the file does not
 change a running generation. New crawl submissions pass the same deadline and
 cooldown into WIAA contact refresh; a child does not receive a fresh run window.
 Failed pages stop after the configured total attempt limit and remain on Review.
+Use repeatable `--inherit-retry-campaign PRIOR_GENERATION` flags on `durable crawl`
+when continuing unfinished pages in a new state campaign. The frozen request stores
+at most eight distinct, unsuffixed campaign roots in `inherited_retry_campaigns`;
+include the full ancestor list explicitly. Their acquisitions and related child
+campaigns share the configured total page budget across phases and continuations.
+Visible omitted ancestors are rejected. Keep predecessor campaigns quiescent;
+this flag does not cancel or rewrite their frozen requests. Empty lineage preserves
+the existing independent campaign behavior for later cohorts such as 2028 and 2029.
+Inherited retry campaigns are rejected when configured states include Wisconsin:
+legacy WIAA index operations used opaque scopes and require a separate reviewed
+reconciliation. Existing Wisconsin campaigns with empty lineage remain unchanged.
 Cooldowns, restarts, phase changes and batch continuations do not reset that limit.
 Already over-budget pages settle without another acquisition; retained captures
 and parsed results can still finish without refetching. Earlier attempts and source

@@ -40,6 +40,7 @@ async fn seeded(
     }
     database.enqueue(&targets, false).await?;
     let scope = PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: "bounded-policy-exclusions".into(),
         config_sha256: page_config_digest(&config)?,
         deadline_ms: chrono::Utc::now().timestamp_millis() + 3_600_000,

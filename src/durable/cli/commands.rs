@@ -73,6 +73,7 @@ pub(super) fn crawl_request(
         batch: 0,
         max_batches: run.max_batches,
         phase: CrawlPhase::SchoolChains,
+        inherited_retry_campaigns: overrides.inherited_retry_campaigns,
     };
     value.validate(now_ms)?;
     Ok(value)

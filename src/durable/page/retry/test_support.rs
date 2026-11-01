@@ -18,6 +18,7 @@ pub(super) fn config(attempts: u32) -> Result<Config> {
 
 pub(super) fn scope(config: &Config, now: i64) -> Result<PageScope> {
     Ok(PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: format!("configured-retry-{}", config.limits.max_attempts),
         config_sha256: page_config_digest(config)?,
         deadline_ms: now + 3_600_000,

@@ -15,6 +15,7 @@ pub fn config() -> Result<Config> {
 
 pub fn scope(config: &Config) -> Result<PageScope> {
     Ok(PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: "durable-page-test".into(),
         config_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(config)?)),
         deadline_ms: chrono::Utc::now()

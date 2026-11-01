@@ -16,6 +16,8 @@ pub struct CrawlRequest {
     pub batch: u32,
     pub max_batches: u32,
     pub phase: CrawlPhase,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited_retry_campaigns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +70,8 @@ use super::{
 impl CrawlRequest {
     pub fn validate(&self, now_ms: i64) -> Result<()> {
         identifier(&self.generation)?;
+        super::retry_lineage::validate(&self.generation, &self.inherited_retry_campaigns)?;
+        super::retry_lineage::validate_config(&self.config, &self.inherited_retry_campaigns)?;
         ensure!(
             self.generation.len() <= 100,
             "crawl generation exceeds 100 bytes"
@@ -103,11 +107,14 @@ impl CrawlRequest {
     }
 
     pub fn page_scope(&self) -> Result<PageScope> {
+        super::retry_lineage::validate(&self.generation, &self.inherited_retry_campaigns)?;
+        super::retry_lineage::validate_config(&self.config, &self.inherited_retry_campaigns)?;
         Ok(PageScope {
             run_generation: format!("{}-{}", self.generation, self.phase.scope_name()),
             config_sha256: page_config_digest(&self.config)?,
             deadline_ms: self.deadline_ms,
             cooldown_ms: self.cooldown_ms,
+            inherited_retry_campaigns: self.inherited_retry_campaigns.clone(),
         })
     }
 

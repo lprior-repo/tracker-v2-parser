@@ -8,6 +8,7 @@ pub mod model;
 pub mod operations;
 pub mod pacing;
 pub mod page;
+pub(crate) mod retry_lineage;
 mod runtime;
 mod services;
 mod wiaa;

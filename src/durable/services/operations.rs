@@ -59,6 +59,7 @@ impl AthleticOperations {
                     let guard = effects::acquisition(&self.runtime.database).await?;
                     let bytes = workspace.read(capture)?;
                     let scope = crate::durable::page::PageScope {
+                        inherited_retry_campaigns: Vec::new(),
                         run_generation: request.operation_id.clone(),
                         config_sha256: model::page_config_digest(config)?,
                         deadline_ms: now.saturating_add(86_400_000),

@@ -6,6 +6,7 @@ use crate::durable::operations::OperationSpec;
 
 fn request(phase: CrawlPhase, focused: bool, contacts: bool) -> Result<CrawlRequest> {
     Ok(CrawlRequest {
+        inherited_retry_campaigns: Vec::new(),
         generation: "fair-phase-progression".into(),
         config: Config::parse(&format!(
             "states=['WI']\n[acquisition]\nmode='public_results'\nprofile_coverage_only={focused}\ncollect_contacts={contacts}\n[sources.athleticnet]\nenabled=false\n"
@@ -101,5 +102,29 @@ fn wiaa_contact_refresh_propagates_resolved_bounds_only_for_new_configured_runs(
     };
     assert_eq!((deadline_ms, cooldown_ms), (3_601_000, 120_000));
     assert_eq!(config.run, legacy.config.run);
+    Ok(())
+}
+
+#[test]
+fn given_inherited_exhaustion_and_empty_selection_when_phases_advance_then_completion_is_reachable()
+-> Result<()> {
+    let mut first = request(CrawlPhase::SchoolChains, false, true)?;
+    first.config = Config::parse(
+        "states=['IA']\n[acquisition]\nmode='public_results'\ncollect_contacts=true",
+    )?;
+    first.inherited_retry_campaigns = vec!["old-mixed".into()];
+    let empty = BatchProgress {
+        exhausted: 1,
+        queue: QueueState::NoEligiblePage,
+        ..Default::default()
+    };
+    let next = next_phase(&first, &empty, None);
+    assert_eq!(next, CrawlPhase::PublicResults);
+    let results = first.next(next)?;
+    assert_eq!(
+        results.inherited_retry_campaigns,
+        first.inherited_retry_campaigns
+    );
+    assert_eq!(next_phase(&results, &empty, None), CrawlPhase::Complete);
     Ok(())
 }

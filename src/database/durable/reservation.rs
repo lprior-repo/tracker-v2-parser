@@ -256,6 +256,9 @@ pub(super) async fn attempts_used(
     connection: &mut PgConnection,
     request: &PageRequest,
 ) -> Result<i64> {
+    if !request.binding.scope.inherited_retry_campaigns.is_empty() {
+        return super::lineage::attempts_used(connection, request).await;
+    }
     let generation = request.binding.scope.run_generation.as_str();
     let campaign = ["-schools", "-contacts", "-results", "-complete"]
         .into_iter()

@@ -21,6 +21,10 @@ pub(super) fn validate_digest(value: &str) -> Result<()> {
 }
 
 pub(super) fn validate_scope(scope: &PageScope) -> Result<()> {
+    crate::durable::retry_lineage::validate(
+        crate::durable::retry_lineage::campaign(&scope.run_generation),
+        &scope.inherited_retry_campaigns,
+    )?;
     validate_digest(&scope.config_sha256)?;
     ensure!(
         !scope.run_generation.is_empty()

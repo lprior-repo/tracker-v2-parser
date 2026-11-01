@@ -36,6 +36,7 @@ async fn exhausted_contact_stays_on_review_and_yields_to_independent_results_wit
             )?;
             let mut now = chrono::Utc::now().timestamp_millis();
             let scope = PageScope {
+                inherited_retry_campaigns: Vec::new(),
                 run_generation: "three-total-attempts-results".into(),
                 config_sha256: page_config_digest(&config)?,
                 deadline_ms: now + 3_600_000,

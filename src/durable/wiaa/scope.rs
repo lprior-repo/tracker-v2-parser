@@ -48,6 +48,7 @@ pub(super) fn bind(
         "WIAA cooldown must be 15 seconds to one hour"
     );
     Ok(PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: model::digest(&(binding, "wiaa-directory"))?,
         config_sha256: model::page_config_digest(config)?,
         deadline_ms,

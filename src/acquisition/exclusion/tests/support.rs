@@ -41,6 +41,7 @@ pub(super) fn api() -> Result<Target> {
 
 pub(super) fn scope(config: &Config, name: &str, now: i64) -> Result<PageScope> {
     Ok(PageScope {
+        inherited_retry_campaigns: Vec::new(),
         run_generation: name.into(),
         config_sha256: page_config_digest(config)?,
         deadline_ms: now + 3_600_000,

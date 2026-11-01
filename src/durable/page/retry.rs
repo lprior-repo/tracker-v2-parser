@@ -21,6 +21,10 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     pub fn configured(config: &Config, request: &PageRequest) -> Result<Self> {
+        crate::durable::retry_lineage::validate_config(
+            config,
+            &request.binding.scope.inherited_retry_campaigns,
+        )?;
         let mut canonical = config.clone();
         canonical.validate()?;
         let digest = crate::durable::model::page_config_digest(config)?;
@@ -97,3 +101,10 @@ mod budget_tests;
 
 #[cfg(test)]
 mod budget_wire_tests;
+
+#[cfg(test)]
+mod lineage_edge_tests;
+#[cfg(test)]
+mod lineage_tests;
+#[cfg(test)]
+mod lineage_wire_tests;

@@ -18,6 +18,7 @@ fn request() -> Result<CrawlRequest> {
     config.export.layout = track_scrapper_v2::export::ExportLayout::SingleSheet;
     let scope = page_support::scope(&config)?;
     Ok(CrawlRequest {
+        inherited_retry_campaigns: Vec::new(),
         generation: "presentation-only-review-change".into(),
         config,
         deadline_ms: scope.deadline_ms,

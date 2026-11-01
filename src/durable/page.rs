@@ -41,6 +41,8 @@ pub struct PageScope {
     pub config_sha256: String,
     pub deadline_ms: i64,
     pub cooldown_ms: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inherited_retry_campaigns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

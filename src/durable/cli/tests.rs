@@ -10,7 +10,7 @@ struct Arguments {
     durable: DurableArgs,
 }
 
-fn overrides(extra: &[&str]) -> Result<RunOverrides> {
+pub(super) fn overrides(extra: &[&str]) -> Result<RunOverrides> {
     let parsed = Arguments::try_parse_from(
         ["test", "crawl", "--generation", "configured-run"]
             .into_iter()

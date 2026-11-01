@@ -1,6 +1,8 @@
 mod client;
 mod commands;
 #[cfg(test)]
+mod lineage_tests;
+#[cfg(test)]
 mod tests;
 
 use super::{
@@ -19,7 +21,7 @@ pub struct DurableArgs {
     command: DurableCommand,
 }
 
-#[derive(Args, Debug, Clone, Copy, Default)]
+#[derive(Args, Debug, Clone, Default)]
 pub(super) struct RunOverrides {
     #[arg(long, value_parser = clap::value_parser!(u32).range(1..=24))]
     hours: Option<u32>,
@@ -27,6 +29,8 @@ pub(super) struct RunOverrides {
     max_batches: Option<u32>,
     #[arg(long, value_parser = clap::value_parser!(u32).range(15..=3_600))]
     cooldown_seconds: Option<u32>,
+    #[arg(long = "inherit-retry-campaign", action = clap::ArgAction::Append)]
+    inherited_retry_campaigns: Vec<String>,
 }
 
 #[derive(Subcommand)]

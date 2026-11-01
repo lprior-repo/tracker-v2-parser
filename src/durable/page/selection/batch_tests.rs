@@ -44,6 +44,7 @@ async fn one_page_batches_reach_public_results_despite_ready_contacts() -> Resul
             let config = Config::parse("states=['WI']\n[limits]\nmax_pages=1\npublic_results_every=8\n[acquisition]\nmode='public_results'\ncollect_contacts=true\n[sources.athleticnet]\nenabled=false")?;
             let now = chrono::Utc::now().timestamp_millis();
             let scope = PageScope {
+                inherited_retry_campaigns: Vec::new(),
                 run_generation: "small-batch-fairness".into(),
                 config_sha256: page_config_digest(&config)?,
                 deadline_ms: now + 3_600_000,
