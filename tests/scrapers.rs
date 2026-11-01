@@ -120,26 +120,26 @@ async fn given_saved_marks_when_invalid_replay_fails_then_checkpoint_is_not_comp
     })).await
 }
 
-async fn exhaust_failed_bio_replay(test: &support::Scenario) -> Result<()> {
+async fn exhaust_failed_bio_replay(test: &support::Scenario) -> Result<i64> {
     let invalid = test.directory().join("invalid-bio.json");
     std::fs::write(&invalid, b"not source JSON")?;
     let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((invalid.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,("https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),season:Some(("2026").parse::<i32>()?),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})}).await?;
     assert!(!output.status.success());
-    sqlx::query("UPDATE scrape_pages SET attempts=3 WHERE status='failed'")
-        .execute(&test.pool)
-        .await?;
-    Ok(())
+    sqlx::query_scalar("UPDATE scrape_pages SET attempts=3 WHERE status='failed' RETURNING id")
+        .fetch_one(&test.pool)
+        .await
+        .map_err(Into::into)
 }
 
 #[tokio::test]
 async fn given_exhausted_failure_when_valid_capture_is_replayed_then_data_is_saved_without_another_attempt()
 -> Result<()> {
     with_schema(|test| Box::pin(async move {
-        exhaust_failed_bio_replay(test).await?;
+        let checkpoint_id = exhaust_failed_bio_replay(test).await?;
         assert_success(&import_bio(test).await?);
         let state: (String, i32, bool, Option<String>) = sqlx::query_as(
-            "SELECT status,attempts,last_success IS NOT NULL,last_error FROM scrape_pages WHERE url LIKE '%athleteId=28872883%'",
-        ).fetch_one(&test.pool).await?;
+            "SELECT status,attempts,last_success IS NOT NULL,last_error FROM scrape_pages WHERE id=$1",
+        ).bind(checkpoint_id).fetch_one(&test.pool).await?;
         assert_eq!(state, ("succeeded".into(), 3, true, None));
         let mark: String = sqlx::query_scalar("SELECT raw_mark FROM results WHERE source_result_id='258445410'")
             .fetch_one(&test.pool).await?;
@@ -152,13 +152,13 @@ async fn given_exhausted_failure_when_valid_capture_is_replayed_then_data_is_sav
 async fn given_exhausted_failure_when_invalid_capture_is_replayed_then_failure_and_attempt_count_remain()
 -> Result<()> {
     with_schema(|test| Box::pin(async move {
-        exhaust_failed_bio_replay(test).await?;
+        let checkpoint_id = exhaust_failed_bio_replay(test).await?;
         let invalid = test.directory().join("invalid-bio.json");
         let output = test.operation(&crate::support::OfflineOperation::Replay {config:None,input:std::path::PathBuf::from((invalid.to_str().context("UTF-8 path")?).to_string()),target:track_scrapper_v2::model::Target::get(track_scrapper_v2::model::Source::AthleticNet,track_scrapper_v2::model::PageKind::Athlete,("https://www.athletic.net/api/v1/AthleteBio/GetAthleteBioData?athleteId=28872883&sport=tf&level=0").to_string(),track_scrapper_v2::model::PageContext {state:Some(("WI").to_string()),athlete_id:Some(("28872883").to_string()),season:Some(("2026").parse::<i32>()?),sport:Some(track_scrapper_v2::model::Sport::Outdoor), ..Default::default()})}).await?;
         assert!(!output.status.success());
         let state: (String, i32, bool, bool) = sqlx::query_as(
-            "SELECT status,attempts,last_success IS NOT NULL,last_error IS NOT NULL FROM scrape_pages WHERE url LIKE '%athleteId=28872883%'",
-        ).fetch_one(&test.pool).await?;
+            "SELECT status,attempts,last_success IS NOT NULL,last_error IS NOT NULL FROM scrape_pages WHERE id=$1",
+        ).bind(checkpoint_id).fetch_one(&test.pool).await?;
         assert_eq!(state, ("failed".into(), 3, false, true));
         let results: i64 = sqlx::query_scalar("SELECT count(*) FROM results").fetch_one(&test.pool).await?;
         assert_eq!(results, 0);

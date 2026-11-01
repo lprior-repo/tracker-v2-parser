@@ -294,6 +294,20 @@ place and append `needs_review` entries under
 `schools.address_provenance.manual_research_conflicts`. Coach audit records live
 under `contacts.raw.manual_research` and survive exact source-claim replays.
 
+The same manifest accepts `school_website` changes with `source`, `source_id`,
+`expected_school_id`, `expected_name`, `expected_city`, `expected_state`,
+`website`, `contact_url`, `season` and `evidence`. The referenced retained text
+must publish the exact school name and both exact URLs together. Both URLs must
+use public DNS HTTPS without credentials, secrets or fragments, and share an
+origin. Existing nonblank websites cannot be replaced. The operation records
+website evidence under `schools.website_provenance.manual_research` and queues
+the published contact page in the same receipt transaction, before acquiring
+school mutation locks. It preserves existing checkpoints, source stops and
+attempt counters, including across seasons. Later observations retain the
+reviewed website and known identity fields; conflicting claims are deduplicated
+under `schools.website_provenance.manual_research_conflicts` and included on
+Review. This intake does not fetch a URL or start a replacement campaign.
+
 
 A separate `reviewed_result_links` operation attributes an existing unassigned
 MileSplit XC result to an exact existing athlete profile. Its bounded schema-1

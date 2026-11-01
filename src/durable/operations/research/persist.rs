@@ -1,31 +1,30 @@
 mod provenance;
+mod school;
+mod website;
+
+use school::{SchoolRow, is_blank, lock_school, verify_school};
 
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::model::Source;
-
 use super::manifest::{Change, Coach, Manifest, Reviewed, SchoolAddress};
 
 #[derive(Debug, Serialize)]
 pub struct Report {
-    addresses_filled: u64,
-    coaches_inserted: u64,
-    coaches_already_present: u64,
+    #[serde(flatten)]
+    counts: Counts,
     manifest_sha256: String,
 }
 
-#[derive(Clone)]
-pub(super) struct SchoolRow {
-    pub(super) id: i64,
-    pub(super) name: String,
-    pub(super) city: Option<String>,
-    pub(super) state: Option<String>,
-    pub(super) address: Option<String>,
-    pub(super) postal_code: Option<String>,
-    pub(super) address_provenance: Option<Value>,
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+struct Counts {
+    addresses_filled: u64,
+    coaches_inserted: u64,
+    coaches_already_present: u64,
+    websites_filled: u64,
+    contact_pages_enqueued: u64,
 }
 
 pub(super) async fn apply(
@@ -33,6 +32,7 @@ pub(super) async fn apply(
     reviewed: Reviewed,
 ) -> Result<Report> {
     let manifest = reviewed.manifest;
+    let enqueued = website::enqueue(connection, &manifest.changes).await?;
     let mut changes: Vec<_> = manifest.changes.iter().collect();
     changes.sort_by_key(|change| target_order(change));
     let (_, counts, _, _) = stream::iter(changes)
@@ -40,7 +40,10 @@ pub(super) async fn apply(
         .try_fold(
             (
                 connection,
-                (0_u64, 0_u64, 0_u64),
+                Counts {
+                    contact_pages_enqueued: enqueued,
+                    ..Counts::default()
+                },
                 &manifest,
                 reviewed.sha256.as_str(),
             ),
@@ -51,9 +54,7 @@ pub(super) async fn apply(
         )
         .await?;
     Ok(Report {
-        addresses_filled: counts.0,
-        coaches_inserted: counts.1,
-        coaches_already_present: counts.2,
+        counts,
         manifest_sha256: reviewed.sha256,
     })
 }
@@ -62,6 +63,7 @@ const fn target_order(change: &Change) -> (i64, &'static str) {
     match change {
         Change::SchoolAddress(item) => (item.expected_school_id, "address"),
         Change::Coach(item) => (item.expected_school_id, "coach"),
+        Change::SchoolWebsite(item) => (item.expected_school_id, "website"),
     }
 }
 
@@ -70,79 +72,46 @@ fn apply_change<'a>(
     manifest: &'a Manifest,
     manifest_sha256: &'a str,
     change: &'a Change,
-    counts: (u64, u64, u64),
-) -> futures::future::BoxFuture<'a, Result<(u64, u64, u64)>> {
+    counts: Counts,
+) -> futures::future::BoxFuture<'a, Result<Counts>> {
     Box::pin(async move {
         match change {
             Change::SchoolAddress(item) => {
                 apply_address(connection, manifest, manifest_sha256, item).await?;
-                Ok((
-                    counts
-                        .0
+                Ok(Counts {
+                    addresses_filled: counts
+                        .addresses_filled
                         .checked_add(1)
                         .context("reviewed address count overflow")?,
-                    counts.1,
-                    counts.2,
-                ))
+                    ..counts
+                })
             }
             Change::Coach(item) => {
                 let inserted = apply_coach(connection, manifest, manifest_sha256, item).await?;
-                Ok((
-                    counts.0,
-                    counts
-                        .1
+                Ok(Counts {
+                    coaches_inserted: counts
+                        .coaches_inserted
                         .checked_add(u64::from(inserted))
                         .context("reviewed coach insert count overflow")?,
-                    counts
-                        .2
+                    coaches_already_present: counts
+                        .coaches_already_present
                         .checked_add(u64::from(!inserted))
                         .context("reviewed existing coach count overflow")?,
-                ))
+                    ..counts
+                })
+            }
+            Change::SchoolWebsite(item) => {
+                let filled = website::apply(connection, manifest, manifest_sha256, item).await?;
+                Ok(Counts {
+                    websites_filled: counts
+                        .websites_filled
+                        .checked_add(u64::from(filled))
+                        .context("reviewed website count overflow")?,
+                    ..counts
+                })
             }
         }
     })
-}
-
-async fn lock_school(
-    connection: &mut sqlx::PgConnection,
-    source: Source,
-    source_id: &str,
-) -> Result<SchoolRow> {
-    sqlx::query_as::<_, (i64, String, Option<String>, Option<String>, Option<String>, Option<String>, Option<Value>)>(
-        "SELECT id,name,city,state,address,postal_code,address_provenance FROM schools WHERE source=$1 AND source_id=$2 FOR UPDATE",
-    )
-    .bind(source.as_str())
-    .bind(source_id)
-    .fetch_optional(connection)
-    .await?
-    .map(|row| SchoolRow {
-        id: row.0,
-        name: row.1,
-        city: row.2,
-        state: row.3,
-        address: row.4,
-        postal_code: row.5,
-        address_provenance: row.6,
-    })
-    .context("reviewed school source and source ID did not match a database school")
-}
-
-fn verify_school(
-    row: &SchoolRow,
-    source_id: &str,
-    expected_id: i64,
-    name: &str,
-    city: Option<&String>,
-    state: Option<&String>,
-) -> Result<()> {
-    ensure!(
-        row.id == expected_id
-            && row.name == *name
-            && row.city.as_ref() == city
-            && row.state.as_ref() == state,
-        "reviewed school database ID, name, city, or state is stale or conflicting for source ID {source_id}"
-    );
-    Ok(())
 }
 
 async fn apply_address(
@@ -211,12 +180,6 @@ async fn apply_address(
         .execute(connection)
         .await?;
     Ok(())
-}
-
-fn is_blank(value: Option<&String>) -> bool {
-    value
-        .map(String::as_str)
-        .is_none_or(|current| current.trim().is_empty())
 }
 
 async fn apply_coach(

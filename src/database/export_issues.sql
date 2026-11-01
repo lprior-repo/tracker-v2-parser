@@ -82,8 +82,8 @@ WITH selected_states AS (
 ), school_research_conflicts AS MATERIALIZED (
     SELECT s.id FROM schools s
     WHERE $2::integer=4 AND s.id>$3::bigint
-      AND jsonb_typeof(s.address_provenance->'manual_research_conflicts')='array'
-      AND jsonb_array_length(s.address_provenance->'manual_research_conflicts')>0
+      AND jsonb_typeof((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb)))='array'
+      AND jsonb_array_length((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb)))>0
       AND (
         cardinality($1::text[])=0
         OR EXISTS (
@@ -129,8 +129,9 @@ WITH selected_states AS (
                jsonb_build_object(
                    'needs_review',true,
                    'school_source_id',s.source_id,
+                   'website_research',s.website_provenance ? 'manual_research',
                    'conflicts',diagnostic.conflicts,
-                   'truncated',jsonb_array_length(s.address_provenance->'manual_research_conflicts')>20
+                   'truncated',jsonb_array_length((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb)))>20
                )::text AS detail
         FROM schools s
         LEFT JOIN LATERAL (
@@ -140,12 +141,12 @@ WITH selected_states AS (
                 'incoming_value',left((c.value->'incoming_value')::text,512),
                 'incoming_source_url',left(c.value->>'incoming_source_url',1024)
             ) ORDER BY c.ordinality) AS conflicts
-            FROM jsonb_array_elements(s.address_provenance->'manual_research_conflicts') WITH ORDINALITY c(value,ordinality)
+            FROM jsonb_array_elements((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb))) WITH ORDINALITY c(value,ordinality)
             WHERE c.ordinality<=20
         ) diagnostic ON true
         LEFT JOIN LATERAL (
             SELECT left(c.value->>'incoming_source_url',2048) AS url
-            FROM jsonb_array_elements(s.address_provenance->'manual_research_conflicts') WITH ORDINALITY c(value,ordinality)
+            FROM jsonb_array_elements((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb))) WITH ORDINALITY c(value,ordinality)
             WHERE c.ordinality=1 LIMIT 1
         ) first_conflict ON true
         WHERE t.kind=4 AND s.id=t.item_id
@@ -182,7 +183,8 @@ SELECT CASE WHEN t.bytes<=$5::bigint THEN CASE WHEN t.kind>=2 AND t.kind<4 THEN 
            WHEN 1 THEN 'page note: ' || p.note
            WHEN 2 THEN concat_ws(' | ','unassigned result',r.event,r.raw_mark,r.status)
            WHEN 3 THEN concat_ws(' | ','reviewed result link invalidated: '||r.invalidation_reason,r.event,r.raw_mark,r.status)
-           ELSE 'manual research address conflict: '||school.detail
+           ELSE CASE WHEN school.detail::jsonb->>'website_research'='true'
+               THEN 'manual research school conflict: ' ELSE 'manual research address conflict: ' END||school.detail
        END END AS detail,
        t.kind,t.item_id,t.ordinal,t.bytes,t.phase_exhausted
 FROM picked t
@@ -202,8 +204,9 @@ LEFT JOIN LATERAL (
            jsonb_build_object(
                'needs_review',true,
                'school_source_id',s.source_id,
+                   'website_research',s.website_provenance ? 'manual_research',
                'conflicts',diagnostic.conflicts,
-               'truncated',jsonb_array_length(s.address_provenance->'manual_research_conflicts')>20
+               'truncated',jsonb_array_length((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb)))>20
            )::text AS detail
     FROM schools s
     LEFT JOIN LATERAL (
@@ -213,12 +216,12 @@ LEFT JOIN LATERAL (
             'incoming_value',left((c.value->'incoming_value')::text,512),
             'incoming_source_url',left(c.value->>'incoming_source_url',1024)
         ) ORDER BY c.ordinality) AS conflicts
-        FROM jsonb_array_elements(s.address_provenance->'manual_research_conflicts') WITH ORDINALITY c(value,ordinality)
+        FROM jsonb_array_elements((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb))) WITH ORDINALITY c(value,ordinality)
         WHERE c.ordinality<=20
     ) diagnostic ON true
     LEFT JOIN LATERAL (
         SELECT left(c.value->>'incoming_source_url',2048) AS url
-        FROM jsonb_array_elements(s.address_provenance->'manual_research_conflicts') WITH ORDINALITY c(value,ordinality)
+        FROM jsonb_array_elements((COALESCE(s.address_provenance->'manual_research_conflicts','[]'::jsonb)||COALESCE(s.website_provenance->'manual_research_conflicts','[]'::jsonb))) WITH ORDINALITY c(value,ordinality)
         WHERE c.ordinality=1 LIMIT 1
     ) first_conflict ON true
     WHERE t.kind=4 AND t.bytes<=$5::bigint AND s.id=t.item_id

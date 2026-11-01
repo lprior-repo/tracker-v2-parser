@@ -1,3 +1,7 @@
+mod website;
+
+pub(super) use website::SchoolWebsite;
+
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
@@ -48,6 +52,7 @@ pub(super) enum CaptureKind {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Change {
     SchoolAddress(SchoolAddress),
+    SchoolWebsite(SchoolWebsite),
     Coach(Coach),
 }
 
@@ -136,7 +141,8 @@ fn validate(workspace: &super::super::Workspace, manifest: &Manifest) -> Result<
         evidence_bytes <= MAX_EVIDENCE_BYTES,
         "research evidence exceeds 128 MiB"
     );
-    validate_changes(&manifest.changes, &manifest.evidence)
+    validate_changes(&manifest.changes, &manifest.evidence)?;
+    website::validate_evidence(workspace, &manifest.changes, &manifest.evidence)
 }
 
 fn validate_changes(changes: &[Change], evidence: &[Evidence]) -> Result<()> {
@@ -161,6 +167,10 @@ fn validate_changes(changes: &[Change], evidence: &[Evidence]) -> Result<()> {
                 );
                 validate_refs(&item.evidence, evidence.len())?;
                 Ok(format!("address:{}", item.expected_school_id))
+            }
+            Change::SchoolWebsite(item) => {
+                website::validate(item, evidence.len())?;
+                Ok(format!("website:{}", item.expected_school_id))
             }
             Change::Coach(item) => {
                 validate_target(

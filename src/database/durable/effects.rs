@@ -7,6 +7,14 @@ use crate::{
 };
 
 impl Database {
+    #[tracing::instrument(skip_all)]
+    pub(crate) async fn enqueue_transaction(
+        connection: &mut sqlx::PgConnection,
+        targets: &[crate::model::Target],
+    ) -> Result<u64> {
+        super::super::queue::enqueue(connection, targets, false).await
+    }
+
     pub async fn durable_enqueue_receipt(
         &self,
         key: &str,

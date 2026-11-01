@@ -65,7 +65,7 @@ pub(super) fn evidence_first_url(evidence: &[Evidence], references: &[usize]) ->
         .clone())
 }
 
-fn evidence_values(evidence: &[Evidence], references: &[usize]) -> Result<Vec<Value>> {
+pub(super) fn evidence_values(evidence: &[Evidence], references: &[usize]) -> Result<Vec<Value>> {
     references
         .iter()
         .map(|index| {

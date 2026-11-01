@@ -1,3 +1,5 @@
+mod website;
+
 use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
 use sqlx::PgConnection;
@@ -30,17 +32,17 @@ async fn save(
     let source = target.source;
     let details = serde_json::to_value(school)?;
     let public_email = school.public_email.as_deref();
-    let (id, provenance): (i64, Option<serde_json::Value>) = sqlx::query_as(
+    let (id, provenance, website_provenance): (i64, Option<serde_json::Value>, Option<serde_json::Value>) = sqlx::query_as(
         "INSERT INTO schools(source,source_id,name,state,city,address,postal_code,website,public_email,source_url) \
          VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10) ON CONFLICT(source,source_id) DO UPDATE SET \
-         name=CASE WHEN (schools.address_provenance->'manual_research'->-1->'identity_snapshot') ? 'name' AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'name' IS DISTINCT FROM EXCLUDED.name THEN schools.name ELSE EXCLUDED.name END, \
-         state=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'state'),'') IS NOT NULL AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->'state' IS DISTINCT FROM to_jsonb(EXCLUDED.state) THEN schools.state ELSE COALESCE(EXCLUDED.state,schools.state) END, \
-         city=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'city'),'') IS NOT NULL AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->'city' IS DISTINCT FROM to_jsonb(EXCLUDED.city) THEN schools.city ELSE COALESCE(EXCLUDED.city,schools.city) END, \
+         name=CASE WHEN (schools.address_provenance->'manual_research'->-1->'identity_snapshot') ? 'name' AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'name' IS DISTINCT FROM EXCLUDED.name OR (schools.website_provenance->'manual_research'->-1->'identity_snapshot') ? 'name' AND schools.website_provenance->'manual_research'->-1->'identity_snapshot'->>'name' IS DISTINCT FROM EXCLUDED.name THEN schools.name ELSE EXCLUDED.name END, \
+         state=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'state'),'') IS NOT NULL AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->'state' IS DISTINCT FROM to_jsonb(EXCLUDED.state) OR NULLIF(btrim(schools.website_provenance->'manual_research'->-1->'identity_snapshot'->>'state'),'') IS NOT NULL AND schools.website_provenance->'manual_research'->-1->'identity_snapshot'->>'state' IS DISTINCT FROM EXCLUDED.state THEN schools.state ELSE COALESCE(EXCLUDED.state,schools.state) END, \
+         city=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'identity_snapshot'->>'city'),'') IS NOT NULL AND schools.address_provenance->'manual_research'->-1->'identity_snapshot'->'city' IS DISTINCT FROM to_jsonb(EXCLUDED.city) OR NULLIF(btrim(schools.website_provenance->'manual_research'->-1->'identity_snapshot'->>'city'),'') IS NOT NULL AND schools.website_provenance->'manual_research'->-1->'identity_snapshot'->>'city' IS DISTINCT FROM EXCLUDED.city THEN schools.city ELSE COALESCE(EXCLUDED.city,schools.city) END, \
          address=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'new'->>'address'),'') IS NOT NULL THEN schools.address ELSE COALESCE(EXCLUDED.address,schools.address) END, \
          postal_code=CASE WHEN NULLIF(btrim(schools.address_provenance->'manual_research'->-1->'new'->>'postal_code'),'') IS NOT NULL THEN schools.postal_code ELSE COALESCE(EXCLUDED.postal_code,schools.postal_code) END, \
-         website=COALESCE(EXCLUDED.website,schools.website), \
+         website=CASE WHEN NULLIF(btrim(schools.website_provenance->'manual_research'->-1->>'website'),'') IS NOT NULL THEN schools.website ELSE COALESCE(EXCLUDED.website,schools.website) END, \
          address_provenance=NULLIF(CASE WHEN EXCLUDED.postal_code IS NOT NULL THEN (CASE WHEN EXCLUDED.address IS NOT NULL THEN COALESCE(schools.address_provenance, '{}'::jsonb) - 'address' ELSE COALESCE(schools.address_provenance, '{}'::jsonb) END) - 'postal_code' WHEN EXCLUDED.address IS NOT NULL THEN COALESCE(schools.address_provenance, '{}'::jsonb) - 'address' ELSE COALESCE(schools.address_provenance, '{}'::jsonb) END, '{}'::jsonb), \
-         public_email=COALESCE(EXCLUDED.public_email,schools.public_email),source_url=EXCLUDED.source_url,last_checked=clock_timestamp() RETURNING id,address_provenance",
+         public_email=COALESCE(EXCLUDED.public_email,schools.public_email),source_url=EXCLUDED.source_url,last_checked=clock_timestamp() RETURNING id,address_provenance,website_provenance",
     ).bind(source.as_str()).bind(&school.id).bind(&school.name).bind(&school.state)
         .bind(&school.city).bind(&school.address).bind(&school.postal_code).bind(&school.website)
         .bind(public_email).bind(url).fetch_one(&mut *connection).await?;
@@ -62,6 +64,15 @@ async fn save(
             .execute(&mut *connection)
             .await?;
     }
+    website::retain_conflicts(
+        connection,
+        id,
+        website_provenance.as_ref(),
+        school,
+        url,
+        &details,
+    )
+    .await?;
     save_office(connection, id, public_email, url, &target.url, &details).await
 }
 
