@@ -1,4 +1,5 @@
 mod identity;
+mod overlap;
 mod store;
 
 #[cfg(test)]
@@ -25,6 +26,8 @@ impl PersistentPacing {
             pool: self.pool.clone(),
             wire_context: None,
             spacing: self.spacing,
+            overlapped: self.overlapped,
+            starts: self.starts.clone(),
             #[cfg(test)]
             admission_test_polls: self.admission_test_polls,
         };
@@ -45,7 +48,7 @@ impl PersistentPacing {
         operation: F,
     ) -> Result<Response>
     where
-        F: Future<Output = Result<Response>>,
+        F: Future<Output = Result<Response>> + Send,
     {
         let receipt = self
             .wire_context
@@ -55,6 +58,18 @@ impl PersistentPacing {
         if let Some(receipt) = &receipt {
             self.check_wire_origin(&request).await?;
             self.check_wire(receipt, &request).await?;
+        }
+        if self.overlapped {
+            return self
+                .send_overlapped(
+                    &request,
+                    receipt.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!("overlapped admission requires durable wire identity")
+                    })?,
+                    interval,
+                    operation,
+                )
+                .await;
         }
         self.execute_guarded(
             request.source,

@@ -64,11 +64,16 @@ pub async fn public_addresses(url: &Url) -> Result<Vec<SocketAddr>> {
         .await
         .context("resolving source host")?
         .collect::<Vec<_>>();
+    validate_public_addresses(&addresses)?;
+    Ok(addresses)
+}
+
+pub(super) fn validate_public_addresses(addresses: &[SocketAddr]) -> Result<()> {
     ensure!(
         !addresses.is_empty() && addresses.iter().all(|address| public_ip(address.ip())),
         "source resolved to a private, local, or reserved address"
     );
-    Ok(addresses)
+    Ok(())
 }
 
 fn public_ip(ip: IpAddr) -> bool {

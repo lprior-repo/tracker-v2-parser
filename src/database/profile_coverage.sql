@@ -6,16 +6,10 @@ WITH cohort AS MATERIALIZED (
     WHERE profile.source='milesplit' AND ($1::text IS NULL OR profile.source=$1)
       AND (COALESCE(profile.graduation_year,athlete.graduation_year)=ANY($4::integer[])
         OR COALESCE(profile.graduation_year,athlete.graduation_year) IS NULL)
-), profile_candidates AS MATERIALIZED (
+), cohort_pages AS MATERIALIZED (
     SELECT p.id,p.source,p.url,p.status,p.attempts,c.source_id AS athlete_id,
-           COALESCE(NULLIF(p.cursor->'context'->>'school_id',''),c.school_id,'athlete:' || c.source_id) AS school_id,c.profile_url,c.known_year
-    FROM scrape_pages p JOIN cohort c
-      ON c.source=p.source AND c.source_id=p.cursor->'context'->>'athlete_id'
-    WHERE p.source='milesplit' AND p.cursor->>'kind'='athlete'
-      AND p.url ~ '^https://(www|[a-z]{2})[.]milesplit[.]com/athletes/[1-9][0-9]*(-[^/?#%]+)?(/(stats|progression))?/?$'
-      AND (cardinality($3::text[])=0
-           OR left(upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state'))),2)
-             =ANY(ARRAY(SELECT left(wanted.state,2) FROM unnest($3::text[]) AS wanted(state))))
+           COALESCE(NULLIF(p.cursor->'context'->>'school_id',''),c.school_id,'athlete:' || c.source_id) AS school_id,c.profile_url,c.known_year,
+           (p.url ~ '^https://(www|[a-z]{2})[.]milesplit[.]com/athletes/[1-9][0-9]*(-[^/?#%]+)?(/(stats|progression))?/?$'
       AND CASE WHEN p.cursor->>'kind'='athlete'
       AND p.cursor->>'source'=p.source AND p.cursor->>'url'=p.url
       AND (p.cursor->>'method' IS NULL OR upper(p.cursor->>'method')='GET')
@@ -23,16 +17,24 @@ WITH cohort AS MATERIALIZED (
       AND p.cursor->>'token_url' IS NULL AND p.cursor->>'browser_origin' IS NULL
       AND (cardinality($3::text[])=0
            OR upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state')))=ANY($3)) THEN true ELSE false END
+      AND split_part(split_part(p.url,'/',5),'-',1)=c.source_id
+      AND (split_part(p.url,'/',6)='' OR c.known_year=ANY($4::integer[]))
+      AND (split_part(split_part(p.url,'://',2),'.',1)='www'
+           OR upper(split_part(split_part(p.url,'://',2),'.',1))=ANY($6::text[]))
+      AND (split_part(p.url,'/',6)<>'' OR p.status='succeeded' OR p.url=c.profile_url)) AS valid_target
+    FROM scrape_pages p JOIN cohort c
+      ON c.source=p.source AND c.source_id=p.cursor->'context'->>'athlete_id'
+    WHERE p.source='milesplit' AND p.cursor->>'kind'='athlete'
+      AND (cardinality($3::text[])=0
+           OR left(upper(btrim(COALESCE(p.cursor->'context'->>'acquisition_state',p.cursor->'context'->>'state'))),2)
+             =ANY(ARRAY(SELECT left(wanted.state,2) FROM unnest($3::text[]) AS wanted(state))))
+), profile_candidates AS MATERIALIZED (
+    SELECT id,source,url,status,attempts,athlete_id,school_id,profile_url,known_year FROM cohort_pages WHERE valid_target
 ), validated_profiles AS MATERIALIZED (
     SELECT p.id,p.source,p.status,p.attempts,p.athlete_id,
            p.school_id,
            CASE split_part(p.url,'/',6) WHEN '' THEN 0 WHEN 'stats' THEN 1 ELSE 2 END AS section
     FROM profile_candidates p
-    WHERE split_part(split_part(p.url,'/',5),'-',1)=p.athlete_id
-      AND (split_part(p.url,'/',6)='' OR p.known_year=ANY($4::integer[]))
-      AND (split_part(split_part(p.url,'://',2),'.',1)='www'
-           OR upper(split_part(split_part(p.url,'://',2),'.',1))=ANY($6::text[]))
-      AND (split_part(p.url,'/',6)<>'' OR p.status='succeeded' OR p.url=p.profile_url)
 ), profiles AS MATERIALIZED (
     SELECT p.*,min(p.id) OVER (PARTITION BY p.source,p.athlete_id) AS athlete_order
     FROM validated_profiles p

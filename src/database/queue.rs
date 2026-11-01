@@ -1,3 +1,4 @@
+mod batch;
 mod selection;
 pub(super) use selection::{
     DurableSelection, FallbackScope, next, next_for_cohort, next_for_cohort_in,
@@ -37,6 +38,13 @@ pub(super) async fn enqueue_rows(
     refresh: bool,
 ) -> Result<u64> {
     targets.iter().try_for_each(validate_target)?;
+    if !refresh
+        && targets
+            .iter()
+            .all(|target| target.kind != crate::model::PageKind::Contacts)
+    {
+        return batch::enqueue(connection, targets).await;
+    }
     let (_, count) = stream::iter(targets.iter().map(Ok::<_, anyhow::Error>))
         .try_fold(
             (connection, 0_u64),

@@ -52,12 +52,17 @@ fn given_repeatable_ancestor_flags_when_request_is_frozen_then_every_phase_retai
 #[test]
 fn given_empty_lineage_when_old_request_and_scope_are_loaded_then_serialized_bytes_stay_identical()
 -> Result<()> {
-    let request = commands::crawl_request(
+    let mut request = commands::crawl_request(
         Config::parse("states=['IA']")?,
         "unchanged".into(),
         overrides(&[])?,
         1000,
     )?;
+    assert_eq!(
+        request.scheduler_version,
+        Some(crate::durable::model::SchedulerVersion::RollingV2)
+    );
+    request.scheduler_version = None;
     let config = serde_json::to_string(&request.config)?;
     let expected = format!(
         "{{\"generation\":\"unchanged\",\"config\":{config},\"deadline_ms\":86401000,\"cooldown_ms\":60000,\"batch\":0,\"max_batches\":10000,\"phase\":\"school_chains\"}}"

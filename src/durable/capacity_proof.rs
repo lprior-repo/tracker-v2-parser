@@ -39,8 +39,12 @@ impl Worker {
             "capacity proof paths must be absolute"
         );
         tokio::fs::create_dir(artifacts).await?;
+        let connection = Database::connect(database).await?;
+        let pacing = super::pacing::PersistentPacing::new(connection.pool().clone());
         let runtime = Arc::new(Runtime {
-            database: Database::connect(database).await?,
+            http_clients: crate::transport::SharedHttpClients::default(),
+            database: connection,
+            pacing,
             database_url: database.to_owned(),
             artifact_root: tokio::fs::canonicalize(artifacts).await?,
             blocking: BlockingStages::new(),

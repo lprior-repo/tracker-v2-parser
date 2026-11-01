@@ -11,6 +11,7 @@ mod pipeline;
 mod process;
 mod review;
 mod runtime;
+mod upgrade;
 mod workbook;
 
 #[cfg(test)]
@@ -32,19 +33,24 @@ struct Execution {
     cleanup: Value,
 }
 
-#[derive(Debug, Args)]
+#[derive(Clone, Debug, Args)]
 pub struct RecoveryArgs {
     #[arg(long)]
     pub server: PathBuf,
     #[arg(long)]
     pub worker: PathBuf,
     #[arg(long)]
+    pub previous_worker: Option<PathBuf>,
+    #[arg(long)]
     pub evidence: PathBuf,
 }
 
 impl RecoveryArgs {
     fn validate(mut self) -> Result<Self> {
-        for path in [&mut self.server, &mut self.worker] {
+        for path in [&mut self.server, &mut self.worker]
+            .into_iter()
+            .chain(self.previous_worker.iter_mut())
+        {
             *path = path
                 .canonicalize()
                 .context("native proof executable absent")?;
@@ -127,7 +133,7 @@ pub async fn run(args: RecoveryArgs) -> Result<()> {
             );
         }
     };
-    let outcome = execute(args, &scoped, identity).await;
+    let outcome = execute_with_upgrade(args, &original, &scoped, identity).await;
     let removed = database::remove_schema(&base, &schema).await;
     base.close().await;
     if let Err(error) = &removed {
@@ -231,6 +237,23 @@ fn safe_error(error: &anyhow::Error, original: &str, scoped: &str) -> String {
         }
     }
     text.chars().take(2048).collect()
+}
+
+async fn execute_with_upgrade(
+    args: RecoveryArgs,
+    original: &str,
+    scoped: &str,
+    identity: &str,
+) -> Result<Execution> {
+    let upgrade = upgrade::prove_if_requested(&args, original, identity).await?;
+    let mut execution = execute(args, scoped, identity).await?;
+    if let Ok(proof) = &mut execution.proof {
+        proof
+            .as_object_mut()
+            .context("native proof must be object")?
+            .insert("worker_upgrade".into(), upgrade);
+    }
+    Ok(execution)
 }
 
 async fn execute(args: RecoveryArgs, scoped: &str, identity: &str) -> Result<Execution> {

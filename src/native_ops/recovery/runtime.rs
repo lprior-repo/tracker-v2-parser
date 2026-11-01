@@ -1,3 +1,5 @@
+mod upgrade;
+
 use std::{
     collections::BTreeSet,
     ffi::OsString,
@@ -100,6 +102,11 @@ impl Runtime {
     }
 
     pub async fn start_worker(&mut self) -> Result<()> {
+        let binary = self.args.worker.clone();
+        self.start_binary(&binary, "worker.log").await
+    }
+
+    async fn start_binary(&mut self, binary: &std::path::Path, log: &str) -> Result<()> {
         let bind = self
             .endpoint
             .strip_prefix("http://")
@@ -111,10 +118,10 @@ impl Runtime {
             self.args.evidence.join("delivered.xlsx").into_os_string(),
         ]);
         let mut child = Owned::start(
-            &self.args.worker,
+            binary,
             &arguments,
             &self.args.evidence,
-            &self.args.evidence.join("worker.log"),
+            &self.args.evidence.join(log),
             Some(&self.database),
         )?;
         child

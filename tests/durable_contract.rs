@@ -7,6 +7,7 @@ use track_scrapper_v2::{
 fn request() -> Result<CrawlRequest> {
     Ok(CrawlRequest {
         inherited_retry_campaigns: Vec::new(),
+        scheduler_version: None,
         generation: "wisconsin-recovery".into(),
         config: Config::parse(
             "states=['WI']\n[acquisition]\nmode='public_results'\ncollect_contacts=true\nprofile_coverage_only=true\n[sources.athleticnet]\nenabled=false",
@@ -82,4 +83,64 @@ async fn given_nonlocal_ingress_when_submitting_then_no_external_request_can_be_
                 .contains("loopback")
         );
     }
+}
+
+#[derive(serde::Serialize)]
+struct HistoricalRequest<'a> {
+    generation: &'a str,
+    config: &'a Config,
+    deadline_ms: i64,
+    cooldown_ms: i64,
+    batch: u32,
+    max_batches: u32,
+    phase: CrawlPhase,
+}
+
+#[test]
+fn omitted_scheduler_keeps_exact_historical_request_bytes_and_page_scope_identity() -> Result<()> {
+    let request = request()?;
+    let old = HistoricalRequest {
+        generation: &request.generation,
+        config: &request.config,
+        deadline_ms: request.deadline_ms,
+        cooldown_ms: request.cooldown_ms,
+        batch: request.batch,
+        max_batches: request.max_batches,
+        phase: request.phase,
+    };
+    assert_eq!(
+        serde_json::to_string(&request)?,
+        serde_json::to_string(&old)?
+    );
+    assert_eq!(digest(&request)?, digest(&old)?);
+    let upgraded = request.clone().upgraded_scheduler();
+    assert_eq!(request.page_scope()?, upgraded.page_scope()?);
+    assert_eq!(request.deadline_ms, upgraded.deadline_ms);
+    assert_eq!(
+        request.inherited_retry_campaigns,
+        upgraded.inherited_retry_campaigns
+    );
+    assert_eq!(
+        upgraded.scheduler_version,
+        Some(track_scrapper_v2::durable::model::SchedulerVersion::RollingV2)
+    );
+    Ok(())
+}
+
+#[test]
+fn scheduler_upgrade_changes_only_the_unrecorded_continuation_version_field() -> Result<()> {
+    let original = request()?;
+    let prior_bytes = serde_json::to_string(&original)?;
+    let expected = original.next(CrawlPhase::PublicResults)?;
+    let upgraded = expected.clone().upgraded_scheduler();
+    let mut json = serde_json::to_value(&upgraded)?;
+    assert_eq!(json["scheduler_version"], "rolling_v2");
+    json.as_object_mut()
+        .expect("request object")
+        .remove("scheduler_version");
+    assert_eq!(json, serde_json::to_value(&expected)?);
+    assert_eq!(serde_json::to_string(&original)?, prior_bytes);
+    json["scheduler_version"] = serde_json::json!("unqualified_future_mode");
+    assert!(serde_json::from_value::<CrawlRequest>(json).is_err());
+    Ok(())
 }

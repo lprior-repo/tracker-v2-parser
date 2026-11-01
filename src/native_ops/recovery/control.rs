@@ -8,6 +8,10 @@ use super::{io, runtime::Runtime};
 
 impl Runtime {
     pub async fn register(&self) -> Result<Value> {
+        self.register_named("registration.json").await
+    }
+
+    pub async fn register_named(&self, label: &str) -> Result<Value> {
         let until = io::deadline(Duration::from_secs(90))?;
         let result = stream::iter(0..360)
             .map(Ok::<_, anyhow::Error>)
@@ -42,7 +46,7 @@ impl Runtime {
             })
             .await?
             .context("owned worker registration exceeded bound")?;
-        io::save(&self.args.evidence.join("registration.json"), &result)?;
+        io::save(&self.args.evidence.join(label), &result)?;
         Ok(result)
     }
 

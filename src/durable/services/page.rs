@@ -17,6 +17,8 @@ use crate::{
 pub struct PageExecution {
     pub request: PageRequest,
     pub config: Config,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduler_version: Option<crate::durable::model::SchedulerVersion>,
 }
 
 #[restate_sdk::service(
@@ -57,9 +59,13 @@ impl AthleticPage {
             };
         let capture = match effects::record!(&ctx, "fetch-and-retain-page", || async {
             let mut transport = transport(&input.config, &input.request)?
-                .with_persistent_pacing(database.pool().clone());
+                .with_shared_persistent_pacing(self.runtime.pacing.clone())
+                .with_shared_http_clients(self.runtime.http_clients.clone());
             if input.config.limits.concurrency > 1 {
                 transport = transport.with_start_spacing();
+            }
+            if input.scheduler_version.is_some() && input.config.limits.concurrency > 1 {
+                transport = transport.with_overlapped_starts();
             }
             let guard = crate::durable::admission::acquire(
                 database,

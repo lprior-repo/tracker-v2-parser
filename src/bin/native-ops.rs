@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use track_scrapper_v2::native_ops::{migration, recovery, worker};
+use track_scrapper_v2::native_ops::{migration, recovery, resources, worker};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -23,6 +23,10 @@ enum Command {
         command: migration::MigrationCommand,
     },
     Recovery(recovery::RecoveryArgs),
+    Resources {
+        #[command(subcommand)]
+        command: resources::ResourceCommand,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -32,5 +36,6 @@ async fn main() -> Result<()> {
         Command::WorkerLaunch(args) => worker::run_launch(args).await,
         Command::Migration { command } => migration::run(command).await,
         Command::Recovery(args) => recovery::run(args).await,
+        Command::Resources { command } => resources::run(command).await,
     }
 }

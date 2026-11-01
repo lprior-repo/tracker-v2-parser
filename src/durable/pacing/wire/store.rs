@@ -55,15 +55,8 @@ impl PersistentPacing {
         receipt: &WireReceipt,
         request: &WireRequest,
     ) -> Result<()> {
-        let inserted = sqlx::query(
-            "INSERT INTO durable_wire_requests \
-             (wire_id, operation_id, attempt_id, request_sha256, occurrence, source, origin, method, state) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'intent') ON CONFLICT (wire_id) DO NOTHING",
-        ).bind(&receipt.wire_id).bind(&receipt.operation_id).bind(&receipt.attempt_id)
-            .bind(&receipt.request_sha256).bind(receipt.occurrence).bind(request.source.as_str())
-            .bind(&request.origin).bind(&request.method).execute(&self.pool).await
-            .context("recording pre-wire durable intent")?;
-        if inserted.rows_affected() == 1 {
+        let inserted = insert_wire(&self.pool, receipt, request).await?;
+        if inserted == 1 {
             return Ok(());
         }
         self.check_wire(receipt, request).await?;
@@ -114,6 +107,16 @@ impl PersistentPacing {
         receipt: &WireReceipt,
         status: Option<u16>,
     ) -> Result<()> {
+        self.complete_wire_executed(receipt, status, None).await
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(super) async fn complete_wire_executed(
+        &self,
+        receipt: &WireReceipt,
+        status: Option<u16>,
+        executed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<()> {
         let state = if status.is_some() {
             "headers"
         } else {
@@ -122,11 +125,12 @@ impl PersistentPacing {
         let changed = sqlx::query(
             "UPDATE durable_wire_requests SET state=$2, status=$3, \
              error_class=CASE WHEN $3::integer IS NULL THEN 'transport' ELSE NULL END, \
-             finished_at=clock_timestamp() WHERE wire_id=$1 AND state='intent'",
+             finished_at=clock_timestamp(), execute_started_at=$4 WHERE wire_id=$1 AND state='intent'",
         )
         .bind(&receipt.wire_id)
         .bind(state)
         .bind(status.map(i32::from))
+        .bind(executed_at)
         .execute(&self.pool)
         .await
         .context("recording durable wire result")?;
@@ -136,4 +140,23 @@ impl PersistentPacing {
         );
         Ok(())
     }
+}
+
+pub(super) async fn insert_wire<'e, E>(
+    executor: E,
+    receipt: &WireReceipt,
+    request: &WireRequest,
+) -> Result<u64>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let inserted = sqlx::query(
+        "INSERT INTO durable_wire_requests \
+         (wire_id, operation_id, attempt_id, request_sha256, occurrence, source, origin, method, state) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'intent') ON CONFLICT (wire_id) DO NOTHING",
+    ).bind(&receipt.wire_id).bind(&receipt.operation_id).bind(&receipt.attempt_id)
+        .bind(&receipt.request_sha256).bind(receipt.occurrence).bind(request.source.as_str())
+        .bind(&request.origin).bind(&request.method).execute(executor).await
+        .context("recording pre-wire durable intent")?;
+    Ok(inserted.rows_affected())
 }

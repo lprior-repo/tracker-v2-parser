@@ -110,8 +110,16 @@ async fn children(
     Ok((
         evidence,
         vec![
-            journal::validate_root(&root_rows, root_ids, 5)?,
-            journal::validate_root(&next_rows, next_ids, 2)?,
+            journal::validate_versioned_root(
+                &root_rows,
+                root_ids,
+                5,
+                first
+                    .pointer("/request/scheduler_version")
+                    .and_then(Value::as_str)
+                    == Some("rolling_v2"),
+            )?,
+            journal::validate_versioned_root(&next_rows, next_ids, 2, true)?,
         ],
     ))
 }

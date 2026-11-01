@@ -2,6 +2,7 @@ mod crawl;
 mod operations;
 mod page;
 mod pipeline;
+mod rolling;
 
 use std::sync::Arc;
 

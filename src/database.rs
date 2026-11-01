@@ -16,6 +16,7 @@ mod export_snapshot;
 mod identity;
 mod keys;
 pub mod operation_receipts;
+mod performance;
 mod profile_coverage;
 mod queue;
 mod records;

@@ -7,10 +7,11 @@ use crate::{
     model::{Performance, Source},
 };
 
-use super::{identity, keys, schools};
+use super::keys;
 
 mod legacy_history;
 mod raw_revisions;
+mod references;
 mod school_evidence;
 
 pub(super) use raw_revisions::prepare as prepare_replay;
@@ -38,22 +39,49 @@ pub(super) async fn save_all(
     url: &str,
 ) -> Result<()> {
     legacy_history::reconcile(connection, source, performances, url).await?;
-    stream::iter(performances.iter().enumerate().map(Ok::<_, anyhow::Error>))
-        .try_fold(connection, |connection, (index, performance)| async move {
-            save(connection, source, performance, (url, index)).await?;
-            Ok(connection)
+    stream::iter(
+        performances
+            .chunks(references::ROWS)
+            .enumerate()
+            .map(Ok::<_, anyhow::Error>),
+    )
+    .try_fold(connection, |connection, (chunk, rows)| async move {
+        let offset = chunk
+            .checked_mul(references::ROWS)
+            .context("result offset overflow")?;
+        save_chunk(connection, source, rows, url, offset).await?;
+        Ok(connection)
+    })
+    .await
+    .map(|_| ())
+}
+
+#[tracing::instrument(skip_all)]
+async fn save_chunk(
+    connection: &mut PgConnection,
+    source: Source,
+    rows: &[Performance],
+    url: &str,
+    offset: usize,
+) -> Result<()> {
+    if let Some(first) = rows.first() {
+        validate_wind(source, first)?;
+    }
+    let references = references::References::load(connection, source, rows).await?;
+    stream::iter(rows.iter().enumerate().map(Ok::<_, anyhow::Error>))
+        .try_fold(connection, |connection, (index, row)| {
+            let references = &references;
+            async move {
+                let index = offset.checked_add(index).context("result index overflow")?;
+                save(connection, source, row, (url, index), references).await?;
+                Ok(connection)
+            }
         })
         .await
         .map(|_| ())
 }
 
-#[tracing::instrument(skip(connection, performance))]
-async fn save(
-    connection: &mut PgConnection,
-    source: Source,
-    performance: &Performance,
-    location: (&str, usize),
-) -> Result<()> {
+fn validate_wind(source: Source, performance: &Performance) -> Result<()> {
     if performance.wind.is_some_and(|wind| !wind.is_finite()) {
         bail!(
             "non-finite wind for {} athlete {}",
@@ -61,8 +89,24 @@ async fn save(
             performance.athlete_id
         );
     }
-    let profile = identity::find(connection, source, &performance.athlete_id).await?;
-    let school = schools::find(connection, source, performance.school_id.as_deref()).await?;
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, performance, references))]
+async fn save(
+    connection: &mut PgConnection,
+    source: Source,
+    performance: &Performance,
+    location: (&str, usize),
+    references: &references::References,
+) -> Result<()> {
+    validate_wind(source, performance)?;
+    let profile = references
+        .profile(connection, source, &performance.athlete_id)
+        .await?;
+    let school = references
+        .school(connection, source, performance.school_id.as_deref())
+        .await?;
     upsert(
         connection,
         ResultRow {

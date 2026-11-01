@@ -32,9 +32,14 @@ impl Transport {
     }
 
     #[must_use]
-    pub fn with_persistent_pacing(mut self, pool: PgPool) -> Self {
+    pub fn with_persistent_pacing(self, pool: PgPool) -> Self {
+        self.with_shared_persistent_pacing(PersistentPacing::new(pool))
+    }
+
+    #[must_use]
+    pub(crate) fn with_shared_persistent_pacing(mut self, pacing: PersistentPacing) -> Self {
         self.clients.clear();
-        let pacing = Some(PersistentPacing::new(pool));
+        let pacing = Some(pacing);
         self.browser = self
             .browser
             .take()
@@ -47,6 +52,14 @@ impl Transport {
     pub fn with_start_spacing(mut self) -> Self {
         if let Some(pacing) = self.persistent_pacing.clone() {
             self.replace_pacing(pacing.with_start_spacing());
+        }
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_overlapped_starts(mut self) -> Self {
+        if let Some(pacing) = self.persistent_pacing.clone() {
+            self.replace_pacing(pacing.with_overlapped_starts());
         }
         self
     }

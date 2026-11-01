@@ -1,7 +1,7 @@
 mod archive;
 mod backup;
 mod bootstrap;
-mod database;
+pub(super) mod database;
 mod exports;
 mod files;
 mod manifest;

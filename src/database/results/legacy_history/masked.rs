@@ -132,12 +132,12 @@ async fn mark(connection: &mut PgConnection, id: i64, invalid: bool) -> Result<(
         "ancestor_mask_capture_binding_unproven"
     };
     sqlx::query(
-        "UPDATE results SET raw=jsonb_set(raw,'{source_values,mask_reconciliation}',to_jsonb($2::text),TRUE) WHERE id=$1",
+        "UPDATE results SET raw=jsonb_set(raw,'{source_values,mask_reconciliation}',to_jsonb($2::text),TRUE) WHERE id=$1 AND raw#>>'{source_values,mask_reconciliation}' IS DISTINCT FROM $2",
     ).bind(id).bind(reason).execute(&mut *connection).await?;
     if invalid {
         super::set_revision(connection, id, false).await?;
     }
-    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id=(SELECT athlete_id FROM results WHERE id=$1)")
+    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE NOT needs_review AND id=(SELECT athlete_id FROM results WHERE id=$1)")
         .bind(id).execute(connection).await?;
     Ok(())
 }

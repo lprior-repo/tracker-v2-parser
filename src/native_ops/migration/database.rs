@@ -61,7 +61,7 @@ pub(super) fn target_url(database: &str, role: Option<&str>) -> Result<url::Url>
 }
 
 #[tracing::instrument(skip_all)]
-pub(super) async fn connect(database: &str) -> Result<PgConnection> {
+pub async fn connect(database: &str) -> Result<PgConnection> {
     let url = target_url(database, None)?;
     let options = PgConnectOptions::from_str(url.as_str())?;
     tokio::time::timeout(

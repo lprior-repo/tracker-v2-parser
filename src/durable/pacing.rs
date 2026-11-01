@@ -1,3 +1,4 @@
+mod start;
 mod store;
 mod wire;
 
@@ -9,7 +10,7 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, TryStreamExt, stream};
@@ -28,6 +29,8 @@ pub struct PersistentPacing {
     pool: PgPool,
     wire_context: Option<wire::WireContext>,
     spacing: Spacing,
+    overlapped: bool,
+    starts: Arc<start::StartFences>,
     #[cfg(test)]
     admission_test_polls: Option<usize>,
 }
@@ -46,17 +49,19 @@ struct WireScope {
 }
 
 enum Admission {
-    Wait(Duration),
+    Wait { remaining: Duration, leased: bool },
     Reserved(String),
 }
 
 impl PersistentPacing {
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
             wire_context: None,
             spacing: Spacing::CompletedHeaders,
+            overlapped: false,
+            starts: Arc::default(),
             #[cfg(test)]
             admission_test_polls: None,
         }
@@ -65,6 +70,13 @@ impl PersistentPacing {
     #[must_use]
     pub const fn with_start_spacing(mut self) -> Self {
         self.spacing = Spacing::RequestStarts;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_overlapped_starts(mut self) -> Self {
+        self.spacing = Spacing::RequestStarts;
+        self.overlapped = true;
         self
     }
 
@@ -127,14 +139,14 @@ impl PersistentPacing {
             .map_or(max_polls, std::convert::identity);
         let admission = stream::iter(0..max_polls)
             .map(Ok::<_, anyhow::Error>)
-            .try_fold(None, |token, _| async move {
+            .try_fold(None, |token, poll| async move {
                 if token.is_some() {
                     return Ok(token);
                 }
                 match self.reserve(scope).await? {
                     Admission::Reserved(token) => Ok(Some(token)),
-                    Admission::Wait(delay) => {
-                        tokio::time::sleep(delay).await;
+                    Admission::Wait { remaining, leased } => {
+                        tokio::time::sleep(admission_delay(remaining, leased, poll)).await;
                         Ok(None)
                     }
                 }
@@ -144,6 +156,19 @@ impl PersistentPacing {
             .context("persistent wire admission exceeded bounded wait budget")??;
         admitted_token(result)
     }
+}
+
+fn admission_delay(remaining: Duration, leased: bool, poll: usize) -> Duration {
+    let cap = if !leased {
+        Duration::from_millis(500)
+    } else if poll < 8 {
+        LEASE_POLL_INTERVAL
+    } else if poll < 16 {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_millis(100)
+    };
+    remaining.min(cap)
 }
 
 fn admitted_token(token: Option<String>) -> Result<String> {

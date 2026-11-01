@@ -17,6 +17,8 @@ pub(super) struct Runtime {
     pub artifact_root: PathBuf,
     pub blocking: super::blocking::BlockingStages,
     pub published_workbook: Option<PathBuf>,
+    pub http_clients: crate::transport::SharedHttpClients,
+    pub pacing: super::pacing::PersistentPacing,
 }
 
 #[must_use]
@@ -61,12 +63,15 @@ async fn serve_inner(
     tokio::fs::create_dir_all(&artifact_root).await?;
     let artifact_root = tokio::fs::canonicalize(artifact_root).await?;
     let database = Database::connect(&database_url).await?;
+    let pacing = super::pacing::PersistentPacing::new(database.pool().clone());
     let runtime = Arc::new(Runtime {
         database,
         database_url,
         artifact_root,
         blocking: super::blocking::BlockingStages::new(),
         published_workbook,
+        http_clients: crate::transport::SharedHttpClients::default(),
+        pacing,
     });
     let endpoint = Endpoint::builder()
         .bind(AthleticCrawl {

@@ -1,3 +1,5 @@
+mod rolling;
+
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
@@ -50,6 +52,19 @@ fn index(row: &Value) -> Result<u64> {
     row.get("index")
         .and_then(Value::as_u64)
         .context("journal index absent")
+}
+
+pub(super) fn validate_versioned_root(
+    rows: &[Value],
+    children: &[String],
+    count: usize,
+    rolling: bool,
+) -> Result<Value> {
+    if rolling {
+        self::rolling::validate(rows, children, count)
+    } else {
+        validate_root(rows, children, count)
+    }
 }
 
 pub(super) fn validate_root(rows: &[Value], children: &[String], count: usize) -> Result<Value> {

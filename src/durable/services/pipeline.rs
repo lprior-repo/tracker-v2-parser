@@ -75,7 +75,7 @@ impl AthleticCrawl {
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn dispatch(
+    pub(super) async fn dispatch(
         &self,
         ctx: &WorkflowContext<'_>,
         request: &CrawlRequest,
@@ -91,8 +91,8 @@ impl AthleticCrawl {
         let now = effects::now!(ctx)?;
         let scheduling =
             page::Scheduling::for_batch_turn(&request.config, request.batch, index).terminal()?;
-        let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || {
-            page::select_scheduled(
+        let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || async {
+            let selected = page::select_scheduled(
                 &self.runtime.database,
                 &request.config,
                 scope,
@@ -100,6 +100,10 @@ impl AthleticCrawl {
                 owned,
                 scheduling,
             )
+            .await?;
+            Ok(selected.filter(|page| {
+                request.scheduler_version.is_none() || !owned.contains(&page.binding.page_id)
+            }))
         })?;
         let Some(page) = selected else {
             return Ok(None);
@@ -113,6 +117,7 @@ impl AthleticCrawl {
             .handle(Json(PageExecution {
                 request: page,
                 config: request.config.clone(),
+                scheduler_version: request.scheduler_version,
             }))
             .idempotency_key(format!("{}-page-{index:06}", request.workflow_key()))
             .send()

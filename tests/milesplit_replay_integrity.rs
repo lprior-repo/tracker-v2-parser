@@ -300,9 +300,14 @@ async fn seed_old_masked_career(
 #[tokio::test]
 async fn given_retained_self_masked_career_when_replayed_then_quarantine_clears_only_on_public_reconfirmation()
 -> Result<()> {
-    support::with_schema(|test| {
+    for indexed in [false, true] {
+        support::with_schema(move |test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
+            if !indexed {
+                sqlx::raw_sql("DROP INDEX results_milesplit_source_result_id_hash_idx; DROP INDEX results_milesplit_source_url_hash_idx;")
+                    .execute(&test.pool).await?;
+            }
             let target = career_target();
             let masked = seed_old_masked_career(&database, &target, true).await?;
             persist(
@@ -334,7 +339,29 @@ async fn given_retained_self_masked_career_when_replayed_then_quarantine_clears_
             Ok(())
         })
     })
-    .await
+    .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn given_already_quarantined_masked_rows_when_rechecked_then_retained_rows_and_true_review_flags_are_not_rewritten()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database = Database::connect(&test.url).await?;
+        let target = career_target();
+        let masked = seed_old_masked_career(&database, &target, true).await?;
+        persist(&database, &target, &masked, &ParsedPage::default()).await?;
+        let result: (String,String,String) = sqlx::query_as("SELECT ctid::text,raw#>>'{source_values,mask_reconciliation}',raw#>>'{source_values,revision_status}' FROM results").fetch_one(&test.pool).await?;
+        let athlete: (String,bool) = sqlx::query_as("SELECT ctid::text,needs_review FROM athletes").fetch_one(&test.pool).await?;
+        assert_eq!((&result.1,&result.2),(&"retained_mark_masked".to_owned(),&"unverified_prior_revision".to_owned()));
+        assert!(athlete.1);
+        persist(&database, &target, &masked, &ParsedPage::default()).await?;
+        assert_eq!(sqlx::query_as::<_,(String,String,String)>("SELECT ctid::text,raw#>>'{source_values,mask_reconciliation}',raw#>>'{source_values,revision_status}' FROM results").fetch_one(&test.pool).await?,result);
+        assert_eq!(sqlx::query_as::<_,(String,bool)>("SELECT ctid::text,needs_review FROM athletes").fetch_one(&test.pool).await?,athlete);
+        database.close().await;
+        Ok(())
+    })).await
 }
 
 #[tokio::test]

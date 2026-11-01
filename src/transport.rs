@@ -1,3 +1,4 @@
+mod client_cache;
 #[cfg(test)]
 mod contact_rate_tests;
 mod http;
@@ -22,6 +23,7 @@ use crate::{
 };
 
 pub(crate) const MAX_BODY_BYTES: usize = 16_777_216;
+pub(crate) use client_cache::SharedHttpClients;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -116,6 +118,7 @@ pub struct Transport {
     contact_requests_per_second: Option<f64>,
     browser: Option<Browser>,
     clients: BTreeMap<String, Client>,
+    shared_clients: Option<SharedHttpClients>,
     next_request: BTreeMap<Source, Instant>,
     persistent_pacing: Option<crate::durable::pacing::PersistentPacing>,
     #[cfg(test)]
@@ -137,6 +140,7 @@ impl Transport {
             contact_requests_per_second: None,
             browser: None,
             clients: BTreeMap::new(),
+            shared_clients: None,
             next_request: BTreeMap::new(),
             persistent_pacing: None,
             #[cfg(test)]
@@ -150,6 +154,12 @@ impl Transport {
 
     pub fn fetch<'a>(&'a mut self, target: &'a Target) -> BoxFuture<'a, Result<Capture, Failure>> {
         Box::pin(self.fetch_inner(target))
+    }
+
+    #[must_use]
+    pub(crate) fn with_shared_http_clients(mut self, clients: SharedHttpClients) -> Self {
+        self.shared_clients = Some(clients);
+        self
     }
 
     #[tracing::instrument(skip_all)]

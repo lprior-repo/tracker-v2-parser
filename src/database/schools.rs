@@ -1,3 +1,4 @@
+mod ordering;
 mod website;
 
 use anyhow::{Context, Result, ensure};
@@ -13,7 +14,8 @@ pub(super) async fn save_all(
     schools: &[School],
     url: &str,
 ) -> Result<()> {
-    stream::iter(schools.iter().map(Ok::<_, anyhow::Error>))
+    let schools = ordering::prepare(connection, target.source, schools).await?;
+    stream::iter(schools.into_iter().map(Ok::<_, anyhow::Error>))
         .try_fold(connection, |connection, school| async move {
             save(connection, target, school, url).await?;
             Ok(connection)

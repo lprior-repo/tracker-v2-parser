@@ -148,22 +148,11 @@ impl Transport {
             futures::future::pending::<()>().await;
         }
         let addresses = policy::public_addresses(url).await?;
-        let host = url.host_str().context("source URL has no host")?;
-        let builder = Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(45))
-            .connect_timeout(Duration::from_secs(15))
-            .user_agent("track-scrapper-v2/0.1 public athletics research")
-            .resolve_to_addrs(host, &addresses);
-        let builder = if self.persistent_pacing.is_some() {
-            builder.retry(reqwest::retry::never())
+        let client = if let Some(cache) = &self.shared_clients {
+            cache.client(url, &addresses)?
         } else {
-            builder
+            super::client_cache::build_client(url, &addresses, self.persistent_pacing.is_some())?
         };
-        let client = builder
-            .build()
-            .context("building pinned public HTTP client")?;
         self.clients.insert(origin, client.clone());
         Ok(client)
     }

@@ -19,6 +19,7 @@ fn request() -> Result<CrawlRequest> {
     let scope = page_support::scope(&config)?;
     Ok(CrawlRequest {
         inherited_retry_campaigns: Vec::new(),
+        scheduler_version: None,
         generation: "presentation-only-review-change".into(),
         config,
         deadline_ms: scope.deadline_ms,

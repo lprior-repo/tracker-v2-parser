@@ -198,3 +198,22 @@ fn given_run_templates_when_loaded_then_operational_settings_are_explicit() -> R
     }
     Ok(())
 }
+
+#[test]
+fn new_cli_crawl_defaults_to_the_single_current_rolling_scheduler() -> Result<()> {
+    let request = commands::crawl_request(
+        Config::parse("states=['IA']")?,
+        "current-scheduler".into(),
+        overrides(&[])?,
+        1000,
+    )?;
+    assert_eq!(
+        request.scheduler_version,
+        Some(crate::durable::model::SchedulerVersion::RollingV2)
+    );
+    assert_eq!(
+        serde_json::to_value(&request)?["scheduler_version"],
+        "rolling_v2"
+    );
+    Ok(())
+}

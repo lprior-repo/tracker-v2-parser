@@ -88,7 +88,11 @@ impl Database {
             } => Some((generation, now_ms, owned, allow_deferred)),
             CoverageMode::Ready | CoverageMode::Exhausted => None,
         };
-        let row: Option<(i64, serde_json::Value)> =
+        let mut transaction = self.pool.begin().await?;
+        let row: Result<Option<(i64, serde_json::Value)>> = async {
+            sqlx::raw_sql("SET TRANSACTION READ ONLY; SET LOCAL work_mem='16MB'")
+                .execute(&mut *transaction)
+                .await?;
             sqlx::query_as(include_str!("profile_coverage.sql"))
                 .bind(source.map(Source::as_str))
                 .bind(i32::try_from(max_attempts).context("converting maximum attempts")?)
@@ -101,9 +105,12 @@ impl Database {
                 .bind(durable.map(|(_, now, _, _)| now))
                 .bind(durable.map_or(&[][..], |(_, _, owned, _)| owned))
                 .bind(durable.is_none_or(|(_, _, _, allow)| allow))
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *transaction)
                 .await
-                .context("selecting published school-chain coverage checkpoint")?;
+                .context("selecting published school-chain coverage checkpoint")
+        }
+        .await;
+        let row = super::finish(transaction, row).await?;
         row.map(|(id, target)| {
             Ok(Job {
                 id,

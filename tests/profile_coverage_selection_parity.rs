@@ -235,3 +235,30 @@ async fn given_long_incompressible_state_when_checkpoint_is_saved_then_lookup_ke
         Ok(())
     })).await
 }
+
+#[tokio::test]
+async fn given_multibyte_requested_states_when_scoped_selection_runs_then_postgresql_character_boundaries_and_exact_scope_are_preserved()
+-> Result<()> {
+    support::with_schema(|test| Box::pin(async move {
+        let database=Database::connect(&test.url).await?;
+        sqlx::raw_sql("INSERT INTO athletes(name,graduation_year) VALUES('Unicode Scope Runner',2027); INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url,graduation_year) SELECT id,'milesplit','903','https://www.milesplit.com/athletes/903-runner',2027 FROM athletes;").execute(&test.pool).await?;
+        let states=["😀MI","😀WI","M😀I","M😀W","ÉÀ","A🦋MI",""];
+        for (index,state) in states.iter().enumerate() {
+            let cursor=serde_json::json!({"source":"milesplit","kind":"athlete","url":"https://www.milesplit.com/athletes/903-runner","context":{"athlete_id":"903","state":state}});
+            sqlx::query("INSERT INTO scrape_pages(source,page_key,url,cursor) VALUES('milesplit',$1,'https://www.milesplit.com/athletes/903-runner',$2)")
+                .bind(format!("{index:064x}")).bind(cursor).execute(&test.pool).await?;
+        }
+        let before:Vec<Value>=sqlx::query_scalar("SELECT cursor FROM scrape_pages ORDER BY id").fetch_all(&test.pool).await?;
+        for (index,state) in states.iter().enumerate() {
+            let wanted=[(*state).to_owned()];
+            let scope=Scope {source:None,states:&wanted,years:&[2027],exhausted:false,contacts:false,generation:None,owned:&[],deferred:true};
+            assert_eq!(compare(&test.pool,&scope).await?,1);
+            let job=database.next_profile_coverage_job(None,3,&wanted,&[2027],false).await?.context("exact Unicode state through native database API")?;
+            assert_eq!(job.id,i64::try_from(index+1)?);
+            assert_eq!(job.target.context.state.as_deref(),Some(*state));
+        }
+        assert_eq!(sqlx::query_scalar::<_,Value>("SELECT cursor FROM scrape_pages ORDER BY id").fetch_all(&test.pool).await?,before);
+        database.close().await;
+        Ok(())
+    })).await
+}

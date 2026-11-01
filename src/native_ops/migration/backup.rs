@@ -32,6 +32,7 @@ pub(super) async fn run(args: BackupArgs) -> Result<()> {
         !output.starts_with(&data) && !output.starts_with(&artifacts) && output != config,
         "backup output must be outside source data and artifacts"
     );
+    let mut connection = connect_with_capacity(&args, &data, &artifacts, &parent).await?;
     let temporary = tempfile::Builder::new()
         .prefix(".native-migration-")
         .tempdir_in(&parent)?;
@@ -43,7 +44,6 @@ pub(super) async fn run(args: BackupArgs) -> Result<()> {
     tokio::task::spawn_blocking(move || stage(&source_data, &config, &selected, &staging_copy))
         .await
         .context("staging backup payload")??;
-    let mut connection = database::connect(&args.database).await?;
     let (major, version) = database::version(&mut connection).await?;
     database::check_tables(&mut connection, TABLES.len()).await?;
     ensure!(
@@ -179,4 +179,53 @@ fn copy_tree(root: &Path, destination: &Path, kind: &str) -> Result<()> {
             }
             Ok(())
         })
+}
+
+fn retained_bytes(data: &Path, artifacts: &Path, selected: &[PathBuf]) -> Result<u64> {
+    let roots = [data.join("evidence"), artifacts.to_owned()];
+    let trees = roots.iter().try_fold(0_u64, |total, root| {
+        if !root.try_exists()? {
+            return Ok(total);
+        }
+        files::list(root)?.iter().try_fold(total, |sum, path| {
+            sum.checked_add(fs::metadata(path)?.len())
+                .context("backup retained payload size overflow")
+        })
+    })?;
+    exports::collect(&data.join("exports"), selected)?
+        .iter()
+        .try_fold(trees, |sum, (_, path)| {
+            sum.checked_add(fs::metadata(path)?.len())
+                .context("backup export size overflow")
+        })
+}
+
+#[tracing::instrument(skip_all)]
+async fn connect_with_capacity(
+    args: &BackupArgs,
+    data: &Path,
+    artifacts: &Path,
+    parent: &Path,
+) -> Result<sqlx::PgConnection> {
+    let mut connection = database::connect(&args.database).await?;
+    let database_bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())")
+            .fetch_one(&mut connection),
+    )
+    .await
+    .context("backup capacity database size deadline exceeded")??;
+    let retained_bytes = retained_bytes(data, artifacts, &args.export_file)?;
+    let capacity = crate::native_ops::resources::backup_preflight(
+        u64::try_from(database_bytes)?,
+        retained_bytes,
+        parent,
+        data,
+    )?;
+    tracing::info!(
+        required_bytes = capacity.budget.required_bytes()?,
+        available_bytes = capacity.destination.available_bytes,
+        "native backup capacity verified; no data removed"
+    );
+    Ok(connection)
 }

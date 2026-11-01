@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use sqlx::{Postgres, Row, Transaction};
 
-use super::{Admission, LEASE_POLL_INTERVAL, PersistentPacing, Spacing, WireScope};
+use super::{Admission, PersistentPacing, Spacing, WireScope};
 
 impl PersistentPacing {
     pub(super) async fn reserve(&self, scope: &WireScope) -> Result<Admission> {
@@ -40,14 +40,10 @@ impl PersistentPacing {
             let leased: bool = row.try_get("leased")?;
             transaction.commit().await?;
             let micros = u64::try_from(wait).context("negative persistent pacing delay")?;
-            let poll_interval = if leased {
-                LEASE_POLL_INTERVAL
-            } else {
-                Duration::from_millis(500)
-            };
-            return Ok(Admission::Wait(
-                Duration::from_micros(micros).min(poll_interval),
-            ));
+            return Ok(Admission::Wait {
+                remaining: Duration::from_micros(micros),
+                leased,
+            });
         }
         let token: String = row.try_get("token")?;
         let changed = sqlx::query(
@@ -109,7 +105,10 @@ impl PersistentPacing {
     }
 }
 
-async fn lock_scope(transaction: &mut Transaction<'_, Postgres>, scope: &WireScope) -> Result<()> {
+pub(super) async fn lock_scope(
+    transaction: &mut Transaction<'_, Postgres>,
+    scope: &WireScope,
+) -> Result<()> {
     let locked = sqlx::query(
         "SELECT pacing_key FROM durable_wire_pacing \
          WHERE pacing_key = ANY($1) ORDER BY pacing_key FOR UPDATE",

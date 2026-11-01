@@ -161,12 +161,14 @@ async fn flag_ambiguity(connection: &mut PgConnection, ids: &[i64]) -> Result<()
     sqlx::query(
         "UPDATE results SET raw=jsonb_set(jsonb_set(raw,'{source_values,identity_reconciliation}', \
          '\"ambiguous_legacy_context\"'::jsonb,TRUE),'{source_values,revision_status}', \
-         '\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=ANY($1)",
+         '\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=ANY($1) \
+         AND (raw#>>'{source_values,identity_reconciliation}' IS DISTINCT FROM 'ambiguous_legacy_context' \
+           OR raw#>>'{source_values,revision_status}' IS DISTINCT FROM 'unverified_prior_revision')",
     )
     .bind(ids)
     .execute(&mut *connection)
     .await?;
-    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id IN (SELECT athlete_id FROM results WHERE id=ANY($1))")
+    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE NOT needs_review AND id IN (SELECT athlete_id FROM results WHERE id=ANY($1))")
         .bind(ids).execute(connection).await?;
     Ok(())
 }
@@ -249,9 +251,9 @@ async fn set_revision(connection: &mut PgConnection, id: i64, confirmed: bool) -
         sqlx::query("UPDATE results SET raw=raw #- '{source_values,revision_status}' WHERE id=$1 AND raw#>>'{source_values,revision_status}'='unverified_prior_revision'")
             .bind(id).execute(connection).await?;
     } else {
-        sqlx::query("UPDATE results SET raw=jsonb_set(raw,'{source_values,revision_status}','\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=$1")
+        sqlx::query("UPDATE results SET raw=jsonb_set(raw,'{source_values,revision_status}','\"unverified_prior_revision\"'::jsonb,TRUE) WHERE id=$1 AND raw#>>'{source_values,revision_status}' IS DISTINCT FROM 'unverified_prior_revision'")
             .bind(id).execute(&mut *connection).await?;
-        sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id=(SELECT athlete_id FROM results WHERE id=$1)")
+        sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE NOT needs_review AND id=(SELECT athlete_id FROM results WHERE id=$1)")
             .bind(id).execute(connection).await?;
     }
     Ok(())

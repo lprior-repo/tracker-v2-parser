@@ -109,6 +109,7 @@ impl AthleticCrawl {
             report.stopped_reason =
                 Some("no eligible or deferred pages remain in configured scope".into());
         } else {
+            let next = next.upgraded_scheduler();
             let delay =
                 if report.progress.queue == QueueState::NoEligiblePage && phase == request.phase {
                     model::delay_until(now, due.unwrap_or_else(|| now.saturating_add(30_000)))
@@ -145,7 +146,11 @@ impl AthleticCrawl {
         request: &CrawlRequest,
     ) -> HandlerResult<BatchProgress> {
         if request.config.limits.concurrency > 1 {
-            return self.pipeline(ctx, request).await;
+            return if request.scheduler_version.is_some() {
+                self.rolling_pipeline(ctx, request).await
+            } else {
+                self.pipeline(ctx, request).await
+            };
         }
         let scope = request.page_scope().terminal()?;
         stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
@@ -180,6 +185,7 @@ impl AthleticCrawl {
                         .handle(Json(PageExecution {
                             request: page,
                             config: request.config.clone(),
+                            scheduler_version: request.scheduler_version,
                         }))
                         .idempotency_key(format!("{}-page-{index:06}", request.workflow_key()))
                         .call()

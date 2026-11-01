@@ -115,6 +115,7 @@ impl AthleticOperations {
                 let Json(outcome) = ctx
                     .service_client::<AthleticPageClient>()
                     .handle(Json(PageExecution {
+                        scheduler_version: None,
                         request: request.clone(),
                         config: config.clone(),
                     }))

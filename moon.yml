@@ -103,3 +103,15 @@ tasks:
     command: 'cargo run --release --locked --example qualify_durable_export --'
     toolchains: [system]
     options: *manualOptions
+  native-resource-snapshot:
+    command: 'cargo run --release --locked --bin native-ops -- resources snapshot'
+    toolchains: [system]
+    options: *manualOptions
+  native-resource-plan:
+    command: 'cargo run --release --locked --bin native-ops -- resources plan'
+    toolchains: [system]
+    options: *manualOptions
+  native-resource-prepare:
+    command: 'cargo run --release --locked --bin native-ops -- resources prepare-config'
+    toolchains: [system]
+    options: *manualOptions

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, ensure};
 
+use super::super::performance::{Stage, Timings};
 use super::{Database, lock_reservation};
 use crate::{
     durable::page::{CaptureRef, PageOutcome, PageReservation, ParsedRef},
@@ -45,16 +46,36 @@ impl Database {
         capture: &Capture,
         parsed: &ParsedPage,
     ) -> Result<PageOutcome> {
-        let mut transaction = self.pool.begin().await?;
-        lock_reservation(&mut transaction, reservation).await?;
-        let capture_json = serde_json::to_value(capture_ref)?;
-        let parsed_json = serde_json::to_value(parsed_ref)?;
+        let mut timings =
+            Timings::new(Some(reservation.request.binding.page_id), "durable_persist");
+        let capture_json = serde_json::to_value(capture_ref);
+        let parsed_json = serde_json::to_value(parsed_ref);
+        let capture_matches = capture_matches(capture, capture_ref);
+        let parsed_digest = crate::durable::page::value_digest(parsed);
+        let request = &reservation.request;
+        let receipt_digest = crate::durable::page::value_digest(&(
+            &request.binding,
+            &reservation.attempt_id,
+            capture_ref,
+            parsed_ref,
+        ));
+        let mut transaction = timings
+            .measure(Stage::PoolAndBegin, self.pool.begin())
+            .await?;
+        timings
+            .measure(
+                Stage::ReservationLock,
+                lock_reservation(&mut transaction, reservation),
+            )
+            .await?;
+        let capture_json = capture_json?;
+        let parsed_json = parsed_json?;
         let existing: Option<(serde_json::Value, serde_json::Value, serde_json::Value)> =
-            sqlx::query_as(
+            timings.measure(Stage::ReceiptLookup, sqlx::query_as(
                 "SELECT capture,parsed,outcome FROM durable_page_receipts WHERE operation_id=$1",
             )
             .bind(&reservation.request.binding.operation_id)
-            .fetch_optional(&mut *transaction)
+            .fetch_optional(&mut *transaction))
             .await?;
         if let Some((saved_capture, saved_parsed, outcome)) = existing {
             ensure!(
@@ -62,7 +83,7 @@ impl Database {
                 "durable effect receipt artifact mismatch"
             );
             let outcome = serde_json::from_value(outcome)?;
-            transaction.commit().await?;
+            timings.measure(Stage::Commit, transaction.commit()).await?;
             return Ok(outcome);
         }
         let (saved_capture, saved_parsed, state): (
@@ -81,37 +102,30 @@ impl Database {
                 && state == "parsed",
             "durable persistence requires its exact recorded parse and capture"
         );
+        ensure!(capture_matches, "durable effect capture bytes mismatch");
         ensure!(
-            capture.url == capture_ref.url
-                && capture.status == capture_ref.status
-                && capture.content_type == capture_ref.content_type
-                && crate::durable::page::body_digest(&capture.body) == capture_ref.body.sha256,
-            "durable effect capture bytes mismatch"
-        );
-        ensure!(
-            crate::durable::page::value_digest(parsed)? == parsed_ref.body.sha256,
+            parsed_digest? == parsed_ref.body.sha256,
             "durable effect parsed bytes mismatch"
         );
-        let request = &reservation.request;
-        let page_id = super::super::records::persist(
-            &mut transaction,
-            Some(request.binding.page_id),
-            &request.target,
-            capture,
-            parsed,
-        )
-        .await?;
-        let receipt_sha256 = crate::durable::page::value_digest(&(
-            &request.binding,
-            &reservation.attempt_id,
-            capture_ref,
-            parsed_ref,
-        ))?;
+        let page_id = timings
+            .measure(
+                Stage::Domain,
+                super::super::records::persist(
+                    &mut transaction,
+                    Some(request.binding.page_id),
+                    &request.target,
+                    capture,
+                    parsed,
+                ),
+            )
+            .await?;
+        let receipt_sha256 = receipt_digest?;
         let outcome = PageOutcome::Completed {
             page_id,
             receipt_sha256: receipt_sha256.clone(),
         };
         let value = serde_json::to_value(&outcome)?;
+        timings.measure(Stage::ReceiptWrite, async {
         sqlx::query("INSERT INTO durable_page_receipts(operation_id,attempt_id,page_id,capture,parsed,receipt_sha256,outcome) VALUES($1,$2,$3,$4,$5,$6,$7)")
             .bind(&request.binding.operation_id).bind(&reservation.attempt_id).bind(page_id).bind(capture_json).bind(parsed_json).bind(receipt_sha256).bind(&value).execute(&mut *transaction).await?;
         sqlx::query(
@@ -123,10 +137,19 @@ impl Database {
         .await?;
         sqlx::query("UPDATE durable_page_operations SET state='completed',retry_at_ms=NULL,outcome=$2 WHERE operation_id=$1")
             .bind(&request.binding.operation_id).bind(value).execute(&mut *transaction).await?;
-        transaction
-            .commit()
+            Ok::<_, anyhow::Error>(())
+        }).await?;
+        timings
+            .measure(Stage::Commit, transaction.commit())
             .await
             .context("committing durable domain effects and receipt")?;
         Ok(outcome)
     }
+}
+
+fn capture_matches(capture: &Capture, reference: &CaptureRef) -> bool {
+    capture.url == reference.url
+        && capture.status == reference.status
+        && capture.content_type == reference.content_type
+        && crate::durable::page::body_digest(&capture.body) == reference.body.sha256
 }

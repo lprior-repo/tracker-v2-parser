@@ -20,7 +20,7 @@ pub(super) async fn review_school_conflicts(
         .map(|school| school.id.as_str())
         .collect::<Vec<_>>();
     sqlx::query(
-        "UPDATE athletes a SET needs_review=TRUE WHERE EXISTS ( \
+        "UPDATE athletes a SET needs_review=TRUE WHERE NOT a.needs_review AND EXISTS ( \
          SELECT 1 FROM athlete_sources p JOIN schools s ON s.id=p.school_id \
          JOIN athlete_sources other ON other.athlete_id=p.athlete_id AND other.id<>p.id \
          JOIN schools other_school ON other_school.id=other.school_id \
@@ -389,7 +389,7 @@ async fn save_links(
     .await?;
     if conflict {
         sqlx::query(
-            "UPDATE athletes SET needs_review=TRUE WHERE id IN \
+            "UPDATE athletes SET needs_review=TRUE WHERE NOT needs_review AND id IN \
              (SELECT athlete_id FROM athlete_sources WHERE id=ANY($1))",
         )
         .bind(&profiles)
@@ -418,7 +418,7 @@ async fn reserve_links<'a>(
                 Ok((source, source_id)) => profiles.push(reserve(connection, source, &source_id, Some(link)).await?),
                 Err(error) => {
                     tracing::warn!(%error, profile, "flagging unsupported explicit athlete link for review");
-                    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE id=(SELECT athlete_id FROM athlete_sources WHERE id=$1)")
+                    sqlx::query("UPDATE athletes SET needs_review=TRUE WHERE NOT needs_review AND id=(SELECT athlete_id FROM athlete_sources WHERE id=$1)")
                         .bind(profile).execute(&mut *connection).await?;
                 }
             }

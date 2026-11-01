@@ -10,6 +10,7 @@ pub mod pacing;
 pub mod page;
 pub(crate) mod retry_lineage;
 mod runtime;
+pub(crate) mod scheduler_proof;
 mod services;
 mod wiaa;
 
