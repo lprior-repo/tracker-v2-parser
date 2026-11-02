@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(super) const FORMAT: &str = "track-scrapper-migration-v3";
+pub(super) const FORMAT: &str = "track-scrapper-migration-v4";
+pub(super) const AUDITED: &str = "track-scrapper-migration-v3";
 pub(super) const PREVIOUS: &str = "track-scrapper-migration-v2";
 pub(super) const LEGACY: &str = "track-scrapper-migration-v1";
 pub(super) const MAX_FILES: usize = 250_000;
@@ -31,7 +32,7 @@ pub(super) const PREVIOUS_TABLES: [(&str, &str); 13] = [
     ("durable_wire_pacing", "pacing_key"),
     ("durable_wire_requests", "wire_id"),
 ];
-pub(super) const TABLES: [(&str, &str); 14] = [
+pub(super) const AUDITED_TABLES: [(&str, &str); 14] = [
     PREVIOUS_TABLES[0],
     PREVIOUS_TABLES[1],
     PREVIOUS_TABLES[2],
@@ -48,9 +49,28 @@ pub(super) const TABLES: [(&str, &str); 14] = [
     ("reviewed_result_links", "source_result_key"),
 ];
 
+pub(super) const TABLES: [(&str, &str); 15] = [
+    AUDITED_TABLES[0],
+    AUDITED_TABLES[1],
+    AUDITED_TABLES[2],
+    AUDITED_TABLES[3],
+    AUDITED_TABLES[4],
+    AUDITED_TABLES[5],
+    AUDITED_TABLES[6],
+    AUDITED_TABLES[7],
+    AUDITED_TABLES[8],
+    AUDITED_TABLES[9],
+    AUDITED_TABLES[10],
+    AUDITED_TABLES[11],
+    AUDITED_TABLES[12],
+    AUDITED_TABLES[13],
+    ("selector_changes", "kind,identity"),
+];
+
 pub(super) fn inventory_scope(format: &str) -> Option<&'static [(&'static str, &'static str)]> {
     match format {
         FORMAT => Some(&TABLES),
+        AUDITED => Some(&AUDITED_TABLES),
         PREVIOUS => Some(&PREVIOUS_TABLES),
         LEGACY => Some(&CORE_TABLES),
         _ => None,

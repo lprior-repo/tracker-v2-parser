@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+mod preparation;
+
 use futures::{TryStreamExt, stream};
 use restate_sdk::prelude::*;
 
@@ -51,7 +53,7 @@ impl AthleticCrawl {
             return Ok(Json(report));
         }
         effects::record!(&ctx, "bootstrap-discovery-and-contact-queue", || {
-            crate::runner::durable::bootstrap(&self.runtime.database, &request.config)
+            preparation::run(&self.runtime.database, &request)
         })?;
         let progress = if request.phase == CrawlPhase::ContactRefresh {
             let operation = OperationRequest {

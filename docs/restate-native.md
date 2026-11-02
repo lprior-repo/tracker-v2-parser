@@ -29,6 +29,31 @@ this is a deployment setting, and the checked-in configuration remains unchanged
 Transient infrastructure outages retry without an AI process; a source access
 stop requires human handling.
 
+School-chain selection prepares a bounded Rust candidate snapshot during the
+existing bootstrap step. Later selections read an indexed transactional change
+set, refresh affected entities, and fetch the selected canonical cursor. Immutable
+page and retry indexes use 256 copy-on-write partitions, so a small change copies
+only its affected partitions. Candidate priority updates rebuild affected school
+groups with complete athlete-alias inputs and merge them into the retained
+sorted queue. Cold and changed-page SQL have separate statements, so bounded
+identifier lookups do not share a nullable full-scope predicate. Contact coverage
+is scoped to relevant official URLs and authorities. The change records share
+their source transaction and use PostgreSQL snapshot
+visibility, including transactions still in progress at the previous snapshot;
+sequence order and wall-clock timestamps cannot skip a late commit. Independent
+writers have separate entity records. Retry counters, reservations, access stops,
+and source records remain authoritative in PostgreSQL.
+
+Preparation after a process restart, scope change, or large import is measured
+separately from ordinary selection. The immutable in-memory snapshot is replaced
+only after its read-only transaction succeeds. The compiler has an owned bounded
+task registry and is drained on shutdown; cancellation does not publish partial
+state. The original SQL remains the ordering oracle for differential tests and
+the guarded `qualify_coverage_selector` release example. This example restricts
+mutations to the isolated restore database; its explicit production mode uses
+read-only connections and at most 120 samples. Selection timing does not establish
+HTTP throughput or authorize a crawl deadline extension.
+
 Durable crawls support one to three page slots. With `concurrency = 2` or `3`,
 each window journals page selection and reservation before eagerly sending its
 children, then attaches every child in submission order before proceeding.

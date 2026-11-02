@@ -15,7 +15,10 @@ use super::Database;
 impl Database {
     #[cfg(test)]
     pub(crate) fn durable_test_database(pool: sqlx::PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            coverage: super::coverage_scheduler::Cache::default(),
+        }
     }
     pub async fn durable_outcome(&self, request: &PageRequest) -> Result<Option<PageOutcome>> {
         crate::durable::page::validate_request(request)?;

@@ -16,7 +16,7 @@ use track_scrapper_v2::{
 };
 
 #[tokio::test]
-async fn given_fourteen_populated_tables_when_native_backup_restores_then_hashes_and_stops_survive()
+async fn given_fifteen_populated_tables_when_native_backup_restores_then_hashes_and_stops_survive()
 -> Result<()> {
     support::with_schema(|test| Box::pin(async move {
         let admin_url = std::env::var("TEST_MIGRATION_ADMIN_DATABASE_URL")
@@ -60,8 +60,14 @@ fn url(original: &str, database: &str) -> Result<String> {
 
 fn environment(original: &str) -> Result<BTreeMap<String, String>> {
     let options = PgConnectOptions::from_str(original)?;
+    let host = match options.get_socket() {
+        Some(socket) => socket
+            .to_str()
+            .context("migration test socket path must be UTF-8")?,
+        None => options.get_host(),
+    };
     let mut environment = BTreeMap::from([
-        ("PGHOST".into(), options.get_host().into()),
+        ("PGHOST".into(), host.into()),
         ("PGPORT".into(), options.get_port().to_string()),
         ("PGUSER".into(), options.get_username().into()),
         ("PGSSLMODE".into(), "prefer".into()),
@@ -125,7 +131,7 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
     .await?;
     seed_ledgers(&database).await?;
     let expected = fingerprint(&database).await?;
-    assert_eq!(expected.len(), 14);
+    assert_eq!(expected.len(), 15);
     assert!(expected.iter().all(|(_, count, _)| *count > 0));
     database.close().await;
     shadow::install(&source_url, source).await?;
@@ -151,7 +157,9 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
     assert!(!rejected.status.success());
     assert!(
         String::from_utf8_lossy(&rejected.stderr)
-            .contains("referenced durable artifact is missing")
+            .contains("referenced durable artifact is missing"),
+        "unexpected backup rejection: {}",
+        String::from_utf8_lossy(&rejected.stderr)
     );
     assert!(!archive.exists());
     let output = cli(test, &source_url, &backup).await?;

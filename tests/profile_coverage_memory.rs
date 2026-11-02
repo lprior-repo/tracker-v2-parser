@@ -30,7 +30,7 @@ async fn checked_out(pool: &PgPool, pid: i32, monitor: &PgPool) -> Result<()> {
 async fn blocked(pool: &PgPool, pid: i32) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            let waiting: bool = sqlx::query_scalar("SELECT state='active' AND wait_event_type='Lock' AND xact_start IS NOT NULL FROM pg_stat_activity WHERE pid=$1")
+            let waiting: bool = sqlx::query_scalar("SELECT COALESCE(state='active' AND wait_event_type='Lock' AND xact_start IS NOT NULL,false) FROM pg_stat_activity WHERE pid=$1")
                 .bind(pid).fetch_one(pool).await?;
             if waiting { return Ok::<_,anyhow::Error>(()); }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -60,15 +60,16 @@ async fn given_a_selector_pool_when_success_failure_and_cancellation_occur_then_
         let pid=baseline(&mut remaining).await?;
         drop(remaining);
         let states=["MI".into()];
-        let job=database.next_profile_coverage_job(None,3,&states,&[2027],false).await?.context("valid row under enforced read-only16MB selection")?;
+        let job=database.next_profile_coverage_job(None,3,&states,&[2027],false).await.context("cold compiled selection under enforced settings")?.context("valid row under enforced read-only16MB selection")?;
         assert_eq!(job.id,1);
-        checked_out(database.pool(),pid,&test.pool).await?;
+        checked_out(database.pool(),pid,&test.pool).await.context("pooled connection after successful compiled selection")?;
+        sqlx::query("SELECT selector_changed('contact','qualification',true)").execute(&test.pool).await.context("invalidating contact coverage before cancellation")?;
         let mut lock=test.pool.begin().await?;
         sqlx::query("LOCK TABLE contacts IN ACCESS EXCLUSIVE MODE").execute(&mut *lock).await?;
         let mut selection=Box::pin(database.next_profile_coverage_job(None,3,&states,&[2027],false));
         tokio::select! {
             result=&mut selection => bail!("selector should block before cancellation: {result:?}"),
-            result=blocked(&test.pool,pid) => result?,
+            result=blocked(&test.pool,pid) => result.context("observing blocked compiled refresh")?,
         }
         drop(selection);
         lock.rollback().await?;

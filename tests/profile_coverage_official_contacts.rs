@@ -161,8 +161,9 @@ async fn given_missing_email_or_postal_address_when_official_page_succeeded_then
     ] {
         support::with_schema(|test| {
             Box::pin(async move {
-                let (database, web, wiaa, _) = prepare(test).await?;
+                let (database, web, wiaa, next_team) = prepare(test).await?;
                 official(&database, &wiaa).await?;
+                assert_eq!(next(&database, true).await?.target.url, next_team.url);
                 sqlx::query(sqlx::AssertSqlSafe(modification))
                     .execute(&test.pool)
                     .await?;
@@ -190,8 +191,9 @@ async fn given_stale_other_source_or_unnamed_coach_claim_when_official_checkpoin
     ] {
         support::with_schema(|test| {
             Box::pin(async move {
-                let (database, web, wiaa, _) = prepare(test).await?;
+                let (database, web, wiaa, next_team) = prepare(test).await?;
                 official(&database, &wiaa).await?;
+                assert_eq!(next(&database, true).await?.target.url, next_team.url);
                 sqlx::query(sqlx::AssertSqlSafe(modification))
                     .execute(&test.pool)
                     .await?;
@@ -209,8 +211,9 @@ async fn given_stale_other_source_or_unnamed_coach_claim_when_official_checkpoin
 async fn given_official_coaches_attached_to_another_school_when_address_is_complete_then_they_do_not_satisfy_this_school()
 -> Result<()> {
     support::with_schema(|test|Box::pin(async move {
-        let (database,web,wiaa,_)=prepare(test).await?;
+        let (database,web,wiaa,next_team)=prepare(test).await?;
         official(&database,&wiaa).await?;
+        assert_eq!(next(&database,true).await?.target.url,next_team.url);
         let other:i64=sqlx::query_scalar("INSERT INTO schools(source,source_id,name,state,source_url) VALUES('milesplit','999','Another School','WI','https://wi.milesplit.com/teams/999') RETURNING id").fetch_one(&test.pool).await?;
         sqlx::query("UPDATE contacts SET school_id=$1").bind(other).execute(&test.pool).await?;
         assert_eq!(next(&database,true).await?.target.url,web.url);

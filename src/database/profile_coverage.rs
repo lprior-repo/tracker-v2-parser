@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 
-use crate::{model::Source, scope::LOWER_48};
+use crate::model::Source;
 
 use super::{Database, Job};
 
@@ -17,6 +17,37 @@ pub(super) enum CoverageMode<'a> {
 }
 
 impl Database {
+    #[tracing::instrument(skip_all)]
+    pub(crate) async fn prepare_profile_coverage(
+        &self,
+        config: &crate::config::Config,
+        scope: &crate::durable::page::PageScope,
+    ) -> Result<()> {
+        if !config.enabled_sources().contains(&Source::MileSplit)
+            || !matches!(
+                config.acquisition,
+                crate::acquisition::AcquisitionPolicy::PublicResults { .. }
+            )
+        {
+            return Ok(());
+        }
+        super::coverage_scheduler::prepare(
+            self,
+            super::coverage_scheduler::Request {
+                states: &config.states,
+                years: &config.graduation_years,
+                generation: Some(&scope.run_generation),
+                max_attempts: i32::try_from(config.limits.max_attempts)?,
+                contacts: config.acquisition.includes_contacts(),
+                now_ms: 0,
+                owned: &[],
+                allow_deferred: true,
+                exhausted: false,
+            },
+        )
+        .await
+    }
+
     #[tracing::instrument(skip(self, states, years))]
     pub async fn next_profile_coverage_job(
         &self,
@@ -88,36 +119,23 @@ impl Database {
             } => Some((generation, now_ms, owned, allow_deferred)),
             CoverageMode::Ready | CoverageMode::Exhausted => None,
         };
-        let mut transaction = self.pool.begin().await?;
-        let row: Result<Option<(i64, serde_json::Value)>> = async {
-            sqlx::raw_sql("SET TRANSACTION READ ONLY; SET LOCAL work_mem='16MB'")
-                .execute(&mut *transaction)
-                .await?;
-            sqlx::query_as(include_str!("profile_coverage.sql"))
-                .bind(source.map(Source::as_str))
-                .bind(i32::try_from(max_attempts).context("converting maximum attempts")?)
-                .bind(states)
-                .bind(years)
-                .bind(exhausted)
-                .bind(LOWER_48.as_slice())
-                .bind(include_contacts)
-                .bind(durable.map(|(generation, _, _, _)| generation))
-                .bind(durable.map(|(_, now, _, _)| now))
-                .bind(durable.map_or(&[][..], |(_, _, owned, _)| owned))
-                .bind(durable.is_none_or(|(_, _, _, allow)| allow))
-                .fetch_optional(&mut *transaction)
-                .await
-                .context("selecting published school-chain coverage checkpoint")
+        if source.is_some_and(|source| source != Source::MileSplit) {
+            return Ok(None);
         }
-        .await;
-        let row = super::finish(transaction, row).await?;
-        row.map(|(id, target)| {
-            Ok(Job {
-                id,
-                target: serde_json::from_value(target)
-                    .context("decoding school-chain coverage target")?,
-            })
-        })
-        .transpose()
+        super::coverage_scheduler::select(
+            self,
+            super::coverage_scheduler::Request {
+                states,
+                years,
+                max_attempts: i32::try_from(max_attempts).context("converting maximum attempts")?,
+                contacts: include_contacts,
+                exhausted,
+                generation: durable.map(|(generation, _, _, _)| generation),
+                now_ms: durable.map_or(0, |(_, now, _, _)| now),
+                owned: durable.map_or(&[][..], |(_, _, owned, _)| owned),
+                allow_deferred: durable.is_none_or(|(_, _, _, allow)| allow),
+            },
+        )
+        .await
     }
 }

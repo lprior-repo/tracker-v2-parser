@@ -13,6 +13,8 @@ use super::{
 mod admin;
 #[path = "tests/archive_metadata.rs"]
 mod archive_metadata;
+#[path = "tests/version_scope.rs"]
+mod version_scope;
 
 #[test]
 fn given_legacy_v1_archive_when_validated_then_seven_core_tables_remain_the_explicit_scope()
@@ -96,7 +98,7 @@ fn bundle(root: &Path) -> Result<()> {
 }
 
 #[test]
-fn given_complete_bundle_when_native_archive_roundtrips_then_all_fourteen_fingerprints_survive()
+fn given_complete_bundle_when_native_archive_roundtrips_then_all_fifteen_fingerprints_survive()
 -> Result<()> {
     let source = temporary()?;
     bundle(source.path())?;
@@ -106,7 +108,7 @@ fn given_complete_bundle_when_native_archive_roundtrips_then_all_fourteen_finger
     let target = temporary()?;
     let (manifest, inventory) = archive::unpack(&archive, target.path())?;
     assert_eq!(manifest.format, FORMAT);
-    assert_eq!(inventory.tables.len(), 14);
+    assert_eq!(inventory.tables.len(), 15);
     assert!(
         inventory
             .tables
@@ -115,7 +117,7 @@ fn given_complete_bundle_when_native_archive_roundtrips_then_all_fourteen_finger
     );
     assert_eq!(
         inventory.tables.last().map(|table| table.name.as_str()),
-        Some("reviewed_result_links")
+        Some("selector_changes")
     );
     assert!(archive::write(source.path(), &archive).is_err());
     Ok(())
@@ -164,7 +166,7 @@ fn given_previous_v2_bundle_when_native_archive_roundtrips_then_exact_thirteen_t
 }
 
 #[test]
-fn given_current_v3_bundle_missing_audited_table_when_restored_then_validation_fails() -> Result<()>
+fn given_current_v4_bundle_missing_audited_table_when_restored_then_validation_fails() -> Result<()>
 {
     let source = temporary()?;
     bundle(source.path())?;
@@ -184,11 +186,11 @@ fn given_current_v3_bundle_missing_audited_table_when_restored_then_validation_f
         .collect::<Result<Vec<_>>>()?;
     files::json(&source.path().join("manifest.json"), &manifest)?;
     let work = temporary()?;
-    let archive = work.path().join("missing-v3-table.tar.gz");
+    let archive = work.path().join("missing-v4-table.tar.gz");
     archive::write(source.path(), &archive)?;
     let target = temporary()?;
-    let error =
-        archive::unpack(&archive, target.path()).expect_err("v3 must include audited table");
+    let error = archive::unpack(&archive, target.path())
+        .expect_err("v4 must include selector change index");
     assert!(format!("{error:#}").contains("table inventory"));
     Ok(())
 }

@@ -1,4 +1,6 @@
-use super::super::manifest::{CORE_TABLES, Inventory, PREVIOUS_TABLES, TABLES, Table};
+use super::super::manifest::{
+    AUDITED_TABLES, CORE_TABLES, Inventory, PREVIOUS_TABLES, TABLES, Table,
+};
 use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
 use sha2::{Digest, Sha256};
@@ -72,6 +74,10 @@ pub async fn check_tables(connection: &mut PgConnection, count: usize) -> Result
             .iter()
             .map(|(name, _)| (*name).to_owned())
             .collect::<BTreeSet<_>>(),
+        AUDITED_TABLES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect::<BTreeSet<_>>(),
         TABLES
             .iter()
             .map(|(name, _)| (*name).to_owned())
@@ -88,7 +94,8 @@ fn tables_for_count(count: usize) -> Result<&'static [(&'static str, &'static st
     match count {
         7 => Ok(&CORE_TABLES),
         13 => Ok(&PREVIOUS_TABLES),
-        14 => Ok(&TABLES),
+        14 => Ok(&AUDITED_TABLES),
+        15 => Ok(&TABLES),
         _ => anyhow::bail!("unsupported inventory scope"),
     }
 }

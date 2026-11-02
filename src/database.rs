@@ -11,6 +11,7 @@ use crate::model::{AthleteRecord, Capture, Counts, ParsedPage, Source, Target};
 mod cohort_queue;
 mod contact_discovery;
 mod contacts;
+mod coverage_scheduler;
 pub mod durable;
 mod export_snapshot;
 mod identity;
@@ -38,6 +39,7 @@ pub use export_snapshot::{
 #[derive(Debug)]
 pub struct Database {
     pool: PgPool,
+    coverage: coverage_scheduler::Cache,
 }
 
 #[derive(Debug)]
@@ -73,7 +75,10 @@ impl Database {
             pool.close().await;
             return Err(error).context("applying PostgreSQL scraper migrations");
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            coverage: coverage_scheduler::Cache::default(),
+        })
     }
 
     #[tracing::instrument(skip(url))]
@@ -84,7 +89,10 @@ impl Database {
             return Err(error)
                 .context("export requires a compatible schema; run mutating setup separately");
         }
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            coverage: coverage_scheduler::Cache::default(),
+        })
     }
 
     #[must_use]
@@ -102,7 +110,15 @@ impl Database {
 
     #[tracing::instrument(skip(self))]
     pub async fn close(self) {
+        if let Err(error) = self.drain_owned_work().await {
+            tracing::error!(%error, "coverage compiler did not drain successfully");
+        }
         self.pool.close().await;
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub(crate) async fn drain_owned_work(&self) -> Result<()> {
+        self.coverage.drain().await
     }
 
     #[tracing::instrument(skip(self, targets))]

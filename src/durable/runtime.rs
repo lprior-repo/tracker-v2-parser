@@ -99,6 +99,7 @@ async fn serve_inner(
         })
         .await;
     let drained = runtime.blocking.drain().await;
+    let coverage_drained = runtime.database.drain_owned_work().await;
     runtime.database.pool().close().await;
-    drained
+    drained.and(coverage_drained)
 }

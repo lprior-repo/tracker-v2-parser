@@ -575,19 +575,23 @@ it does not back up athletes, results, checkpoints, retained HTML, or workbooks.
 GitHub carries the code and migrations, not the live database or credentials.
 
 The Rust migration tools run through Moon and require PostgreSQL command-line tools.
-Use the same PostgreSQL major version on both machines. A version-three backup captures
+Use the same PostgreSQL major version on both machines. A version-four backup captures
 the six application tables, six durability tables, SQLx migration history, and
-reviewed result-link audit records from one exported database snapshot, plus retained
+reviewed result-link audit records and the derived selector-change index from one
+exported database snapshot, plus retained
 evidence, the selected configuration, saved exports and the explicitly selected
 durable artifact directory. It does
 not copy role passwords, `.env`, browser profiles, old backup directories, or
 unrelated Downloads. Backup and restore share the same credential-filename
 rejection policy. Original evidence paths remain provenance; portable evidence
 files are named by SHA-256.
-Version-three and compatible version-two archives verify every capture and parse
+Version-four, version-three and compatible version-two archives verify every
+capture and parse
 artifact referenced by that snapshot. Version-two archives retain their exact
 13-table inventory scope and do not claim to fingerprint reviewed result-link
-records. A missing or corrupt referenced blob prevents publication. Restate's
+records. Version-three archives retain their exact 14-table inventory, while
+version-four archives fingerprint all 15 tables. A missing or corrupt referenced
+blob prevents publication. Restate's
 server journals and configuration require a separate stopped-server backup.
 Legacy version-one archives verify their original seven-table inventory only;
 their durability records and artifacts are not certified by that format.

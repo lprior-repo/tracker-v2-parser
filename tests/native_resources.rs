@@ -228,7 +228,13 @@ async fn given_native_resource_cli_when_sampling_twice_then_private_report_conta
                     "--interval-seconds",
                     "1",
                 ])
-                .env("PGHOST", options.get_host())
+                .env(
+                    "PGHOST",
+                    options.get_socket().map_or_else(
+                        || std::ffi::OsStr::new(options.get_host()),
+                        |socket| socket.as_os_str(),
+                    ),
+                )
                 .env("PGPORT", options.get_port().to_string())
                 .env("PGUSER", options.get_username())
                 .env_remove("PGSERVICE")
