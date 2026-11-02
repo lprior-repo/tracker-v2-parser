@@ -434,6 +434,16 @@ bypassed, and failed/cancelled acquisition does not establish complete coverage.
 
 `limits.max_pages` bounds each durable batch. The workflow exports its verified
 snapshot and schedules a continuation while its deadline and batch count permit.
+
+An explicitly authorized deadline extension uses a separately persisted crawl
+request with `deadline_extension.previous_deadline_ms` and
+`deadline_extension.effective_deadline_ms`; the effective value must equal the
+request's `deadline_ms`. Compatible retained pages reuse their original operation
+ID and immutable binding while keeping cumulative retry limits. Original retained
+inputs and journals stay unchanged. Ordinary changed-deadline requests fail closed
+on an existing same-generation owner; the extension field does not grant a new
+deadline or reset attempts automatically.
+
 Checkpoints remain available when the bounded run ends. Nonblocked page failures
 remain recorded while untouched pages continue; automatic attempts and saved
 access stops are preserved across restarts and new runs.

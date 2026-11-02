@@ -49,7 +49,8 @@ pub(in crate::database) async fn next_for_cohort_in(
     years: &[i32],
     durable: Option<DurableSelection<'_>>,
 ) -> Result<Option<Job>> {
-    let row: Option<(i64, serde_json::Value)> = sqlx::query_as(include_str!("selection.sql"))
+    let query = selection_query(source, durable);
+    let row: Option<(i64, serde_json::Value)> = sqlx::query_as(query)
         .bind(source.map(Source::as_str))
         .bind(attempt_limit(max_attempts)?)
         .bind(preferred.as_str())
@@ -72,3 +73,20 @@ pub(in crate::database) async fn next_for_cohort_in(
     })
     .transpose()
 }
+
+fn selection_query(source: Option<Source>, durable: Option<DurableSelection<'_>>) -> &'static str {
+    let public_source = matches!(source, None | Some(Source::MileSplit));
+    let scoped = public_source
+        && durable.is_some_and(|selection| {
+            matches!(selection.scope, FallbackScope::MileSplitPublicDiscovery)
+        });
+    if scoped {
+        include_str!("selection_scoped.sql")
+    } else {
+        include_str!("selection.sql")
+    }
+}
+
+#[cfg(test)]
+#[path = "selection_tests.rs"]
+mod tests;

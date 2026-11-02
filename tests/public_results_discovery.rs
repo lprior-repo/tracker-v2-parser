@@ -7,7 +7,7 @@ mod support;
 use anyhow::Result;
 use discovery::{PUBLIC, config, done, register, selected, snapshot, target};
 use track_scrapper_v2::{
-    database::Database,
+    database::{Database, JobClass},
     durable::page,
     model::{PageKind, Source, Sport},
     sources,
@@ -253,4 +253,257 @@ async fn given_preserved_source_stop_when_restricted_discovery_runs_then_it_rema
         assert_eq!(snapshot(&database).await?,before);
         database.close().await;Ok(())
     })).await
+}
+
+fn query_meet(id: &str, state: &str) -> track_scrapper_v2::model::Target {
+    let mut page = target(
+        PageKind::Meet,
+        &format!(
+            "https://{state_lower}.milesplit.com/meets/{id}-meet",
+            state_lower = state.to_lowercase()
+        ),
+        None,
+        None,
+    );
+    page.context.state = Some(state.to_owned());
+    page
+}
+
+async fn durable_sequence(
+    database: &Database,
+    config: &track_scrapper_v2::config::Config,
+    expected: &[track_scrapper_v2::model::Target],
+) -> Result<Vec<(i64, serde_json::Value)>> {
+    let scope = page_support::scope(config)?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut observed = Vec::with_capacity(expected.len());
+    for target in expected {
+        let job = database
+            .next_durable_page(config, &scope, now)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected queued public discovery page"))?;
+        assert_eq!(
+            serde_json::to_value(&job.target)?,
+            serde_json::to_value(target)?
+        );
+        let stored: serde_json::Value =
+            sqlx::query_scalar("SELECT cursor FROM scrape_pages WHERE id=$1")
+                .bind(job.id)
+                .fetch_one(database.pool())
+                .await?;
+        assert_eq!(stored, serde_json::to_value(target)?);
+        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE id=$1")
+            .bind(job.id)
+            .execute(database.pool())
+            .await?;
+        observed.push((job.id, stored));
+    }
+    assert!(
+        database
+            .next_durable_page(config, &scope, now)
+            .await?
+            .is_none()
+    );
+    sqlx::query("UPDATE scrape_pages SET status='pending'")
+        .execute(database.pool())
+        .await?;
+    Ok(observed)
+}
+
+async fn legacy_sequence(
+    database: &Database,
+    config: &track_scrapper_v2::config::Config,
+    expected: &[track_scrapper_v2::model::Target],
+) -> Result<Vec<(i64, serde_json::Value)>> {
+    let mut observed = Vec::with_capacity(expected.len());
+    for target in expected {
+        let job = database
+            .next_job_for_cohort(
+                Some(Source::MileSplit),
+                config.limits.max_attempts,
+                JobClass::Profile,
+                &config.states,
+                &config.graduation_years,
+            )
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("expected queued legacy selection"))?;
+        assert_eq!(
+            serde_json::to_value(&job.target)?,
+            serde_json::to_value(target)?
+        );
+        let stored: serde_json::Value =
+            sqlx::query_scalar("SELECT cursor FROM scrape_pages WHERE id=$1")
+                .bind(job.id)
+                .fetch_one(database.pool())
+                .await?;
+        assert_eq!(stored, serde_json::to_value(target)?);
+        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE id=$1")
+            .bind(job.id)
+            .execute(database.pool())
+            .await?;
+        observed.push((job.id, stored));
+    }
+    assert!(
+        database
+            .next_job_for_cohort(
+                Some(Source::MileSplit),
+                config.limits.max_attempts,
+                JobClass::Profile,
+                &config.states,
+                &config.graduation_years,
+            )
+            .await?
+            .is_none()
+    );
+    Ok(observed)
+}
+
+fn query_config(states: &str) -> Result<track_scrapper_v2::config::Config> {
+    track_scrapper_v2::config::Config::parse(&format!(
+        "states={states}\ngraduation_years=[2027]\nseason=2026\n{PUBLIC}\n[sources.athleticnet]\nenabled=false\n[sources.milesplit]\nenabled=true\ntransport='http'\n"
+    ))
+}
+
+#[tokio::test]
+async fn given_multiple_state_filters_when_durable_fallback_repeats_then_order_and_cursors_match_legacy_selection()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let config = query_config("['OH','WI']")?;
+            let expected = (0..8)
+                .map(|index| {
+                    query_meet(
+                        &format!("repeated-{index}"),
+                        if index % 2 == 0 { "OH" } else { "WI" },
+                    )
+                })
+                .collect::<Vec<_>>();
+            database.enqueue(&expected, false).await?;
+            let optimized = durable_sequence(&database, &config, &expected).await?;
+            let legacy = legacy_sequence(&database, &config, &expected).await?;
+            assert_eq!(optimized, legacy);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_multiple_configured_states_when_durable_fallback_runs_then_only_matching_rows_keep_database_order()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let config = query_config("['OH','WI']")?;
+            let queued = vec![
+                query_meet("multi-oh", "OH"),
+                query_meet("multi-wi", "WI"),
+                query_meet("multi-ia", "IA"),
+            ];
+            database.enqueue(&queued, false).await?;
+            let optimized = durable_sequence(&database, &config, &queued[..2]).await?;
+            let legacy = legacy_sequence(&database, &config, &queued[..2]).await?;
+            assert_eq!(optimized, legacy);
+            let remaining: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM scrape_pages WHERE status='pending'")
+                    .fetch_one(database.pool())
+                    .await?;
+            database.close().await;
+            assert_eq!(remaining, 1);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_all_configured_states_when_durable_fallback_runs_then_each_state_is_returned_in_id_order()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let config = query_config("['OH','WI','IA']")?;
+            let expected = vec![
+                query_meet("all-oh", "OH"),
+                query_meet("all-wi", "WI"),
+                query_meet("all-ia", "IA"),
+            ];
+            database.enqueue(&expected, false).await?;
+            let optimized = durable_sequence(&database, &config, &expected).await?;
+            let legacy = legacy_sequence(&database, &config, &expected).await?;
+            assert_eq!(optimized, legacy);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_no_eligible_rows_when_durable_fallback_runs_then_optimized_and_legacy_apis_return_none()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let config = query_config("['IA']")?;
+            let scope = page_support::scope(&config)?;
+            assert!(
+                database
+                    .next_durable_page(&config, &scope, chrono::Utc::now().timestamp_millis())
+                    .await?
+                    .is_none()
+            );
+            assert!(
+                database
+                    .next_job_for_cohort(
+                        Some(Source::MileSplit),
+                        config.limits.max_attempts,
+                        JobClass::Profile,
+                        &config.states,
+                        &config.graduation_years,
+                    )
+                    .await?
+                    .is_none()
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_a_registered_profile_outside_the_selected_cohort_when_public_fallback_runs_then_the_profile_stays_pending_and_unattempted()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let config = config("OH", PUBLIC, "milesplit")?;
+            let scope = page_support::scope(&config)?;
+            let registered = register(&database, "queue-policy-2028", Some(2028)).await?;
+            database
+                .enqueue(std::slice::from_ref(&registered), false)
+                .await?;
+            let before = snapshot(&database).await?;
+            assert!(
+                database
+                    .next_durable_page(&config, &scope, chrono::Utc::now().timestamp_millis())
+                    .await?
+                    .is_none()
+            );
+            let after = snapshot(&database).await?;
+            let state: (String, i32) =
+                sqlx::query_as("SELECT status,attempts FROM scrape_pages WHERE cursor=$1")
+                    .bind(serde_json::to_value(&registered)?)
+                    .fetch_one(database.pool())
+                    .await?;
+            database.close().await;
+            assert_eq!(after, before);
+            assert_eq!(state, ("pending".into(), 0));
+            Ok(())
+        })
+    })
+    .await
 }

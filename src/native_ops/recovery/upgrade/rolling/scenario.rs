@@ -22,6 +22,7 @@ pub(super) fn request(runtime: &Runtime, identity: &str) -> Result<Value> {
         phase: CrawlPhase::SchoolChains,
         inherited_retry_campaigns: vec![format!("ancestor-{identity}")],
         scheduler_version: Some(SchedulerVersion::RollingV2),
+        deadline_extension: None,
     })?)
 }
 

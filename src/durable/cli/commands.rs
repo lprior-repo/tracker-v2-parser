@@ -75,6 +75,7 @@ pub(super) fn crawl_request(
         phase: CrawlPhase::SchoolChains,
         inherited_retry_campaigns: overrides.inherited_retry_campaigns,
         scheduler_version: Some(crate::durable::model::SchedulerVersion::RollingV2),
+        deadline_extension: None,
     };
     value.validate(now_ms)?;
     Ok(value)

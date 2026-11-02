@@ -9,6 +9,7 @@ use crate::{
     transport::{Mode, Options, Transport},
 };
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 const UNSUPPORTED: &str = "<main><h1>School directory</h1></main><script>window['api'+'Key']='private-canary-never-retain';</script>";
 const CHALLENGED: &str = "<title>Verify you are human</title><script>window['api'+'Key']='private-canary-never-retain';</script>";
@@ -37,6 +38,85 @@ async fn unsupported_contact_is_durably_rejected_without_retaining_body_or_repea
 async fn challenged_contact_with_unsupported_script_remains_blocked_without_repeating_get()
 -> Result<()> {
     verify_http_rejection(CHALLENGED, true).await
+}
+
+#[tokio::test]
+async fn successful_http_capture_persists_single_redaction_output_and_replays_manifest()
+-> Result<()> {
+    const BODY: &str =
+        "<main>Public profile</main><script>const apiKey='private-capture-canary';</script>";
+    with_database(|pool| {
+        Box::pin(async move {
+            let database = Database::durable_test_database(pool.clone());
+            let root = tempfile::tempdir()?;
+            let fixture = WireFixture::start(FixtureKind::Page {
+                status: 200,
+                body: BODY,
+            })
+            .await?;
+            let target = target();
+            let request = page::bind_target(&database, target.clone(), &scope()?).await?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let ReservationDecision::Reserved { reservation } =
+                page::reserve(&database, &request, now).await?
+            else {
+                anyhow::bail!("reservation")
+            };
+            let mut transport = Transport::new(Options {
+                mode: Mode::Http,
+                driver_url: None,
+                profile: root.path().join("unused"),
+                headless: true,
+                rps: 2.0,
+            })?
+            .with_persistent_pacing(pool.clone())
+            .with_http_fixture("https://oh.milesplit.com", fixture.url.clone())?;
+
+            let FetchDecision::Captured { capture: reference } =
+                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?
+            else {
+                anyhow::bail!("successful fixture capture")
+            };
+            let expected = crate::transport::redact_capture(
+                crate::transport::sanitize_response(Capture {
+                    url: target.url.clone(),
+                    status: 200,
+                    content_type: "text/html".into(),
+                    body: BODY.as_bytes().to_vec(),
+                })?,
+            )?;
+            let path = root.path().join(format!("{}.blob", reference.body.sha256));
+            let retained_bytes = std::fs::read(path)?;
+            assert_eq!(retained_bytes, expected.body);
+            assert_eq!(reference.body.bytes, u64::try_from(retained_bytes.len())?);
+            assert_eq!(
+                reference.body.sha256,
+                format!("{:x}", Sha256::digest(&expected.body))
+            );
+            assert_eq!(reference.url, expected.url);
+            assert_eq!(reference.status, expected.status);
+            assert_eq!(reference.content_type, expected.content_type);
+            assert!((now..=chrono::Utc::now().timestamp_millis()).contains(&reference.retained_at_ms));
+            assert!(!String::from_utf8_lossy(&retained_bytes).contains("private-capture-canary"));
+
+            sqlx::query(
+                "UPDATE durable_page_attempts SET capture=NULL,state='reserved' WHERE attempt_id=$1",
+            )
+            .bind(&reservation.attempt_id)
+            .execute(pool)
+            .await?;
+            let FetchDecision::Captured { capture: replayed } =
+                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?
+            else {
+                anyhow::bail!("manifest capture replay")
+            };
+            assert_eq!(reference, replayed);
+            transport.close().await?;
+            assert_eq!(fixture.finish().await?.len(), 1);
+            Ok(())
+        })
+    })
+    .await
 }
 
 async fn verify_http_rejection(body: &'static str, blocked: bool) -> Result<()> {

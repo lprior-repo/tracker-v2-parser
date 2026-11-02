@@ -125,7 +125,7 @@ async fn settle_acquisition_limit(
         .durable_acquisition_attempts(&reservation.request)
         .await?;
     let over_budget = attempts > i64::from(policy.attempts());
-    if !over_budget && now_ms < reservation.request.binding.scope.deadline_ms {
+    if !over_budget && now_ms < reservation.request.effective_deadline_ms() {
         return Ok(None);
     }
     let retained_failure = if over_budget {

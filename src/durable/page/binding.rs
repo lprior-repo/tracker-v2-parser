@@ -56,6 +56,7 @@ pub fn request(job: Job, scope: &PageScope) -> Result<PageRequest> {
             scope: scope.clone(),
         },
         target: job.target,
+        deadline_extension: None,
     })
 }
 
@@ -71,6 +72,17 @@ pub fn validate_request(value: &PageRequest) -> Result<()> {
         expected.binding == value.binding,
         "durable page request binding mismatch"
     );
+    if let Some(extension) = &value.deadline_extension {
+        ensure!(
+            extension.owner_operation_id == value.binding.operation_id,
+            "deadline extension owner does not match immutable operation"
+        );
+        ensure!(
+            extension.previous_deadline_ms == value.binding.scope.deadline_ms
+                && extension.effective_deadline_ms > extension.previous_deadline_ms,
+            "invalid durable deadline extension"
+        );
+    }
     Ok(())
 }
 
@@ -92,4 +104,60 @@ pub(super) fn deadline(scope: &PageScope, now_ms: i64) -> Result<()> {
         "durable run deadline must be within the next 24 hours"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{request, validate_request};
+    use crate::{
+        database::Job,
+        durable::page::{PageDeadlineExtension, PageRequest, PageScope},
+        model::{PageContext, PageKind, Source, Target},
+    };
+    use anyhow::{Context, Result};
+
+    #[test]
+    fn page_request_without_extension_decodes_as_legacy_input() -> Result<()> {
+        let job = Job {
+            id: 12,
+            target: Target::get(
+                Source::MileSplit,
+                PageKind::Team,
+                "https://wi.milesplit.com/teams/731-school".into(),
+                PageContext {
+                    state: Some("WI".into()),
+                    school_id: Some("731".into()),
+                    ..Default::default()
+                },
+            ),
+        };
+        let scope = PageScope {
+            run_generation: "legacy-page-request".into(),
+            config_sha256: "a".repeat(64),
+            deadline_ms: 2_000_000_000_000,
+            cooldown_ms: 60_000,
+            inherited_retry_campaigns: Vec::new(),
+        };
+        let current = request(job, &scope)?;
+        let mut serialized = serde_json::to_value(current)?;
+        serialized
+            .as_object_mut()
+            .context("page request object")?
+            .remove("deadline_extension");
+        let decoded: PageRequest = serde_json::from_value(serialized)?;
+        assert!(decoded.deadline_extension.is_none());
+        validate_request(&decoded)?;
+        let mut wrong_owner = decoded;
+        wrong_owner.deadline_extension = Some(PageDeadlineExtension {
+            owner_operation_id: "b".repeat(64),
+            previous_deadline_ms: scope.deadline_ms,
+            effective_deadline_ms: scope.deadline_ms + 1,
+        });
+        assert!(
+            validate_request(&wrong_owner)
+                .err()
+                .is_some_and(|error| error.to_string().contains("owner does not match"))
+        );
+        Ok(())
+    }
 }

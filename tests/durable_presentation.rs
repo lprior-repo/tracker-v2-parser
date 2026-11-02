@@ -20,6 +20,7 @@ fn request() -> Result<CrawlRequest> {
     Ok(CrawlRequest {
         inherited_retry_campaigns: Vec::new(),
         scheduler_version: None,
+        deadline_extension: None,
         generation: "presentation-only-review-change".into(),
         config,
         deadline_ms: scope.deadline_ms,

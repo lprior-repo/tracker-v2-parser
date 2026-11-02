@@ -8,6 +8,7 @@ fn request(phase: CrawlPhase, focused: bool, contacts: bool) -> Result<CrawlRequ
     Ok(CrawlRequest {
         inherited_retry_campaigns: Vec::new(),
         scheduler_version: None,
+        deadline_extension: None,
         generation: "fair-phase-progression".into(),
         config: Config::parse(&format!(
             "states=['WI']\n[acquisition]\nmode='public_results'\nprofile_coverage_only={focused}\ncollect_contacts={contacts}\n[sources.athleticnet]\nenabled=false\n"

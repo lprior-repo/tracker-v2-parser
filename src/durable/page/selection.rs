@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
 
 use super::{PageRequest, PageScope, ReservationDecision};
-use crate::{config::Config, database::Database};
+use crate::{config::Config, database::Database, durable::model::DeadlineExtensionAuthorization};
 
 #[derive(Clone, Copy)]
 pub enum Scheduling {
@@ -69,6 +69,18 @@ pub async fn select_scheduled(
     owned: &[i64],
     scheduling: Scheduling,
 ) -> Result<Option<PageRequest>> {
+    select_scheduled_with_extension(database, config, scope, now_ms, owned, scheduling, None).await
+}
+
+pub async fn select_scheduled_with_extension(
+    database: &Database,
+    config: &Config,
+    scope: &PageScope,
+    now_ms: i64,
+    owned: &[i64],
+    scheduling: Scheduling,
+    deadline_extension: Option<&DeadlineExtensionAuthorization>,
+) -> Result<Option<PageRequest>> {
     ensure!(
         owned.len() <= 3 && owned.iter().all(|id| *id > 0),
         "invalid pipeline ownership window"
@@ -88,7 +100,16 @@ pub async fn select_scheduled(
             match progress {
                 ControlFlow::Break(_) => Ok(progress),
                 ControlFlow::Continue(()) => {
-                    policy_candidate(database, config, scope, now_ms, owned, scheduling).await
+                    policy_candidate(
+                        database,
+                        config,
+                        scope,
+                        now_ms,
+                        owned,
+                        scheduling,
+                        deadline_extension,
+                    )
+                    .await
                 }
             }
         })
@@ -109,6 +130,7 @@ async fn policy_candidate(
     now_ms: i64,
     owned: &[i64],
     scheduling: Scheduling,
+    deadline_extension: Option<&DeadlineExtensionAuthorization>,
 ) -> Result<ControlFlow<Option<PageRequest>>> {
     let Some(job) = database
         .next_durable_page_scheduled(config, scope, now_ms, owned, scheduling)
@@ -116,7 +138,14 @@ async fn policy_candidate(
     else {
         return Ok(ControlFlow::Break(None));
     };
-    let request = super::request(job, scope)?;
+    let request = match deadline_extension {
+        Some(authorization) => {
+            database
+                .durable_request_with_deadline_extension(job, scope, authorization)
+                .await?
+        }
+        None => super::request(job, scope)?,
+    };
     let Some(exclusion) = crate::acquisition::ScopeExclusion::bind(config, &request)? else {
         return Ok(ControlFlow::Break(Some(request)));
     };
@@ -128,6 +157,8 @@ async fn policy_candidate(
 
 #[cfg(test)]
 mod batch_tests;
+#[cfg(test)]
+mod deadline_extension_tests;
 #[cfg(test)]
 mod exclusion_scan_tests;
 #[cfg(test)]

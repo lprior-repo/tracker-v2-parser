@@ -180,14 +180,13 @@ fn failure_outcome(
         FailureClass::Blocked => Ok(PageOutcome::Blocked { detail }),
         FailureClass::Rejected => Ok(PageOutcome::Rejected { detail }),
         FailureClass::Transient => {
-            let scope = &reservation.request.binding.scope;
             let delay = i64::from(reservation.ordinal)
                 .checked_mul(1000)
                 .context("retry delay overflow")?;
             let retry_at_ms = now_ms
                 .checked_add(delay)
                 .context("retry deadline overflow")?;
-            if retry_at_ms >= scope.deadline_ms {
+            if retry_at_ms >= reservation.request.effective_deadline_ms() {
                 return Ok(PageOutcome::Exhausted { detail });
             }
             if attempts >= i64::from(policy.attempts()) {

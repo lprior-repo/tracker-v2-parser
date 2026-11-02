@@ -2,9 +2,16 @@
 mod records;
 mod support;
 
+use std::sync::{Arc, Mutex};
+
 use anyhow::{Context, Result, ensure};
 use calamine::{Reader, open_workbook_auto};
 use sqlx::AssertSqlSafe;
+use tracing::{
+    Event, Instrument, Subscriber,
+    field::{Field, Visit},
+};
+use tracing_subscriber::{Layer, layer::Context as LayerContext, prelude::*};
 use track_scrapper_v2::{
     database::{
         Database, EXPORT_BATCH_BYTES, EXPORT_BATCH_ROWS, EXPORT_COLLECTION_BYTES,
@@ -21,6 +28,64 @@ fn options() -> ExportOptions {
         graduation_years: vec![2027],
         rows_per_file: 2,
         per_athlete_sheets: false,
+    }
+}
+
+#[derive(Clone, Default)]
+struct SqlQueries(Arc<Mutex<Vec<String>>>);
+
+struct SqlStatement(String);
+
+impl Visit for SqlStatement {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if matches!(field.name(), "db.statement" | "summary") {
+            self.0.push_str(value);
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if matches!(field.name(), "db.statement" | "summary") {
+            self.0.push_str(&format!("{value:?}"));
+        }
+    }
+}
+
+impl<S> Layer<S> for SqlQueries
+where
+    S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, context: LayerContext<'_, S>) {
+        if event.metadata().target() == "sqlx::query"
+            && context.event_scope(event).is_some_and(|scope| {
+                scope
+                    .from_root()
+                    .any(|span| span.metadata().name() == "export_query_observation")
+            })
+        {
+            let mut statement = SqlStatement(String::new());
+            event.record(&mut statement);
+            self.0
+                .lock()
+                .expect("query observation mutex")
+                .push(statement.0);
+        }
+    }
+}
+
+impl SqlQueries {
+    fn count(&self, fragment: &str) -> usize {
+        self.0
+            .lock()
+            .expect("query observation mutex")
+            .iter()
+            .filter(|statement| {
+                statement
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .contains(fragment)
+            })
+            .count()
     }
 }
 
@@ -208,6 +273,107 @@ async fn given_multiple_batches_when_writer_mutates_between_parts_then_snapshot_
                     .map(|(_, name)| name)
                     .collect::<Vec<_>>()
             );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_more_than_one_prefetch_keyset_when_exporting_then_order_and_rows_are_preserved()
+-> Result<()> {
+    let queries = SqlQueries::default();
+    let subscriber = tracing_subscriber::registry().with(queries.clone());
+    tracing::subscriber::set_global_default(subscriber)?;
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let mut expected = seed_athletes(&database, 130).await?;
+            expected.sort_by_key(|(id, _)| *id);
+            let measured = async {
+                let mut snapshot = database.begin_export_snapshot(&[], &[]).await?;
+                let first = snapshot
+                    .next_records(100)
+                    .await?
+                    .context("first snapshot batch")?;
+                let second = snapshot
+                    .next_records(100)
+                    .await?
+                    .context("second snapshot batch")?;
+                assert_eq!(first.len(), 100);
+                assert_eq!(second.len(), 30);
+                let actual: Vec<_> = first
+                    .iter()
+                    .chain(&second)
+                    .map(|record| (record.id, record.name.clone()))
+                    .collect();
+                assert_eq!(actual, expected);
+                assert!(snapshot.next_records(100).await?.is_none());
+                snapshot.finish().await?;
+                Ok::<_, anyhow::Error>(())
+            }
+            .instrument(tracing::info_span!("export_query_observation"));
+            measured.await?;
+            assert_eq!(queries.count("SELECT a.id FROM athletes a"), 3);
+            assert_eq!(queries.count("unnest($1::bigint[])"), 2);
+            assert_eq!(queries.count("WITH school_ids AS MATERIALIZED"), 130);
+            assert_eq!(
+                queries.count("SELECT CASE WHEN octet_length(document::text)"),
+                130
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn given_later_athlete_exceeds_count_limit_when_reading_one_row_then_error_waits_for_that_athlete()
+-> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let mut expected = seed_athletes(&database, 2).await?;
+            expected.sort_by_key(|(id, _)| *id);
+            let source_id: i64 = sqlx::query_scalar(
+                "INSERT INTO athlete_sources(athlete_id,source,source_id,profile_url) VALUES($1,'athleticnet','oversized','https://www.athletic.net/athlete/oversized') RETURNING id",
+            )
+            .bind(expected[1].0)
+            .fetch_one(database.pool())
+            .await?;
+            sqlx::query(
+                "INSERT INTO results(source_result_key,athlete_id,athlete_source_id,source,event,raw_mark,sport,status,is_personal_record,is_relay,source_url,raw) SELECT lpad(number::text,64,'0'),$1,$2,'athleticnet','100 Meters','12.34','outdoor','recorded',false,false,'https://www.athletic.net/athlete/oversized','{}'::jsonb FROM generate_series(1,10001) number",
+            )
+            .bind(expected[1].0)
+            .bind(source_id)
+            .execute(database.pool())
+            .await?;
+            let mut snapshot = database.begin_export_snapshot(&[], &[]).await?;
+            let first = snapshot
+                .next_records(1)
+                .await?
+                .context("first in-scope athlete")?;
+            assert_eq!((first[0].id, first[0].name.as_str()), (expected[0].0, expected[0].1.as_str()));
+            let error = snapshot
+                .next_records(1)
+                .await
+                .err()
+                .context("later athlete count limit")?;
+            let limit = error
+                .downcast_ref::<ExportLimitExceeded>()
+                .context("typed observation limit")?;
+            assert_eq!(limit.kind, "athlete observations");
+            assert_eq!(limit.id, expected[1].0);
+            assert_eq!(limit.actual, 10_001);
+            let invalidated = snapshot
+                .next_records(1)
+                .await
+                .err()
+                .context("failed read invalidates the snapshot")?;
+            assert!(invalidated.downcast_ref::<ExportSnapshotInvalidated>().is_some());
+            snapshot.finish().await?;
             database.close().await;
             Ok(())
         })

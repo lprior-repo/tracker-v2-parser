@@ -20,6 +20,15 @@ pub struct CrawlRequest {
     pub inherited_retry_campaigns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduler_version: Option<SchedulerVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_extension: Option<DeadlineExtensionAuthorization>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeadlineExtensionAuthorization {
+    pub previous_deadline_ms: i64,
+    pub effective_deadline_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +115,14 @@ impl CrawlRequest {
             (0..=86_400_000).contains(&remaining),
             "crawl deadline must be within 24 hours"
         );
+        if let Some(extension) = &self.deadline_extension {
+            ensure!(
+                extension.previous_deadline_ms > 0
+                    && extension.previous_deadline_ms < self.deadline_ms
+                    && extension.effective_deadline_ms == self.deadline_ms,
+                "crawl deadline extension must explicitly authorize the request deadline"
+            );
+        }
         Ok(())
     }
 
@@ -209,7 +226,7 @@ pub fn delay_until(now_ms: i64, due_ms: i64) -> Result<Duration> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, page_config_digest};
+    use super::{Config, CrawlPhase, CrawlRequest, page_config_digest};
     use anyhow::Result;
 
     #[test]
@@ -220,6 +237,27 @@ mod tests {
         config.export.review_sheet = true;
         assert_ne!(crate::durable::page::value_digest(&config)?, original);
         assert_eq!(page_config_digest(&config)?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn crawl_request_without_extension_decodes_as_legacy_input() -> Result<()> {
+        let legacy = CrawlRequest {
+            generation: "legacy-generation".into(),
+            config: Config::default(),
+            deadline_ms: 100_000,
+            cooldown_ms: 60_000,
+            batch: 0,
+            max_batches: 1,
+            phase: CrawlPhase::SchoolChains,
+            inherited_retry_campaigns: Vec::new(),
+            scheduler_version: None,
+            deadline_extension: None,
+        };
+        let value = serde_json::to_value(&legacy)?;
+        assert!(value.get("deadline_extension").is_none());
+        let decoded: CrawlRequest = serde_json::from_value(value)?;
+        assert!(decoded.deadline_extension.is_none());
         Ok(())
     }
 }

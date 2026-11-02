@@ -2,6 +2,7 @@ mod admission;
 pub mod blocking;
 pub(crate) mod capacity_proof;
 pub mod cli;
+pub(crate) mod deadline_extension_proof;
 mod delivery;
 mod effects;
 pub mod model;

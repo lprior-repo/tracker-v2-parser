@@ -1,7 +1,6 @@
 mod support;
 
 use anyhow::Result;
-use sqlx::AssertSqlSafe;
 use track_scrapper_v2::database::Database;
 
 #[tokio::test]
@@ -35,8 +34,7 @@ async fn given_mixed_duplicate_and_unverified_affiliations_when_scoping_then_exp
             )
             .execute(database.pool())
             .await?;
-            let scope_sql = include_str!("../src/database/export_snapshot_scope.sql")
-                .replace("LIMIT 1", "LIMIT 10000");
+            let scope_sql = include_str!("../src/database/export_snapshot_scope.sql");
             for states in [
                 vec!["MN".to_owned()],
                 vec!["WI".to_owned()],
@@ -49,10 +47,11 @@ async fn given_mixed_duplicate_and_unverified_affiliations_when_scoping_then_exp
                     let expected = records.iter().map(|record| record.id).collect::<Vec<_>>();
                     assert!(!expected.is_empty());
                     for cursor in [0, 149, 399, 576] {
-                        let actual: Vec<i64> = sqlx::query_scalar(AssertSqlSafe(scope_sql.as_str()))
+                        let actual: Vec<i64> = sqlx::query_scalar(scope_sql)
                             .bind(&states)
                             .bind(&years)
                             .bind(i64::from(cursor))
+                            .bind(10_000_i64)
                             .fetch_all(database.pool())
                             .await?;
                         assert_eq!(

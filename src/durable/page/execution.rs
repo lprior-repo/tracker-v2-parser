@@ -43,7 +43,7 @@ async fn retain_response_with_policy(
     policy: &RetryPolicy,
 ) -> Result<FetchDecision> {
     match crate::transport::sanitize_response(capture) {
-        Ok(capture) => retain(database, root, reservation, capture, now_ms)
+        Ok(capture) => retain_sanitized(database, root, reservation, capture, now_ms)
             .await
             .map(|capture| FetchDecision::Captured { capture }),
         Err(failure) => {
@@ -68,6 +68,16 @@ pub(super) async fn retain(
     now_ms: i64,
 ) -> Result<CaptureRef> {
     let capture = crate::transport::redact_capture(capture)?;
+    retain_sanitized(database, root, reservation, capture, now_ms).await
+}
+
+async fn retain_sanitized(
+    database: &Database,
+    root: &Path,
+    reservation: &PageReservation,
+    capture: Capture,
+    now_ms: i64,
+) -> Result<CaptureRef> {
     if let Some(existing) = super::retained::load(root, reservation).await? {
         ensure!(
             existing.url == capture.url

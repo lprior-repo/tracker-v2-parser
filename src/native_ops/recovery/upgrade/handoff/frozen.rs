@@ -110,6 +110,7 @@ async fn prepare(runtime: &Runtime, identity: &str) -> Result<(Vec<i64>, CrawlRe
             phase: CrawlPhase::SchoolChains,
             inherited_retry_campaigns: vec![format!("ancestor-{identity}")],
             scheduler_version: None,
+            deadline_extension: None,
         },
     ))
 }

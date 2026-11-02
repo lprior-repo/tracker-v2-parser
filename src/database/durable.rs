@@ -8,11 +8,80 @@ mod stages;
 use anyhow::{Context, Result, ensure};
 use sqlx::PgConnection;
 
-use crate::durable::page::{PageOutcome, PageRequest, PageReservation};
+use crate::durable::{
+    model::DeadlineExtensionAuthorization,
+    page::{PageDeadlineExtension, PageOutcome, PageRequest, PageReservation, PageScope},
+};
 
 use super::Database;
 
 impl Database {
+    pub(crate) async fn durable_request_with_deadline_extension(
+        &self,
+        job: crate::database::Job,
+        scope: &PageScope,
+        authorization: &DeadlineExtensionAuthorization,
+    ) -> Result<PageRequest> {
+        ensure!(
+            authorization.effective_deadline_ms == scope.deadline_ms,
+            "deadline extension authorization does not match selected scope"
+        );
+        ensure!(
+            authorization.previous_deadline_ms < authorization.effective_deadline_ms,
+            "deadline extension authorization must increase the prior deadline"
+        );
+        let existing: Option<(String, serde_json::Value)> = sqlx::query_as(
+            "SELECT operation_id,binding FROM durable_page_operations WHERE page_id=$1 AND run_generation=$2",
+        )
+        .bind(job.id)
+        .bind(&scope.run_generation)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((operation_id, binding_value)) = existing else {
+            return crate::durable::page::request(job, scope);
+        };
+        let binding: crate::durable::page::PageBinding =
+            serde_json::from_value(binding_value).context("decoding retained extension owner")?;
+        let target_sha256 = crate::durable::page::value_digest(&job.target)?;
+        ensure!(
+            binding.operation_id == operation_id
+                && binding.page_id == job.id
+                && binding.target_sha256 == target_sha256,
+            "retained deadline extension owner does not match selected page"
+        );
+        let old_scope = &binding.scope;
+        ensure!(
+            old_scope.run_generation == scope.run_generation
+                && old_scope.config_sha256 == scope.config_sha256
+                && old_scope.cooldown_ms == scope.cooldown_ms
+                && old_scope.inherited_retry_campaigns == scope.inherited_retry_campaigns,
+            "retained operation is not compatible with the explicitly authorized deadline extension"
+        );
+        if old_scope.deadline_ms == scope.deadline_ms {
+            let request = crate::durable::page::request(job, scope)?;
+            ensure!(
+                request.binding == binding,
+                "retained operation identity does not match its canonical current scope"
+            );
+            return Ok(request);
+        }
+        ensure!(
+            old_scope.deadline_ms == authorization.previous_deadline_ms,
+            "retained operation is not compatible with the explicitly authorized deadline extension"
+        );
+        let request = PageRequest {
+            binding,
+            target: job.target,
+            deadline_extension: Some(PageDeadlineExtension {
+                owner_operation_id: operation_id,
+                previous_deadline_ms: authorization.previous_deadline_ms,
+                effective_deadline_ms: authorization.effective_deadline_ms,
+            }),
+        };
+        crate::durable::page::validate_request(&request)?;
+        Ok(request)
+    }
+
     #[cfg(test)]
     pub(crate) fn durable_test_database(pool: sqlx::PgPool) -> Self {
         Self {

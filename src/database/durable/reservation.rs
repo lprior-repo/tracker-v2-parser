@@ -104,6 +104,18 @@ pub(super) async fn register(
         serde_json::to_value(target)? == serde_json::to_value(&request.target)?,
         "durable target does not match checkpoint"
     );
+    let same_generation_owner: Option<String> = sqlx::query_scalar(
+        "SELECT operation_id FROM durable_page_operations WHERE page_id=$1 AND run_generation=$2 AND operation_id<>$3",
+    )
+    .bind(request.binding.page_id)
+    .bind(&request.binding.scope.run_generation)
+    .bind(&request.binding.operation_id)
+    .fetch_optional(&mut *connection)
+    .await?;
+    ensure!(
+        same_generation_owner.is_none(),
+        "durable generation already has another immutable operation owner; explicit compatible continuation required"
+    );
     let other_owner: Option<String> = sqlx::query_scalar("SELECT d.operation_id FROM durable_page_operations d JOIN durable_page_attempts a ON a.operation_id=d.operation_id WHERE d.page_id=$1 AND d.operation_id<>$2 AND a.state IN ('reserved','captured','parsed') AND NOT ($3 AND EXISTS(SELECT 1 FROM durable_page_operations saved WHERE saved.operation_id=$2 AND saved.page_id=$1 AND saved.state='completed' AND saved.outcome IS NOT NULL)) ORDER BY d.created_at LIMIT 1")
         .bind(request.binding.page_id).bind(&request.binding.operation_id).bind(completed_index_replay).fetch_optional(&mut *connection).await?;
     ensure!(
@@ -165,7 +177,7 @@ async fn reserve(
             outcome: serde_json::from_value(outcome)?,
         });
     }
-    if now_ms >= request.binding.scope.deadline_ms {
+    if now_ms >= request.effective_deadline_ms() {
         return exhausted(connection, request).await;
     }
     let legacy: Option<String> = sqlx::query_scalar("SELECT last_error FROM scrape_pages WHERE id=$1 AND attempts>0 AND NOT EXISTS(SELECT 1 FROM durable_page_attempts WHERE operation_id=$2)")
@@ -192,9 +204,7 @@ async fn reserve(
     ensure!(
         (1..=86_400_000).contains(
             &request
-                .binding
-                .scope
-                .deadline_ms
+                .effective_deadline_ms()
                 .checked_sub(now_ms)
                 .context("durable deadline overflow")?
         ),

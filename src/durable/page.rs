@@ -22,7 +22,10 @@ pub use failures::classify;
 pub(crate) use index_refresh::IndexRefreshPermit;
 pub use offline::{bind_target, offline_replay};
 pub(crate) use retry::{RetryPolicy, fetch_configured};
-pub(crate) use selection::{Scheduling, reserve_configured, select_scheduled};
+#[cfg(test)]
+pub(crate) use selection::select_scheduled;
+pub use selection::select_scheduled_with_extension;
+pub(crate) use selection::{Scheduling, reserve_configured};
 pub use selection::{reserve, select, select_excluding};
 
 pub(crate) fn body_digest(bytes: &[u8]) -> String {
@@ -59,6 +62,27 @@ pub struct PageBinding {
 pub struct PageRequest {
     pub binding: PageBinding,
     pub target: Target,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_extension: Option<PageDeadlineExtension>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageDeadlineExtension {
+    pub owner_operation_id: String,
+    pub previous_deadline_ms: i64,
+    pub effective_deadline_ms: i64,
+}
+
+impl PageRequest {
+    #[must_use]
+    pub fn effective_deadline_ms(&self) -> i64 {
+        self.deadline_extension
+            .as_ref()
+            .map_or(self.binding.scope.deadline_ms, |extension| {
+                extension.effective_deadline_ms
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

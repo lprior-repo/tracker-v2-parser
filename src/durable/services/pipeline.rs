@@ -92,13 +92,14 @@ impl AthleticCrawl {
         let scheduling =
             page::Scheduling::for_batch_turn(&request.config, request.batch, index).terminal()?;
         let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || async {
-            let selected = page::select_scheduled(
+            let selected = page::select_scheduled_with_extension(
                 &self.runtime.database,
                 &request.config,
                 scope,
                 now,
                 owned,
                 scheduling,
+                request.deadline_extension.as_ref(),
             )
             .await?;
             Ok(selected.filter(|page| {

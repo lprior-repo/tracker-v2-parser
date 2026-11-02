@@ -1,15 +1,17 @@
+mod prefetch;
 mod review;
 mod writer;
 
 pub(super) use writer::write;
 
-use std::{error::Error, fmt, sync::Arc};
+use std::{collections::VecDeque, error::Error, fmt, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::{PgPool, Postgres, Transaction};
 
 use crate::{export::ExportIssue, model::AthleteRecord};
+use prefetch::PendingAthlete;
 
 pub const EXPORT_BATCH_ROWS: usize = 1_000;
 pub const EXPORT_BATCH_BYTES: usize = 8 * 1024 * 1024;
@@ -54,6 +56,7 @@ pub struct ExportSnapshot<'a> {
     states: Vec<String>,
     years: Vec<i32>,
     athlete_cursor: i64,
+    pending_athlete_ids: VecDeque<PendingAthlete>,
     issue_cursor: (i32, i64, i64),
     records_finished: bool,
     issues_finished: bool,
@@ -189,6 +192,7 @@ impl<'a> ExportSnapshot<'a> {
             states: states.to_vec(),
             years: years.to_vec(),
             athlete_cursor: 0,
+            pending_athlete_ids: VecDeque::new(),
             issue_cursor: (0, 0, 0),
             records_finished: false,
             issues_finished: false,
@@ -250,17 +254,13 @@ impl<'a> ExportSnapshot<'a> {
         if self.records_finished {
             return Ok(None);
         }
-        let id: Option<i64> = sqlx::query_scalar(include_str!("export_snapshot_scope.sql"))
-            .bind(&self.states)
-            .bind(&self.years)
-            .bind(self.athlete_cursor)
-            .fetch_optional(&mut *self.transaction)
-            .await?;
-        let Some(id) = id else {
-            self.records_finished = true;
+        if self.pending_athlete_ids.is_empty() {
+            self.prefetch_athlete_ids().await?;
+        }
+        let Some((id, count_guard)) = self.pending_athlete_ids.pop_front() else {
             return Ok(None);
         };
-        self.athlete_cursor = id;
+        count_guard?;
         self.check_components(id).await?;
         let budget = i64::try_from(EXPORT_BATCH_BYTES)?;
         let row: Option<(Option<String>, i64)> =
@@ -285,27 +285,27 @@ impl<'a> ExportSnapshot<'a> {
         Ok(Some((record, usize::try_from(size)?)))
     }
 
+    async fn prefetch_athlete_ids(&mut self) -> Result<()> {
+        let (ids, guard_results) = prefetch::read_batch(
+            &mut self.transaction,
+            &self.states,
+            &self.years,
+            self.athlete_cursor,
+        )
+        .await?;
+        if ids.is_empty() {
+            self.records_finished = true;
+            return Ok(());
+        }
+        self.athlete_cursor = ids
+            .last()
+            .copied()
+            .context("missing export keyset cursor")?;
+        self.pending_athlete_ids.extend(guard_results);
+        Ok(())
+    }
+
     async fn check_components(&mut self, id: i64) -> Result<()> {
-        let counts: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT 'athlete observations',count(*)::bigint FROM (SELECT id FROM (SELECT r.id FROM results r JOIN athlete_sources p ON p.id=r.athlete_source_id WHERE p.athlete_id=$1 UNION SELECT r.id FROM valid_reviewed_result_links l JOIN results r ON r.id=l.result_id WHERE l.target_athlete_id=$1) observed LIMIT 10001) r \
-             UNION ALL SELECT 'athlete profiles',count(*)::bigint FROM (SELECT id FROM athlete_sources WHERE athlete_id=$1 LIMIT 10001) p"
-        ).bind(id).fetch_all(&mut *self.transaction).await?;
-        counts.into_iter().try_for_each(|(kind, count)| {
-            ensure!(
-                count <= EXPORT_MAX_OBSERVATIONS,
-                ExportLimitExceeded {
-                    kind: if kind == "athlete observations" {
-                        "athlete observations"
-                    } else {
-                        "athlete profiles"
-                    },
-                    id,
-                    actual: count,
-                    limit: EXPORT_MAX_OBSERVATIONS
-                }
-            );
-            Ok::<_, anyhow::Error>(())
-        })?;
         let components: Vec<(String, i64, i64)> =
             sqlx::query_as(include_str!("export_snapshot_components.sql"))
                 .bind(id)

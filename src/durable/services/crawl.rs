@@ -168,13 +168,14 @@ impl AthleticCrawl {
                             .terminal()?;
                     let selected =
                         effects::record!(ctx, &format!("select-page-{index:06}"), || {
-                            page::select_scheduled(
+                            page::select_scheduled_with_extension(
                                 &self.runtime.database,
                                 &request.config,
                                 scope,
                                 now,
                                 &[],
                                 scheduling,
+                                request.deadline_extension.as_ref(),
                             )
                         })?;
                     let Some(page) = selected else {

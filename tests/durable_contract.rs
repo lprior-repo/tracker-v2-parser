@@ -8,6 +8,7 @@ fn request() -> Result<CrawlRequest> {
     Ok(CrawlRequest {
         inherited_retry_campaigns: Vec::new(),
         scheduler_version: None,
+        deadline_extension: None,
         generation: "wisconsin-recovery".into(),
         config: Config::parse(
             "states=['WI']\n[acquisition]\nmode='public_results'\ncollect_contacts=true\nprofile_coverage_only=true\n[sources.athleticnet]\nenabled=false",
