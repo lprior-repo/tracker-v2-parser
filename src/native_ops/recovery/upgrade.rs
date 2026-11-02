@@ -83,7 +83,7 @@ async fn exercise(
         let previous = runtime.register_named("previous-registration.json").await?;
         let handoff = handoff::prove(&mut runtime, identity, &previous).await?;
         let rolling = rolling::prove(&mut runtime, identity).await?;
-        let deadline_extension = extension::prove(&mut runtime, identity).await?;
+        let deadline_extension = extension::prove(&runtime, identity).await?;
         Ok::<_, anyhow::Error>(
             json!({"requested":true,"handoff":handoff,"rolling_restart":rolling,"deadline_extension_restart":deadline_extension}),
         )
