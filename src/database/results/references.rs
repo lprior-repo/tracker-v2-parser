@@ -17,6 +17,22 @@ pub(super) struct References {
 }
 
 impl References {
+    pub(super) fn has_profile(&self, id: &str) -> bool {
+        self.profiles.contains_key(id)
+    }
+
+    pub(super) fn has_school(&self, id: Option<&str>) -> bool {
+        id.is_none_or(|id| self.schools.contains_key(id))
+    }
+
+    pub(super) fn cached_profile(&self, id: &str) -> Option<i64> {
+        self.profiles.get(id).copied()
+    }
+
+    pub(super) fn cached_school(&self, id: &str) -> Option<i64> {
+        self.schools.get(id).copied()
+    }
+
     #[tracing::instrument(skip_all)]
     pub(super) async fn load(
         connection: &mut PgConnection,

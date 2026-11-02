@@ -9,6 +9,7 @@ use crate::{
 
 use super::keys;
 
+mod batch;
 mod legacy_history;
 mod raw_revisions;
 mod references;
@@ -68,17 +69,44 @@ async fn save_chunk(
         validate_wind(source, first)?;
     }
     let references = references::References::load(connection, source, rows).await?;
+    match batch::try_save(connection, source, rows, url, offset, &references).await? {
+        batch::BatchOutcome::Saved => return Ok(()),
+        batch::BatchOutcome::Fallback => {}
+    }
+    save_chunk_serial(connection, source, rows, url, offset, &references).await
+}
+
+async fn save_chunk_serial(
+    connection: &mut PgConnection,
+    source: Source,
+    rows: &[Performance],
+    url: &str,
+    offset: usize,
+    references: &references::References,
+) -> Result<()> {
     stream::iter(rows.iter().enumerate().map(Ok::<_, anyhow::Error>))
-        .try_fold(connection, |connection, (index, row)| {
-            let references = &references;
-            async move {
-                let index = offset.checked_add(index).context("result index overflow")?;
-                save(connection, source, row, (url, index), references).await?;
-                Ok(connection)
-            }
+        .try_fold(connection, |connection, (index, row)| async move {
+            let index = offset.checked_add(index).context("result index overflow")?;
+            save(connection, source, row, (url, index), references).await?;
+            Ok(connection)
         })
         .await
         .map(|_| ())
+}
+
+#[cfg(test)]
+pub(super) async fn save_chunk_serial_for_test(
+    connection: &mut PgConnection,
+    source: Source,
+    rows: &[Performance],
+    url: &str,
+    offset: usize,
+) -> Result<()> {
+    if let Some(first) = rows.first() {
+        validate_wind(source, first)?;
+    }
+    let references = references::References::load(connection, source, rows).await?;
+    save_chunk_serial(connection, source, rows, url, offset, &references).await
 }
 
 fn validate_wind(source: Source, performance: &Performance) -> Result<()> {

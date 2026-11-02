@@ -448,6 +448,15 @@ Checkpoints remain available when the bounded run ends. Nonblocked page failures
 remain recorded while untouched pages continue; automatic attempts and saved
 access stops are preserved across restarts and new runs.
 
+Assigned result writes use one parameterized upsert for eligible chunks of 8–128
+rows, within a 1 MiB encoded bind budget. Reference lookups remain bounded to the
+same chunk. Sparse marks/events, repeated result keys, unresolved references,
+school-evidence replay and oversized chunks retain ordered single-row handling.
+The batch uses the existing conflict-update rules and checks returned source keys
+against every input; a cross-athlete conflict rolls back the enclosing page
+transaction. Canonical athlete ownership is still resolved from its current
+provider profile in PostgreSQL. No acquisition, retry or durability limit changes.
+
 Athletic.net results without a published result ID use its row code where
 available (including the meet API's `ShortCode`). Without a code, the key
 includes the original source-array coordinates and a digest of the entire
