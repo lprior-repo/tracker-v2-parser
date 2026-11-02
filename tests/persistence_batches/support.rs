@@ -32,9 +32,18 @@ impl Visit for Query {
     }
 }
 
-impl<S: Subscriber> Layer<S> for Queries {
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-        if event.metadata().target() == "sqlx::query" {
+impl<S> Layer<S> for Queries
+where
+    S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, context: Context<'_, S>) {
+        if event.metadata().target() == "sqlx::query"
+            && context.event_scope(event).is_some_and(|scope| {
+                scope
+                    .from_root()
+                    .any(|span| span.metadata().name() == "persistence_query_observation")
+            })
+        {
             let mut query = Query(String::new());
             event.record(&mut query);
             self.0

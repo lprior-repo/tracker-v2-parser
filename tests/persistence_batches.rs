@@ -5,7 +5,7 @@ mod records;
 mod support;
 
 use anyhow::Result;
-use tracing::instrument::WithSubscriber;
+use tracing::Instrument;
 use tracing_subscriber::prelude::*;
 use track_scrapper_v2::{
     database::Database,
@@ -15,16 +15,22 @@ use track_scrapper_v2::{
 #[tokio::test]
 async fn given_many_results_when_persisted_then_exact_references_are_loaded_in_bounded_queries_and_replay_keeps_ids()
 -> Result<()> {
+    let queries = batching::Queries::default();
+    let subscriber = tracing_subscriber::registry().with(queries.clone());
+    tracing::subscriber::set_global_default(subscriber)?;
     support::with_schema(|test| {
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             let target = records::target(Source::MileSplit, "11");
             batching::profiles(&database, &target).await?;
             let page = batching::results(257);
-            let queries = batching::Queries::default();
-            records::persist(&database, &target, &page)
-                .with_subscriber(tracing_subscriber::registry().with(queries.clone()))
-                .await?;
+            let measured = records::persist(&database, &target, &page)
+                .instrument(tracing::info_span!("persistence_query_observation"));
+            let unrelated = sqlx::query("SELECT source_id,id FROM athlete_sources WHERE false")
+                .execute(&test.pool);
+            let (persisted, unrelated_result) = tokio::join!(measured, unrelated);
+            persisted?;
+            unrelated_result?;
             assert_eq!(queries.count("SELECT source_id,id FROM athlete_sources"), 3);
             assert_eq!(queries.count("SELECT source_id,id FROM schools"), 3);
             assert_eq!(queries.count("SELECT id FROM athlete_sources"), 0);

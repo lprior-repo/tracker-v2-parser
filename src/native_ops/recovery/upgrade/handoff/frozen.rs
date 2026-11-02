@@ -11,6 +11,8 @@ use super::{
 };
 use crate::durable::model::{CrawlPhase, CrawlRequest};
 
+mod barrier;
+
 pub(super) struct FrozenRoot {
     pub id: String,
     pub prefix: Vec<Value>,
@@ -116,14 +118,7 @@ async fn observe_partial(runtime: &Runtime, id: &str, previous: &Value) -> Resul
     let partial = evidence::wait(
         runtime,
         &format!("SELECT index,entry_json FROM sys_journal WHERE id='{id}' ORDER BY index"),
-        |rows| {
-            rows.iter().any(|row| {
-                evidence::decode(row).is_ok_and(|entry| {
-                    entry.pointer("/Command/Run/name").and_then(Value::as_str)
-                        == Some("select-page-000000")
-                })
-            })
-        },
+        |rows| barrier::pending(rows).is_ok_and(std::convert::identity),
     )
     .await?;
     ensure!(
