@@ -59,8 +59,11 @@ pub(super) async fn prepare(runtime: &Runtime, identity: &str) -> Result<Seeded>
     .await?;
     wait_until_after(previous_deadline_ms).await?;
     request.deadline_extension = Some(DeadlineExtensionAuthorization {
-        previous_deadline_ms,
+        previous_deadline_ms: previous_deadline_ms
+            .checked_add(500)
+            .context("intermediate deadline overflow")?,
         effective_deadline_ms: request.deadline_ms,
+        earlier_deadlines_ms: vec![previous_deadline_ms],
     });
     request.validate(chrono::Utc::now().timestamp_millis())?;
     Ok(Seeded {

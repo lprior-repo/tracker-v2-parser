@@ -15,13 +15,13 @@ use crate::{
     model::{PageContext, PageKind, Source, Target},
 };
 
-fn config() -> Result<Config> {
+pub(super) fn config() -> Result<Config> {
     Config::parse(
         "states=['WI']\n[acquisition]\nmode='public_results'\ncollect_contacts=true\n[sources.athleticnet]\nenabled=false",
     )
 }
 
-fn target() -> Target {
+pub(super) fn target() -> Target {
     Target::get(
         Source::MileSplit,
         PageKind::Team,
@@ -34,7 +34,7 @@ fn target() -> Target {
     )
 }
 
-fn scope(config: &Config, deadline_ms: i64) -> Result<PageScope> {
+pub(super) fn scope(config: &Config, deadline_ms: i64) -> Result<PageScope> {
     Ok(PageScope {
         run_generation: "authorized-deadline-extension-schools".into(),
         config_sha256: page_config_digest(config)?,
@@ -44,7 +44,7 @@ fn scope(config: &Config, deadline_ms: i64) -> Result<PageScope> {
     })
 }
 
-async fn snapshot(database: &Database) -> Result<serde_json::Value> {
+pub(super) async fn snapshot(database: &Database) -> Result<serde_json::Value> {
     Ok(sqlx::query_scalar("SELECT jsonb_build_object('pages',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM scrape_pages p),'operations',(SELECT jsonb_agg(to_jsonb(d) ORDER BY operation_id) FROM durable_page_operations d),'attempts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attempt_id) FROM durable_page_attempts a))")
         .fetch_one(database.pool())
         .await?)
@@ -99,6 +99,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
             let authorization = DeadlineExtensionAuthorization {
                 previous_deadline_ms: original_deadline,
                 effective_deadline_ms: extended_scope.deadline_ms,
+                earlier_deadlines_ms: Vec::new(),
             };
             let resume_at = original_deadline + 1;
 
@@ -141,6 +142,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
             let wrong = DeadlineExtensionAuthorization {
                 previous_deadline_ms: original_deadline - 1,
                 effective_deadline_ms: extended_scope.deadline_ms,
+                earlier_deadlines_ms: Vec::new(),
             };
             let before_wrong_authority = snapshot(&database).await?;
             let error = select_scheduled_with_extension(
@@ -303,6 +305,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let authorization = DeadlineExtensionAuthorization {
                 previous_deadline_ms: old_deadline,
                 effective_deadline_ms: changed.deadline_ms,
+                earlier_deadlines_ms: Vec::new(),
             };
             let error = database
                 .durable_request_with_deadline_extension(
@@ -331,6 +334,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
                     &DeadlineExtensionAuthorization {
                         previous_deadline_ms: old_deadline,
                         effective_deadline_ms: wrong_cooldown.deadline_ms,
+                        earlier_deadlines_ms: Vec::new(),
                     },
                 )
                 .await
@@ -351,6 +355,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
                     &DeadlineExtensionAuthorization {
                         previous_deadline_ms: old_deadline,
                         effective_deadline_ms: wrong_lineage.deadline_ms,
+                        earlier_deadlines_ms: Vec::new(),
                     },
                 )
                 .await
@@ -362,6 +367,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let downgrade = DeadlineExtensionAuthorization {
                 previous_deadline_ms: old_deadline,
                 effective_deadline_ms: old_deadline,
+                earlier_deadlines_ms: Vec::new(),
             };
             let error = database
                 .durable_request_with_deadline_extension(
@@ -428,6 +434,7 @@ async fn extension_replays_only_its_exact_unfinished_owner() -> Result<()> {
                     &DeadlineExtensionAuthorization {
                         previous_deadline_ms: old_scope.deadline_ms,
                         effective_deadline_ms: extended_scope.deadline_ms,
+                        earlier_deadlines_ms: Vec::new(),
                     },
                 )
                 .await?;

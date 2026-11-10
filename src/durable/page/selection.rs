@@ -160,6 +160,8 @@ mod batch_tests;
 #[cfg(test)]
 mod deadline_extension_tests;
 #[cfg(test)]
+mod deadline_history_tests;
+#[cfg(test)]
 mod exclusion_scan_tests;
 #[cfg(test)]
 mod reviewed_legacy_tests;

@@ -22,6 +22,8 @@ impl Database {
         scope: &PageScope,
         authorization: &DeadlineExtensionAuthorization,
     ) -> Result<PageRequest> {
+        let authority =
+            crate::durable::deadline_authority::DeadlineAuthority::parse(authorization)?;
         ensure!(
             authorization.effective_deadline_ms == scope.deadline_ms,
             "deadline extension authorization does not match selected scope"
@@ -66,15 +68,16 @@ impl Database {
             return Ok(request);
         }
         ensure!(
-            old_scope.deadline_ms == authorization.previous_deadline_ms,
+            authority.permits(old_scope.deadline_ms),
             "retained operation is not compatible with the explicitly authorized deadline extension"
         );
+        let owner_deadline_ms = old_scope.deadline_ms;
         let request = PageRequest {
             binding,
             target: job.target,
             deadline_extension: Some(PageDeadlineExtension {
                 owner_operation_id: operation_id,
-                previous_deadline_ms: authorization.previous_deadline_ms,
+                previous_deadline_ms: owner_deadline_ms,
                 effective_deadline_ms: authorization.effective_deadline_ms,
             }),
         };

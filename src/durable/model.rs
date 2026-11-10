@@ -29,6 +29,8 @@ pub struct CrawlRequest {
 pub struct DeadlineExtensionAuthorization {
     pub previous_deadline_ms: i64,
     pub effective_deadline_ms: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier_deadlines_ms: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +118,7 @@ impl CrawlRequest {
             "crawl deadline must be within 24 hours"
         );
         if let Some(extension) = &self.deadline_extension {
+            super::deadline_authority::DeadlineAuthority::parse(extension)?;
             ensure!(
                 extension.previous_deadline_ms > 0
                     && extension.previous_deadline_ms < self.deadline_ms

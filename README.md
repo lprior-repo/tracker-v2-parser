@@ -444,6 +444,14 @@ inputs and journals stay unchanged. Ordinary changed-deadline requests fail clos
 on an existing same-generation owner; the extension field does not grant a new
 deadline or reset attempts automatically.
 
+Repeated authorized extensions can include `earlier_deadlines_ms`: at most 128
+positive, unique deadlines in ascending order, all before `previous_deadline_ms`.
+Retained owners must match an explicitly listed deadline or the immediate
+previous deadline, with unchanged generation, target, configuration, cooldown and
+retry ancestry. Each resumed page retains its original operation binding and
+names that binding's exact original deadline. Omitting the list preserves the
+legacy single-extension contract and serialization.
+
 Checkpoints remain available when the bounded run ends. Nonblocked page failures
 remain recorded while untouched pages continue; automatic attempts and saved
 access stops are preserved across restarts and new runs.
