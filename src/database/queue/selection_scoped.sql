@@ -8,8 +8,9 @@ WITH public_candidates AS MATERIALIZED (
  AND (NOT $9::boolean OR early.source<>'milesplit'
    OR early.cursor->>'kind' IS DISTINCT FROM 'athlete'
    OR early.cursor->'context'->>'athlete_id' IS NULL
-   OR early.cursor->'context'->>'athlete_id' NOT IN
-      (SELECT registered.source_id FROM athlete_sources registered WHERE registered.source='milesplit'))
+   OR NOT EXISTS
+      (SELECT 1 FROM athlete_sources registered WHERE registered.source='milesplit'
+       AND registered.source_id=early.cursor->'context'->>'athlete_id'))
 ), completed_parents AS MATERIALIZED (
     SELECT DISTINCT source,cursor->>'kind' kind,cursor->'context'->>'school_id' school_id
     FROM scrape_pages

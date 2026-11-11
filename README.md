@@ -444,6 +444,11 @@ inputs and journals stay unchanged. Ordinary changed-deadline requests fail clos
 on an existing same-generation owner; the extension field does not grant a new
 deadline or reset attempts automatically.
 
+Public-discovery selection checks registered athlete identity with an indexed
+existence probe instead of materializing the full registered-ID set for every
+candidate. Candidate eligibility, ordering, ownership exclusions and retry
+policy remain unchanged.
+
 Repeated authorized extensions can include `earlier_deadlines_ms`: at most 128
 positive, unique deadlines in ascending order, all before `previous_deadline_ms`.
 Retained owners must match an explicitly listed deadline or the immediate
