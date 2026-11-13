@@ -25,7 +25,9 @@ pub(crate) use retry::{RetryPolicy, fetch_configured};
 #[cfg(test)]
 pub(crate) use selection::select_scheduled;
 pub use selection::select_scheduled_with_extension;
-pub(crate) use selection::{Scheduling, reserve_configured};
+pub(crate) use selection::{
+    Scheduling, SelectionStep, reserve_configured, select_step_with_extension,
+};
 pub use selection::{reserve, select, select_excluding};
 
 pub(crate) fn body_digest(bytes: &[u8]) -> String {

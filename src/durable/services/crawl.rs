@@ -5,7 +5,10 @@ mod preparation;
 use futures::{TryStreamExt, stream};
 use restate_sdk::prelude::*;
 
-use super::{AthleticCrawl, AthleticOperationsClient, AthleticPageClient, PageExecution};
+use super::{
+    AthleticCrawl, AthleticOperationsClient, AthleticPageClient, PageExecution,
+    pipeline::SelectionStop,
+};
 use crate::durable::{
     effects,
     model::{self, BatchProgress, CrawlPhase, CrawlReport, CrawlRequest, QueueState},
@@ -155,48 +158,71 @@ impl AthleticCrawl {
             };
         }
         let scope = request.page_scope().terminal()?;
-        stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
-            .try_fold(BatchProgress::default(), |mut progress, index| {
-                let scope = &scope;
-                async move {
-                    if progress.queue == QueueState::NoEligiblePage {
-                        return Ok(progress);
-                    }
-                    let now = effects::now!(ctx)?;
-                    let scheduling =
-                        page::Scheduling::for_batch_turn(&request.config, request.batch, index)
-                            .terminal()?;
-                    let selected =
-                        effects::record!(ctx, &format!("select-page-{index:06}"), || {
-                            page::select_scheduled_with_extension(
-                                &self.runtime.database,
+        let (progress, _) =
+            stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
+                .try_fold(
+                    (BatchProgress::default(), SelectionStop::Open),
+                    |(mut progress, stopped), index| {
+                        let scope = &scope;
+                        async move {
+                            if stopped != SelectionStop::Open {
+                                return Ok((progress, stopped));
+                            }
+                            let now = effects::now!(ctx)?;
+                            let scheduling = page::Scheduling::for_batch_turn(
                                 &request.config,
-                                scope,
-                                now,
-                                &[],
-                                scheduling,
-                                request.deadline_extension.as_ref(),
+                                request.batch,
+                                index,
                             )
-                        })?;
-                    let Some(page) = selected else {
-                        progress.queue = QueueState::NoEligiblePage;
-                        return Ok(progress);
-                    };
-                    let id = page.binding.page_id;
-                    let Json(outcome) = ctx
-                        .service_client::<AthleticPageClient>()
-                        .handle(Json(PageExecution {
-                            request: page,
-                            config: request.config.clone(),
-                            scheduler_version: request.scheduler_version,
-                        }))
-                        .idempotency_key(format!("{}-page-{index:06}", request.workflow_key()))
-                        .call()
-                        .await?;
-                    progress.record(id, &outcome).map_err(HandlerError::from)
-                }
-            })
-            .await
+                            .terminal()?;
+                            let selected =
+                                effects::record!(ctx, &format!("select-page-{index:06}"), || {
+                                    page::select_step_with_extension(
+                                        &self.runtime.database,
+                                        &request.config,
+                                        scope,
+                                        now,
+                                        &[],
+                                        scheduling,
+                                        request.deadline_extension.as_ref(),
+                                    )
+                                })?;
+                            let page = match selected {
+                                page::SelectionStep::Page(page) => *page,
+                                page::SelectionStep::Empty => {
+                                    progress.queue = QueueState::NoEligiblePage;
+                                    return Ok((progress, SelectionStop::Empty));
+                                }
+                                page::SelectionStep::PolicyAdvanced => {
+                                    return Ok((progress, SelectionStop::Open));
+                                }
+                                page::SelectionStep::DeadlineReached => {
+                                    return Ok((progress, SelectionStop::DeadlineReached));
+                                }
+                            };
+                            let id = page.binding.page_id;
+                            let Json(outcome) = ctx
+                                .service_client::<AthleticPageClient>()
+                                .handle(Json(PageExecution {
+                                    request: page,
+                                    config: request.config.clone(),
+                                    scheduler_version: request.scheduler_version,
+                                }))
+                                .idempotency_key(format!(
+                                    "{}-page-{index:06}",
+                                    request.workflow_key()
+                                ))
+                                .call()
+                                .await?;
+                            progress
+                                .record(id, &outcome)
+                                .map(|progress| (progress, SelectionStop::Open))
+                                .map_err(HandlerError::from)
+                        }
+                    },
+                )
+                .await?;
+        Ok(progress)
     }
 }
 

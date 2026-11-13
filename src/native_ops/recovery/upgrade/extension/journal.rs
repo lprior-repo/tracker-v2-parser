@@ -28,34 +28,7 @@ pub(super) fn selected_run_output_contains(rows: &[Value], expected: &Value) -> 
                 == Some(completion_id)
         })
         .context("recorded page selection completion absent")?;
-    Ok(contains_json_value(completion, expected))
-}
-
-fn contains_json_value(haystack: &Value, expected: &Value) -> bool {
-    if haystack == expected {
-        return true;
-    }
-    match haystack {
-        Value::Object(fields) => fields
-            .values()
-            .any(|value| contains_json_value(value, expected)),
-        Value::Array(values) => {
-            let bytes = values
-                .iter()
-                .map(|value| value.as_u64().and_then(|number| u8::try_from(number).ok()))
-                .collect::<Option<Vec<_>>>();
-            let decoded = bytes
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .and_then(|value| serde_json::from_str::<Value>(&value).ok());
-            decoded
-                .as_ref()
-                .is_some_and(|value| contains_json_value(value, expected))
-                || values
-                    .iter()
-                    .any(|value| contains_json_value(value, expected))
-        }
-        _ => false,
-    }
+    Ok(evidence::contains_json_value(completion, expected))
 }
 
 pub(super) async fn wait_for_sleep(runtime: &Runtime, id: &str) -> Result<()> {

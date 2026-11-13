@@ -1,13 +1,15 @@
 mod slots;
 
-use anyhow::Context;
 use futures::{StreamExt, TryStreamExt, stream};
 use restate_sdk::{
     context::{DurableFuture, InvocationHandle},
     prelude::*,
 };
 
-use super::AthleticCrawl;
+use super::{
+    AthleticCrawl,
+    pipeline::{DispatchStep, SelectionStop, advance_turn},
+};
 use crate::durable::{
     model::{BatchProgress, CrawlRequest, QueueState},
     page::{PageOutcome, PageScope},
@@ -18,7 +20,8 @@ struct RollingWindow<F> {
     pending: DurableFuturesUnordered<F>,
     active: ActivePages,
     progress: BatchProgress,
-    dispatched: usize,
+    turns: usize,
+    stopped: SelectionStop,
     error: Option<HandlerError>,
 }
 
@@ -28,7 +31,8 @@ impl<F> Default for RollingWindow<F> {
             pending: DurableFuturesUnordered::new(),
             active: ActivePages::default(),
             progress: BatchProgress::default(),
-            dispatched: 0,
+            turns: 0,
+            stopped: SelectionStop::Open,
             error: None,
         }
     }
@@ -110,13 +114,16 @@ impl AthleticCrawl {
         A: Fn(InvocationHandle) -> F + Sync,
         F: Send,
     {
-        if window.error.is_some() || window.progress.queue == QueueState::NoEligiblePage {
+        if window.error.is_some()
+            || window.progress.queue == QueueState::NoEligiblePage
+            || window.stopped == SelectionStop::DeadlineReached
+        {
             return window;
         }
         let width = match slots::available(
             request.config.limits.concurrency,
             window.pending.len(),
-            window.dispatched,
+            window.turns,
             request.config.limits.max_pages,
         ) {
             Ok(width) => width,
@@ -132,19 +139,17 @@ impl AthleticCrawl {
                 }
                 let owned = window.active.ids();
                 match self
-                    .dispatch(ctx, request, scope, window.dispatched, 0, &owned)
+                    .dispatch(ctx, request, scope, window.turns, 0, &owned)
                     .await
                 {
-                    Ok(Some((page, handle))) => {
+                    Ok(DispatchStep::Page(page, handle)) => {
                         let index = window.pending.push(attach(handle));
                         let result = window
                             .active
                             .insert(index, page, request.config.limits.concurrency)
                             .and_then(|()| {
-                                window.dispatched = window
-                                    .dispatched
-                                    .checked_add(1)
-                                    .context("rolling dispatch counter overflow")?;
+                                window.turns =
+                                    advance_turn(window.turns, request.config.limits.max_pages)?;
                                 Ok(())
                             });
                         if let Err(error) = result {
@@ -152,10 +157,21 @@ impl AthleticCrawl {
                         }
                         (window, false)
                     }
-                    Ok(None) => {
+                    Ok(DispatchStep::PolicyAdvanced) => {
+                        match advance_turn(window.turns, request.config.limits.max_pages) {
+                            Ok(turns) => window.turns = turns,
+                            Err(error) => window.failed(error.into()),
+                        }
+                        (window, false)
+                    }
+                    Ok(DispatchStep::Empty) => {
                         if window.pending.is_empty() {
                             window.progress.queue = QueueState::NoEligiblePage;
                         }
+                        (window, true)
+                    }
+                    Ok(DispatchStep::DeadlineReached) => {
+                        window.stopped = SelectionStop::DeadlineReached;
                         (window, true)
                     }
                     Err(error) => {

@@ -147,3 +147,113 @@ async fn exact_exclusion_bound_requires_a_retry_before_genuine_queue_completion(
     })
     .await
 }
+
+#[tokio::test]
+async fn native_selection_checkpoints_policy_progress_before_selecting_or_finishing() -> Result<()>
+{
+    with_database(|pool| {
+        Box::pin(async move {
+            let database = Database::durable_test_database(pool.clone());
+            let (config, scope, public) = seeded(&database, 201, true).await?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let before = checkpoints(&database).await?;
+            for expected in [100, 200] {
+                let step = super::select_step_with_extension(
+                    &database,
+                    &config,
+                    &scope,
+                    now,
+                    &[],
+                    Scheduling::PublicBulkTurn,
+                    None,
+                )
+                .await?;
+                assert!(matches!(step, super::SelectionStep::PolicyAdvanced));
+                assert_excluded(&database, expected).await?;
+                assert_eq!(checkpoints(&database).await?, before);
+            }
+            let step = super::select_step_with_extension(
+                &database,
+                &config,
+                &scope,
+                now,
+                &[],
+                Scheduling::PublicBulkTurn,
+                None,
+            )
+            .await?;
+            assert!(
+                matches!(step, super::SelectionStep::Page(page) if page.target.url == public.url)
+            );
+            assert_excluded(&database, 201).await?;
+            assert_eq!(checkpoints(&database).await?, before);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn native_exact_policy_scan_bound_is_not_queue_completion() -> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let database = Database::durable_test_database(pool.clone());
+            let (config, scope, _) = seeded(&database, 100, false).await?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let before = checkpoints(&database).await?;
+            let progress = super::select_step_with_extension(
+                &database,
+                &config,
+                &scope,
+                now,
+                &[],
+                Scheduling::Resume,
+                None,
+            )
+            .await?;
+            assert!(matches!(progress, super::SelectionStep::PolicyAdvanced));
+            let empty = super::select_step_with_extension(
+                &database,
+                &config,
+                &scope,
+                now,
+                &[],
+                Scheduling::Resume,
+                None,
+            )
+            .await?;
+            assert!(matches!(empty, super::SelectionStep::Empty));
+            assert_excluded(&database, 100).await?;
+            assert_eq!(checkpoints(&database).await?, before);
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn expired_native_selection_stops_without_claiming_exhaustion_or_changing_checkpoints()
+-> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let database = Database::durable_test_database(pool.clone());
+            let (config, scope, _) = seeded(&database, 101, true).await?;
+            let before = checkpoints(&database).await?;
+            let step = super::select_step_with_extension(
+                &database,
+                &config,
+                &scope,
+                scope.deadline_ms,
+                &[],
+                Scheduling::Resume,
+                None,
+            )
+            .await?;
+            assert!(matches!(step, super::SelectionStep::DeadlineReached));
+            assert_excluded(&database, 0).await?;
+            assert_eq!(checkpoints(&database).await?, before);
+            Ok(())
+        })
+    })
+    .await
+}

@@ -6,14 +6,18 @@ use super::{AthleticCrawl, AthleticPageClient, PageExecution};
 use crate::durable::{
     effects,
     model::{BatchProgress, CrawlRequest, QueueState},
-    page::{self, PageOutcome, PageScope},
+    page::{self, PageOutcome, PageScope, SelectionStep},
 };
+
+mod step;
+pub(super) use step::{DispatchStep, SelectionStop, advance_turn};
 
 #[derive(Default)]
 struct Window {
     owned: Vec<(i64, InvocationHandle)>,
-    stopped: bool,
+    stopped: SelectionStop,
     error: Option<HandlerError>,
+    turns: usize,
 }
 
 impl AthleticCrawl {
@@ -24,23 +28,35 @@ impl AthleticCrawl {
         request: &CrawlRequest,
     ) -> HandlerResult<BatchProgress> {
         let scope = request.page_scope().terminal()?;
-        stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
-            .try_fold(BatchProgress::default(), |progress, _| {
-                let scope = &scope;
-                async move {
-                    let selected = usize::try_from(progress.selected).terminal()?;
-                    if progress.queue == QueueState::NoEligiblePage
-                        || selected >= request.config.limits.max_pages
-                    {
-                        return Ok(progress);
-                    }
-                    let remaining = request.config.limits.max_pages.saturating_sub(selected);
-                    let width = remaining.min(request.config.limits.concurrency);
-                    let window = self.fill(ctx, request, scope, selected, width).await;
-                    Self::drain(progress, window).await
-                }
-            })
-            .await
+        let (progress, _, _) =
+            stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
+                .try_fold(
+                    (BatchProgress::default(), 0_usize, SelectionStop::Open),
+                    |(progress, turns, stopped), _| {
+                        let scope = &scope;
+                        async move {
+                            if progress.queue == QueueState::NoEligiblePage
+                                || turns >= request.config.limits.max_pages
+                                || stopped == SelectionStop::DeadlineReached
+                            {
+                                return Ok((progress, turns, stopped));
+                            }
+                            let remaining = request.config.limits.max_pages.saturating_sub(turns);
+                            let width = remaining.min(request.config.limits.concurrency);
+                            let window = self.fill(ctx, request, scope, turns, width).await;
+                            let used = window.turns;
+                            let stopped = window.stopped;
+                            let progress = Self::drain(progress, window).await?;
+                            let turns = turns
+                                .checked_add(used)
+                                .context("pipeline turn counter overflow")
+                                .terminal()?;
+                            Ok((progress, turns, stopped))
+                        }
+                    },
+                )
+                .await?;
+        Ok(progress)
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -54,7 +70,7 @@ impl AthleticCrawl {
     ) -> Window {
         stream::iter(0..width)
             .fold(Window::default(), |mut window, slot| async move {
-                if window.stopped {
+                if window.stopped != SelectionStop::Open || window.error.is_some() {
                     return window;
                 }
                 let owned: Vec<_> = window.owned.iter().map(|(id, _)| *id).collect();
@@ -62,11 +78,17 @@ impl AthleticCrawl {
                     .dispatch(ctx, request, scope, offset, slot, &owned)
                     .await
                 {
-                    Ok(Some(owned)) => window.owned.push(owned),
-                    Ok(None) => window.stopped = true,
+                    Ok(DispatchStep::Page(id, handle)) => {
+                        window.owned.push((id, handle));
+                        window.record_turn(width);
+                    }
+                    Ok(DispatchStep::PolicyAdvanced) => window.record_turn(width),
+                    Ok(DispatchStep::Empty) => window.stopped = SelectionStop::Empty,
+                    Ok(DispatchStep::DeadlineReached) => {
+                        window.stopped = SelectionStop::DeadlineReached;
+                    }
                     Err(error) => {
                         window.error = Some(error);
-                        window.stopped = true;
                     }
                 }
                 window
@@ -83,7 +105,7 @@ impl AthleticCrawl {
         offset: usize,
         slot: usize,
         owned: &[i64],
-    ) -> HandlerResult<Option<(i64, InvocationHandle)>> {
+    ) -> HandlerResult<DispatchStep> {
         let index = offset
             .checked_add(slot)
             .context("pipeline index overflow")
@@ -92,7 +114,7 @@ impl AthleticCrawl {
         let scheduling =
             page::Scheduling::for_batch_turn(&request.config, request.batch, index).terminal()?;
         let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || async {
-            let selected = page::select_scheduled_with_extension(
+            let selected = page::select_step_with_extension(
                 &self.runtime.database,
                 &request.config,
                 scope,
@@ -102,12 +124,21 @@ impl AthleticCrawl {
                 request.deadline_extension.as_ref(),
             )
             .await?;
-            Ok(selected.filter(|page| {
-                request.scheduler_version.is_none() || !owned.contains(&page.binding.page_id)
-            }))
+            Ok(match selected {
+                SelectionStep::Page(page)
+                    if request.scheduler_version.is_some()
+                        && owned.contains(&page.binding.page_id) =>
+                {
+                    SelectionStep::Empty
+                }
+                selected => selected,
+            })
         })?;
-        let Some(page) = selected else {
-            return Ok(None);
+        let page = match selected {
+            SelectionStep::Page(page) => *page,
+            SelectionStep::Empty => return Ok(DispatchStep::Empty),
+            SelectionStep::PolicyAdvanced => return Ok(DispatchStep::PolicyAdvanced),
+            SelectionStep::DeadlineReached => return Ok(DispatchStep::DeadlineReached),
         };
         effects::record!(ctx, &format!("reserve-page-{index:06}"), || {
             page::reserve_configured(&self.runtime.database, &request.config, &page, now)
@@ -123,12 +154,15 @@ impl AthleticCrawl {
             .idempotency_key(format!("{}-page-{index:06}", request.workflow_key()))
             .send()
             .await?;
-        Ok(Some((id, handle)))
+        Ok(DispatchStep::Page(id, handle))
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn drain(mut progress: BatchProgress, window: Window) -> HandlerResult<BatchProgress> {
-        if window.owned.is_empty() && window.error.is_none() {
+        if window.stopped == SelectionStop::Empty
+            && window.owned.is_empty()
+            && window.error.is_none()
+        {
             progress.queue = QueueState::NoEligiblePage;
         }
         let (progress, error) = stream::iter(window.owned)
@@ -149,5 +183,52 @@ impl AthleticCrawl {
             )
             .await;
         error.map_or_else(|| Ok(progress), Err)
+    }
+}
+
+impl Window {
+    fn record_turn(&mut self, maximum: usize) {
+        match advance_turn(self.turns, maximum) {
+            Ok(turns) => self.turns = turns,
+            Err(error) => {
+                self.error = Some(error.into());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AthleticCrawl, BatchProgress, QueueState, SelectionStop, Window};
+
+    #[tokio::test]
+    async fn policy_only_window_preserves_processing_until_empty_is_observed()
+    -> restate_sdk::prelude::HandlerResult<()> {
+        let mut window = Window::default();
+        window.record_turn(3);
+        assert_eq!(window.turns, 1);
+        let progress = AthleticCrawl::drain(BatchProgress::default(), window).await?;
+        assert_eq!(progress.queue, QueueState::Processing);
+        assert_eq!(progress.selected, 0);
+        let empty = Window {
+            stopped: SelectionStop::Empty,
+            ..Window::default()
+        };
+        let progress = AthleticCrawl::drain(progress, empty).await?;
+        assert_eq!(progress.queue, QueueState::NoEligiblePage);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deadline_stop_never_establishes_queue_exhaustion()
+    -> restate_sdk::prelude::HandlerResult<()> {
+        let stopped = Window {
+            stopped: SelectionStop::DeadlineReached,
+            ..Window::default()
+        };
+        let progress = AthleticCrawl::drain(BatchProgress::default(), stopped).await?;
+        assert_eq!(progress.queue, QueueState::Processing);
+        assert_eq!(progress.selected, 0);
+        Ok(())
     }
 }

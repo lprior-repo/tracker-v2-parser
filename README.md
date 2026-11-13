@@ -447,8 +447,16 @@ as incomplete. Caller credentials remain origin-bound. Page requests, bodies,
 queued work, concurrency and cleanup have finite limits. Challenges are not
 bypassed, and failed/cancelled acquisition does not establish complete coverage.
 
-`limits.max_pages` bounds each durable batch. The workflow exports its verified
-snapshot and schedules a continuation while its deadline and batch count permit.
+`limits.max_pages` bounds selection turns and acquired pages in each durable
+batch. A turn that commits 100 source-policy exclusions checkpoints successful
+progress and consumes one turn without acquiring a page. It continues at the
+next selection turn instead of entering transient-error backoff. Only an actual
+empty selection establishes queue exhaustion; reaching the turn budget preserves
+processing and schedules the ordinary same-generation continuation. Existing
+successful page/null journal payloads replay unchanged. Deadline stops drain
+admitted children and retain processing rather than claiming an empty queue.
+The workflow exports its verified snapshot and schedules a continuation while
+its original deadline and batch count permit.
 
 An explicitly authorized deadline extension uses a separately persisted crawl
 request with `deadline_extension.previous_deadline_ms` and

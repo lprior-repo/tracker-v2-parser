@@ -6,6 +6,9 @@ use futures::{TryStreamExt, stream};
 use super::{PageRequest, PageScope, ReservationDecision};
 use crate::{config::Config, database::Database, durable::model::DeadlineExtensionAuthorization};
 
+mod step;
+pub use step::SelectionStep;
+
 #[derive(Clone, Copy)]
 pub enum Scheduling {
     Resume,
@@ -81,6 +84,36 @@ pub async fn select_scheduled_with_extension(
     scheduling: Scheduling,
     deadline_extension: Option<&DeadlineExtensionAuthorization>,
 ) -> Result<Option<PageRequest>> {
+    match select_step_with_extension(
+        database,
+        config,
+        scope,
+        now_ms,
+        owned,
+        scheduling,
+        deadline_extension,
+    )
+    .await?
+    {
+        SelectionStep::Page(page) => Ok(Some(*page)),
+        SelectionStep::Empty | SelectionStep::DeadlineReached => Ok(None),
+        SelectionStep::PolicyAdvanced => Err(anyhow::Error::from(crate::durable::AcquisitionBusy))
+            .context(
+                "bounded policy exclusion scan reached 100 candidates; committed progress retained",
+            ),
+    }
+}
+
+#[tracing::instrument(level = "debug", skip_all)]
+pub async fn select_step_with_extension(
+    database: &Database,
+    config: &Config,
+    scope: &PageScope,
+    now_ms: i64,
+    owned: &[i64],
+    scheduling: Scheduling,
+    deadline_extension: Option<&DeadlineExtensionAuthorization>,
+) -> Result<SelectionStep> {
     ensure!(
         owned.len() <= 3 && owned.iter().all(|id| *id > 0),
         "invalid pipeline ownership window"
@@ -91,7 +124,7 @@ pub async fn select_scheduled_with_extension(
         "durable configuration binding mismatch"
     );
     if now_ms >= scope.deadline_ms {
-        return Ok(None);
+        return Ok(SelectionStep::DeadlineReached);
     }
     super::binding::deadline(scope, now_ms)?;
     crate::runner::durable::check_stops(database, config).await?;
@@ -115,11 +148,9 @@ pub async fn select_scheduled_with_extension(
         })
         .await?;
     match progress {
-        ControlFlow::Break(selected) => Ok(selected),
-        ControlFlow::Continue(()) => Err(anyhow::Error::from(crate::durable::AcquisitionBusy))
-            .context(
-                "bounded policy exclusion scan reached 100 candidates; committed progress retained",
-            ),
+        ControlFlow::Break(Some(page)) => Ok(SelectionStep::Page(Box::new(page))),
+        ControlFlow::Break(None) => Ok(SelectionStep::Empty),
+        ControlFlow::Continue(()) => Ok(SelectionStep::PolicyAdvanced),
     }
 }
 

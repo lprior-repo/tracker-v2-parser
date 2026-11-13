@@ -1,6 +1,7 @@
 mod evidence;
 mod extension;
 mod handoff;
+mod policy_progress;
 mod rolling;
 
 use std::{fs, os::unix::fs::DirBuilderExt};
@@ -84,8 +85,9 @@ async fn exercise(
         let handoff = handoff::prove(&mut runtime, identity, &previous).await?;
         let rolling = rolling::prove(&mut runtime, identity).await?;
         let deadline_extension = extension::prove(&runtime, identity).await?;
+        let policy_progress = policy_progress::prove(&runtime, identity).await?;
         Ok::<_, anyhow::Error>(
-            json!({"requested":true,"handoff":handoff,"rolling_restart":rolling,"deadline_extension_restart":deadline_extension}),
+            json!({"requested":true,"handoff":handoff,"rolling_restart":rolling,"deadline_extension_restart":deadline_extension,"policy_scan_progress":policy_progress}),
         )
     }
     .await;
