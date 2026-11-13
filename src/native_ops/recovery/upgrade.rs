@@ -1,6 +1,7 @@
 mod evidence;
 mod extension;
 mod handoff;
+mod local_stop;
 mod policy_progress;
 mod rolling;
 
@@ -86,8 +87,9 @@ async fn exercise(
         let rolling = rolling::prove(&mut runtime, identity).await?;
         let deadline_extension = extension::prove(&runtime, identity).await?;
         let policy_progress = policy_progress::prove(&runtime, identity).await?;
+        let local_stop_recovery = local_stop::prove(&mut runtime, identity).await?;
         Ok::<_, anyhow::Error>(
-            json!({"requested":true,"handoff":handoff,"rolling_restart":rolling,"deadline_extension_restart":deadline_extension,"policy_scan_progress":policy_progress}),
+            json!({"requested":true,"handoff":handoff,"rolling_restart":rolling,"deadline_extension_restart":deadline_extension,"policy_scan_progress":policy_progress,"local_stop_reserved_recovery":local_stop_recovery}),
         )
     }
     .await;

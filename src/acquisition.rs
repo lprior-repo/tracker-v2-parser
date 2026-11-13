@@ -12,6 +12,7 @@ pub(crate) const EXCLUSION: &str = "public-results/v1";
 
 mod exclusion;
 mod legacy;
+pub(crate) mod local_stop;
 pub(crate) use exclusion::{PreservedStop, ScopeExclusion};
 pub(crate) use legacy::LegacyFailurePermit;
 pub use legacy::ReviewedLegacyFailure;
@@ -161,6 +162,9 @@ impl AcquisitionPolicy {
         }
         if target.source != Source::MileSplit {
             return None;
+        }
+        if local_stop::admin_route(&target.url) {
+            return Some("Public-results scope excludes provider team administration");
         }
         if crate::transport::robots::check(&target.url, &target.url).is_err()
             || target.token_url.as_deref().is_some_and(|address| {

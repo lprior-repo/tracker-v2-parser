@@ -279,6 +279,19 @@ peninsulas. Existing reviewed media exclusions must be retained when preparing
 another state configuration; a remaining source stop reports its checkpoint and
 URL before new acquisition.
 
+A narrowly evidenced team-admin redirect stop remains blocked without stopping
+unrelated public MileSplit profiles, rosters and result routes. Qualification
+requires exactly one retained 302 response, the exact local interception-stop
+error, one matching blocked operation/attempt and no captured response or
+recorded origin denial. Unknown evidence, access challenges and HTTP
+401/402/403/429/451 keep the origin stopped. Admin routes and their descendants
+are excluded before public-results acquisition. A derived local stop remains
+blocked in Review. Recovery of a failed native page handler must preserve its
+exact original input, operation binding and reserved attempt; repeating an old
+completed invocation only returns its retained failure. The native upgrade proof
+reproduces that failure with the previous worker, recovers the same reservation
+with a frozen recovery key and verifies the recovered athlete in an export.
+
 Public findings researched manually can be applied only through a Restate
 `reviewed_research` operation. The schema-1 manifest records the exact user
 authorization quote, `reviewed_by: "codex"`, `researcher: "gpt-6-luna"`, a UTC

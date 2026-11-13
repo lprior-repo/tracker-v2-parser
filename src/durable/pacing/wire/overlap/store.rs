@@ -86,7 +86,12 @@ async fn check_stops(
         .context("wire origin has no authority")?;
     let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM scrape_pages p CROSS JOIN LATERAL unnest(ARRAY[p.url,p.cursor->>'access_stop_url']) AS stop(url) WHERE p.status='blocked' AND p.cursor->>'kind'='contacts' AND regexp_replace(lower(substring(stop.url from '(?i)^https?://([^/?#]+)')),CASE WHEN lower(stop.url) LIKE 'https://%' THEN ':443$' ELSE ':80$' END,'')=$1)")
         .bind(authority.to_ascii_lowercase()).fetch_one(&mut **transaction).await?;
-    if blocked {
+    let scoped = blocked
+        && request.source == crate::model::Source::MileSplit
+        && request.method == "GET"
+        && crate::database::local_access_stop::allows_public(&mut **transaction, &request.address)
+            .await?;
+    if blocked && !scoped {
         return Err(crate::transport::AccessStop {
             origin: request.origin.clone(),
             status: None,

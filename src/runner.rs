@@ -107,18 +107,20 @@ async fn check_source_stops(database: &Database, config: &Config) -> Result<()> 
             stops.len() <= 1000,
             "too many source stops; human review required"
         );
-        stops
-            .iter()
-            .try_for_each(|(checkpoint,address, attempts, cursor,detail,no_remote_evidence)| -> Result<()> {
+        stream::iter(stops.iter().map(Ok::<_,anyhow::Error>))
+            .try_for_each(|(checkpoint,address, attempts, cursor,detail,no_remote_evidence)| async move {
+                let scoped = matches!(config.acquisition,crate::acquisition::AcquisitionPolicy::PublicResults { .. })
+                    && *no_remote_evidence
+                    && crate::database::local_access_stop::permits_derived(database.pool(), *checkpoint,address).await?;
                 ensure!(
-                    config
+                    scoped || config
                         .acquisition
                         .permits_evidenced_stop(&crate::acquisition::PreservedStop {source,address,attempts:*attempts,cursor,detail:detail.as_deref(),no_remote_evidence:*no_remote_evidence})?,
                     "{} has a blocked page requiring human review: checkpoint {checkpoint}, URL {address}",
                     source.as_str(),
                 );
                 Ok(())
-            })
+            }).await
     }).await
 }
 

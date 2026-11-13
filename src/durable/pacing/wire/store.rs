@@ -20,7 +20,12 @@ impl PersistentPacing {
         .bind(authority.to_ascii_lowercase())
         .fetch_one(&self.pool)
         .await?;
-        if blocked {
+        let scoped = blocked
+            && request.source == crate::model::Source::MileSplit
+            && request.method == "GET"
+            && crate::database::local_access_stop::allows_public(&self.pool, &request.address)
+                .await?;
+        if blocked && !scoped {
             return Err(crate::transport::AccessStop {
                 origin: request.origin.clone(),
                 status: None,

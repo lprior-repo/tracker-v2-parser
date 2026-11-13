@@ -16,6 +16,7 @@ pub mod durable;
 mod export_snapshot;
 mod identity;
 mod keys;
+pub(crate) mod local_access_stop;
 pub mod operation_receipts;
 mod performance;
 mod profile_coverage;
