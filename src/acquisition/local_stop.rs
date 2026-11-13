@@ -81,7 +81,12 @@ pub fn public_origin(address: &str) -> Option<String> {
     let public = match parts.as_slice() {
         ["", "teams" | "results"] => true,
         ["", "athletes" | "teams" | "meets", id]
-        | ["", "athletes", id, "stats" | "results" | "progression"]
+        | [
+            "",
+            "athletes",
+            id,
+            "stats" | "results" | "progression" | "articles",
+        ]
         | ["", "teams", id, "roster" | "results"]
         | ["", "meets", id, "results"] => identifier(id),
         ["", "meets", id, "results", file]

@@ -96,6 +96,8 @@ fn given_admin_descendants_when_discovered_then_public_scope_excludes_every_vari
         "https://co.milesplit.com/results?season=outdoor&year=2026&level=hs&page=1",
         "https://co.milesplit.com/meets/123-meet/results/456/raw",
         "https://co.milesplit.com/athletes/123/stats?page=2",
+        "https://co.milesplit.com/athletes/123-runner/articles",
+        "https://co.milesplit.com/athletes/123-runner/articles?page=2",
     ] {
         assert!(public_origin(address).is_some(), "{address}");
     }
@@ -103,6 +105,8 @@ fn given_admin_descendants_when_discovered_then_public_scope_excludes_every_vari
         "https://co.milesplit.com/results?season=outdoor&year=2026&level=hs&page=1&token=private",
         "https://co.milesplit.com/results?page=1&page=2",
         "https://co.milesplit.com/athletes/1/edit",
+        "https://co.milesplit.com/athletes/123-runner/articles/edit",
+        "https://co.milesplit.com/athletes/123-runner/articles?token=private",
     ] {
         assert!(public_origin(address).is_none(), "{address}");
     }
