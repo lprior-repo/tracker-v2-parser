@@ -143,6 +143,13 @@ async fn captured_source_unavailability_is_scoped_deduplicated_and_frozen_withou
         assert!(other_rows.iter().all(|row|row.state=="MI"));
         let mut next_year=database.begin_export_snapshot(&["WI".into()],&[2028]).await?;
         assert_eq!(next_year.review_records(0,1000).await?.iter().map(|row|row.athlete_source_id.as_str()).collect::<Vec<_>>(),["14"]);next_year.finish().await?;
+        let mut multiple=database.begin_export_snapshot(&["WI".into(),"MI".into()],&[2027]).await?;
+        assert_eq!(multiple.review_records(0,1000).await?.iter().map(|row|row.athlete_source_id.as_str()).collect::<Vec<_>>(),["11","15","16","17"]);multiple.finish().await?;
+        for (states,years) in [(Vec::new(),vec![2027]),(vec!["WI".to_owned()],Vec::new())] {
+            let mut unspecified=database.begin_export_snapshot(&states,&years).await?;
+            assert!(unspecified.review_records(0,1000).await?.is_empty());
+            unspecified.finish().await?;
+        }
         let mut snapshot=database.begin_export_snapshot(&config.states,&config.graduation_years).await?;
         let mut actual=Vec::new();
         for _ in 0..4 {

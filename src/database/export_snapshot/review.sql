@@ -41,6 +41,7 @@ WITH missing_records AS MATERIALIZED (
     JOIN school_state_values school_state ON school_state.athlete_id=a.athlete_id
     WHERE p.status='succeeded' AND p.source='milesplit' AND p.cursor->>'kind'='athlete'
       AND p.url ~ '^https://(www|[a-z]{2})[.]milesplit[.]com/athletes/[1-9][0-9]*(-[^/?#%]+)?/?$'
+      AND p.url ~ '^https://(www|[a-z]{2})[.]milesplit[.]com/athletes/[1-9][0-9]*(-[^/?#%]+)?(/(stats|progression))?/?$'
       AND split_part(split_part(p.url,'/',5),'-',1)=a.source_id
       AND EXISTS (SELECT 1 FROM unnest($1::text[]) selected(state)
           WHERE lower(btrim(selected.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))=school_state.state)
@@ -56,7 +57,12 @@ WITH missing_records AS MATERIALIZED (
                     substring(p.url from '^https?://([A-Za-z]{2})\.milesplit\.com/')) AS scope_state,
            COALESCE(NULLIF(p.cursor->'context'->>'school_id',''),athlete_school.source_id,'') AS school_source_id,
            COALESCE(NULLIF(p.cursor->'context'->>'school_name',''),s.name,athlete_school.name,'') AS school_name
-    FROM scrape_pages p
+    FROM (
+        SELECT id FROM scrape_pages WHERE id>$3::bigint AND status IN ('failed','blocked')
+        UNION
+        SELECT id FROM availability_pages WHERE id>$3::bigint
+    ) candidate_ids
+    JOIN scrape_pages p ON p.id=candidate_ids.id
     LEFT JOIN availability_pages availability ON availability.id=p.id
     LEFT JOIN schools s ON s.source=p.source AND s.source_id=p.cursor->'context'->>'school_id'
     LEFT JOIN athlete_sources a ON a.source=p.source AND a.source_id=p.cursor->'context'->>'athlete_id'

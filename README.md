@@ -150,6 +150,11 @@ unchanged. `qualify_export_transfer` compares ordered projected record hashes an
 database transfer bytes against the original Rust projection in one repeatable-read
 snapshot; this benchmark makes no source HTTP requests.
 
+Acquisition Review first selects failed, blocked and source-availability checkpoint
+IDs before loading their school/profile details. Availability lookup uses the
+existing profile index while retaining the base-profile URL restriction, earliest
+checkpoint per athlete, state/year scope and original page-ID cursor.
+
 The library's `layout = "detailed"` selects the diagnostic export described below.
 Durable CLI exports require `single_sheet`.
 The main sheet has one row per selected canonical athlete ID. Only explicitly
