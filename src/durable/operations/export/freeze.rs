@@ -2,6 +2,8 @@ use anyhow::{Context, Result, ensure};
 use futures::{TryStreamExt, stream};
 use serde_json::Value;
 
+mod buffer;
+
 use super::{Batch, FrozenChunk, FrozenExport, FrozenPlan, OperationSpec, Workspace};
 use crate::{
     config::Config,
@@ -212,10 +214,13 @@ async fn collect(
             Ok::<_, anyhow::Error>(None)
         },
     );
-    batches.try_fold(plan, |plan, batch| {
-        let workspace = workspace.clone();
-        async move { tokio::task::spawn_blocking(move || append(&workspace, plan, &batch)).await? }
-    }).await
+    batches
+        .try_fold(buffer::Buffer::new(plan), |buffer, batch| async move {
+            buffer.push(workspace, batch).await
+        })
+        .await?
+        .finish(workspace)
+        .await
 }
 
 #[tracing::instrument(skip_all)]
@@ -249,7 +254,7 @@ pub async fn freeze_export(
     let database = Database::connect_for_export(database_url).await?;
     let result = async {
         let snapshot = database
-            .begin_export_snapshot(&config.states, &config.graduation_years)
+            .begin_workbook_export_snapshot(&config.states, &config.graduation_years)
             .await?;
         let plan = FrozenPlan {
             binding: workspace.binding().into(),

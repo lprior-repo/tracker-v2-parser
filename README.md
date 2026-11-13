@@ -140,6 +140,16 @@ Exceeding a row, byte, cell or column capacity fails explicitly without publishi
 a complete export or adding overflow tabs. Empty issue-only batches do not create
 extra empty files.
 
+Durable single-sheet exports project workbook fields inside the read-only database
+snapshot before transferring each athlete. The original complete-record byte,
+component and observation guards still apply. Full canonical snapshot APIs retain
+all original data. New frozen exports combine small projected record batches up to
+1,000 athletes and 8 MiB before preparing a chunk; larger individual projections
+retain the existing artifact limit. Already frozen manifests and chunks replay
+unchanged. `qualify_export_transfer` compares ordered projected record hashes and
+database transfer bytes against the original Rust projection in one repeatable-read
+snapshot; this benchmark makes no source HTTP requests.
+
 The library's `layout = "detailed"` selects the diagnostic export described below.
 Durable CLI exports require `single_sheet`.
 The main sheet has one row per selected canonical athlete ID. Only explicitly

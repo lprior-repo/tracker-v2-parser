@@ -1,4 +1,5 @@
 mod prefetch;
+mod query;
 mod review;
 mod writer;
 
@@ -166,6 +167,23 @@ async fn validate_reports(transaction: &mut Transaction<'_, Postgres>) -> Result
 impl<'a> ExportSnapshot<'a> {
     #[tracing::instrument(skip(pool, states, years))]
     pub(super) async fn begin(pool: &'a PgPool, states: &[String], years: &[i32]) -> Result<Self> {
+        Self::begin_projected(pool, states, years, query::Projection::Complete).await
+    }
+
+    pub(super) async fn begin_workbook(
+        pool: &'a PgPool,
+        states: &[String],
+        years: &[i32],
+    ) -> Result<Self> {
+        Self::begin_projected(pool, states, years, query::Projection::Workbook).await
+    }
+
+    async fn begin_projected(
+        pool: &'a PgPool,
+        states: &[String],
+        years: &[i32],
+        projection: query::Projection,
+    ) -> Result<Self> {
         let mut transaction = pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *transaction)
@@ -173,20 +191,7 @@ impl<'a> ExportSnapshot<'a> {
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM athletes WHERE false")
             .fetch_one(&mut *transaction)
             .await?;
-        let records = include_str!("athlete_records.sql")
-            .replacen(
-                "WHERE p.school_id IS NOT NULL",
-                "WHERE p.athlete_id = $3::bigint AND p.school_id IS NOT NULL",
-                1,
-            )
-            .replacen(
-                "WHERE a.name IS NOT NULL",
-                "WHERE a.id = $3::bigint AND a.name IS NOT NULL",
-                1,
-            );
-        let record_sql = format!(
-            "SELECT CASE WHEN octet_length(document::text) <= $4::bigint THEN document::text END, octet_length(document::text)::bigint FROM ({records}) report(document)"
-        );
+        let record_sql = query::statement(projection);
         Ok(Self {
             transaction,
             states: states.to_vec(),
@@ -197,7 +202,7 @@ impl<'a> ExportSnapshot<'a> {
             records_finished: false,
             issues_finished: false,
             pending_record: None,
-            record_sql: record_sql.into(),
+            record_sql,
             usable: true,
         })
     }

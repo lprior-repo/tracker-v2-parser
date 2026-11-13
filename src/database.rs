@@ -260,6 +260,14 @@ impl Database {
         ExportSnapshot::begin(&self.pool, states, years).await
     }
 
+    pub(crate) async fn begin_workbook_export_snapshot(
+        &self,
+        states: &[String],
+        years: &[i32],
+    ) -> Result<ExportSnapshot<'_>> {
+        ExportSnapshot::begin_workbook(&self.pool, states, years).await
+    }
+
     #[tracing::instrument(skip(self, options))]
     pub async fn write_export(
         &self,
