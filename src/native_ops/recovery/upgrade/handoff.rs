@@ -1,4 +1,5 @@
 mod frozen;
+mod schema;
 
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
@@ -14,9 +15,11 @@ pub(super) async fn prove(
     previous: &Value,
 ) -> Result<Value> {
     let root = frozen::pause(runtime, identity, previous).await?;
+    let schema_before = schema::capture(runtime).await?;
     runtime.rotate_worker_port()?;
     runtime.start_worker().await?;
     let registered = runtime.register_named("upgraded-registration.json").await?;
+    let schema_preservation = schema::verify(&schema_before, &schema::capture(runtime).await?)?;
     let deployment = io::text(&registered, "/id")?;
     evidence::identifier(deployment, "dp_")?;
     ensure!(
@@ -67,7 +70,8 @@ pub(super) async fn prove(
         "historical_input":root.request,"previous_deployment":previous.get("id"),"new_deployment":deployment,
         "prefix_rows":root.prefix.len(),"prefix_sha256":io::digest(&serde_json::to_vec(&root.prefix)?),
         "prefix_unchanged":true,"input_bytes_unchanged":true,"future_continuation_input":child_input,
-        "report":report,"continuation_report":next,"checkpoint_records_unchanged":true,"attempts":attempts});
+        "report":report,"continuation_report":next,"checkpoint_records_unchanged":true,"attempts":attempts,
+        "schema_preservation":schema_preservation});
     io::save(
         &runtime.args.evidence.join("historical-prefix.json"),
         &json!(root.prefix),

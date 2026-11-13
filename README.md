@@ -509,6 +509,10 @@ duplicate rather than overwrite an unrelated result.
 Legacy raw/table reconciliation admits at most 10,000 candidate observations per
 meet set. Already file-identified observations are excluded before that budget,
 so current-format results in other files do not block a small file replay.
+Nonunique partial hash indexes cover MileSplit meet IDs and both retained raw-file
+identity paths. Reconciliation keeps its existing predicates, exact equality
+checks, observation budget and transaction locks; installing these derived
+indexes does not rewrite observations or resolve Review gaps.
 MileSplit HY-TEK results with `Year` and `Finals` columns are retained, including
 the reported school text when no school identifier is published. Team-score
 sections are not interpreted as individual results.
