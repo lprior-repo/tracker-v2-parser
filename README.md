@@ -1040,3 +1040,12 @@ Beads stores project issues in its own Dolt database, separate from the
 application's PostgreSQL database. Synchronize issue changes with `bd dolt push`
 and retrieve remote changes with `bd dolt pull`. The configured DoltHub remote
 is `priorlewis43/track-scrapper-v2`.
+
+New immutable page bodies and parsed payloads of at least 64 KiB can use transparent
+filesystem compression on macOS before publication. The writer checks logical
+bytes, length, SHA-256, permissions and physical savings, retains the original
+raw temporary for fallback, and bounds and reaps its compression subprocess.
+Published blobs are never recompressed or replaced. Artifact references, native
+requests, source rules and acquisition budgets remain unchanged; older workers
+can read the same logical bytes through the filesystem. Other platforms and
+small or incompressible bodies retain raw publication.

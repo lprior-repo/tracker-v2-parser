@@ -1,3 +1,5 @@
+mod compression;
+
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -99,7 +101,13 @@ fn publish(
 ) -> Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
-    match fs::hard_link(temporary, path) {
+    let stage = if path.try_exists()? {
+        None
+    } else {
+        compression::prepare(root, temporary, reference, bytes)
+    };
+    let publication = stage.as_ref().map_or(temporary, |value| value.path());
+    match fs::hard_link(publication, path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             ensure!(
@@ -114,9 +122,10 @@ fn publish(
         .context("syncing durable artifact directory")
 }
 
-pub(super) async fn write(root: &Path, bytes: Vec<u8>, limit: usize) -> Result<ArtifactRef> {
+pub async fn write(root: &Path, bytes: Vec<u8>, limit: usize) -> Result<ArtifactRef> {
     let root = root.to_owned();
-    tokio::task::spawn_blocking(move || write_sync(&root, &bytes, limit))
+    let span = tracing::debug_span!("publish_durable_artifact", logical_bytes = bytes.len());
+    tokio::task::spawn_blocking(move || span.in_scope(|| write_sync(&root, &bytes, limit)))
         .await
         .context("durable artifact writer failed")?
 }

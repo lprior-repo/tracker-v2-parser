@@ -45,6 +45,19 @@ pub(super) async fn prepare(runtime: &Runtime, identity: &str) -> Result<Seeded>
         },
     );
     let request = page::bind_target(&database, target, &scope).await?;
+    ensure!(
+        matches!(
+            page::reserve_configured(
+                &database,
+                &config,
+                &request,
+                chrono::Utc::now().timestamp_millis()
+            )
+            .await?,
+            page::ReservationDecision::Reserved { .. }
+        ),
+        "owned existing reservation was not created"
+    );
     database.close().await;
     let stops = stops(runtime, identity).await?;
     Ok(Seeded {
@@ -81,28 +94,54 @@ async fn stops(runtime: &Runtime, identity: &str) -> Result<Vec<i64>> {
     Ok(vec![contact, derived])
 }
 
-pub(super) async fn retain(runtime: &Runtime, input: &Value, before: &Value) -> Result<()> {
-    let bytes = io::read(
+pub(super) async fn retain(runtime: &Runtime, input: &Value, before: &Value) -> Result<Value> {
+    let mut bytes = io::read(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("fixtures/milesplit/athlete-oh-15005189.html"),
         16 * 1024 * 1024,
     )?;
+    let source_fixture_sha256 = io::digest(&bytes);
+    bytes.extend_from_slice(
+        format!(
+            "\n<!-- owned immutable storage fixture {} -->",
+            io::text(input, "/request/binding/operation_id")?
+        )
+        .as_bytes(),
+    );
+    let reference = page::artifacts::write(&runtime.root, bytes.clone(), 16 * 1024 * 1024).await?;
     let hash = io::digest(&bytes);
+    ensure!(
+        reference.sha256 == hash && reference.bytes == u64::try_from(bytes.len())?,
+        "fixture artifact identity changed"
+    );
     let root = runtime.root.clone();
     let attempt = io::text(before, "/attempt/attempt_id")?.to_owned();
     let manifest = json!({"attempt_id":attempt,"operation_id":input.pointer("/request/binding/operation_id").context("fixture owner absent")?,"capture":{"body":{"sha256":hash,"bytes":bytes.len()},"url":io::text(input,"/request/target/url")?,"status":200,"content_type":"text/html","retained_at_ms":chrono::Utc::now().timestamp_millis()}});
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let blob = root.join(format!("{hash}.blob"));
-        if blob.try_exists()? {
-            ensure!(
-                io::read(&blob, 16 * 1024 * 1024)? == bytes,
-                "fixture blob differs"
-            );
-        } else {
-            io::write(&blob, &bytes)?;
-        }
+    let storage = storage(&root, &hash, &source_fixture_sha256)?;
+    tokio::task::spawn_blocking(move || {
         io::save(&root.join(format!("{attempt}.capture")), &manifest)
     })
     .await
-    .context("fixture retained capture writer")?
+    .context("fixture retained capture writer")??;
+    Ok(storage)
+}
+
+fn storage(root: &std::path::Path, hash: &str, source_fixture_sha256: &str) -> Result<Value> {
+    let metadata = std::fs::metadata(root.join(format!("{hash}.blob")))?;
+    #[cfg(target_os = "macos")]
+    let (compressed, allocated) = {
+        use std::os::macos::fs::MetadataExt;
+        (
+            metadata.st_flags() & 0x20 != 0,
+            metadata
+                .st_blocks()
+                .checked_mul(512)
+                .context("fixture allocation overflow")?,
+        )
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (compressed, allocated) = (false, metadata.len());
+    Ok(
+        json!({"source_fixture_sha256":source_fixture_sha256,"logical_sha256":hash,"logical_bytes":metadata.len(),"filesystem_compressed":compressed,"allocated_bytes":allocated,"same_logical_reference":true,"fixture_has_provenance_marker":true}),
+    )
 }
