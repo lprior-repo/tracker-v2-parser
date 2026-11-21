@@ -9,7 +9,7 @@ CROSS JOIN LATERAL (
             FROM results r
             JOIN athlete_sources p ON p.id = r.athlete_source_id
             WHERE p.athlete_id = candidate.id
-            UNION
+            UNION ALL
             SELECT r.id
             FROM valid_reviewed_result_links l
             JOIN results r ON r.id = l.result_id

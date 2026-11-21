@@ -36,8 +36,10 @@ fn conflict_clause_is_derived_and_returns_stable_source_keys() {
     assert!(conflict.starts_with("ON CONFLICT (source_result_key) DO UPDATE SET"));
     assert!(!conflict.contains("$26"));
     assert!(!conflict.contains("$27"));
+    assert!(!conflict.contains("$28"));
     assert!(conflict.contains("WHEN FALSE THEN NULL"));
     assert!(conflict.contains("THEN NULL::jsonb"));
+    assert!(conflict.contains("WHERE NOT FALSE"));
     assert!(conflict.ends_with("RETURNING source_result_key\n"));
 }
 

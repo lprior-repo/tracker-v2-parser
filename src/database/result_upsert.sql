@@ -15,25 +15,25 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     athlete_id = EXCLUDED.athlete_id,
     represented_school_id = CASE WHEN $26 THEN NULL
         ELSE COALESCE(EXCLUDED.represented_school_id, results.represented_school_id) END,
-    event = CASE WHEN btrim(EXCLUDED.event) <> '' THEN EXCLUDED.event ELSE results.event END,
-    raw_mark = CASE WHEN btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.raw_mark ELSE results.raw_mark END,
+    event = CASE WHEN btrim(EXCLUDED.event, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.event ELSE results.event END,
+    raw_mark = CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.raw_mark ELSE results.raw_mark END,
     sport = EXCLUDED.sport,
-    meet_id = CASE WHEN btrim(EXCLUDED.meet_id) <> '' THEN EXCLUDED.meet_id ELSE results.meet_id END,
-    meet_name = CASE WHEN btrim(EXCLUDED.meet_name) <> '' THEN EXCLUDED.meet_name ELSE results.meet_name END,
-    meet_date = CASE WHEN btrim(EXCLUDED.meet_date) <> '' THEN EXCLUDED.meet_date ELSE results.meet_date END,
+    meet_id = CASE WHEN btrim(EXCLUDED.meet_id, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.meet_id ELSE results.meet_id END,
+    meet_name = CASE WHEN btrim(EXCLUDED.meet_name, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.meet_name ELSE results.meet_name END,
+    meet_date = CASE WHEN btrim(EXCLUDED.meet_date, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.meet_date ELSE results.meet_date END,
     wind = COALESCE(EXCLUDED.wind, results.wind),
-    timing = CASE WHEN btrim(EXCLUDED.timing) <> '' THEN EXCLUDED.timing ELSE results.timing END,
-    course = CASE WHEN btrim(EXCLUDED.course) <> '' THEN EXCLUDED.course ELSE results.course END,
+    timing = CASE WHEN btrim(EXCLUDED.timing, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.timing ELSE results.timing END,
+    course = CASE WHEN btrim(EXCLUDED.course, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.course ELSE results.course END,
     is_personal_record = EXCLUDED.is_personal_record, is_relay = EXCLUDED.is_relay,
     raw = (results.raw
-        - CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+        - CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
             THEN ARRAY['reported_status'] ELSE ARRAY[]::text[] END
         - CASE WHEN $26 THEN ARRAY['school_id'] ELSE ARRAY[]::text[] END) || COALESCE((
         SELECT jsonb_object_agg(key,
             CASE WHEN key = 'source_values' AND jsonb_typeof(value) = 'object' THEN
                 (CASE WHEN jsonb_typeof(results.raw->'source_values') = 'object'
                     THEN results.raw->'source_values' ELSE '{}'::jsonb END)
-                - CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+                - CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
                     THEN ARRAY['statusCode'] ELSE ARRAY[]::text[] END
                 || COALESCE((
                     SELECT jsonb_object_agg(evidence.key, CASE
@@ -49,32 +49,33 @@ ON CONFLICT (source_result_key) DO UPDATE SET
                                             SELECT jsonb_object_agg(attribute.key, attribute.value)
                                             FROM jsonb_each(nested.value) AS attribute(key, value)
                                             WHERE attribute.value <> 'null'::jsonb
-                                              AND (jsonb_typeof(attribute.value) <> 'string' OR btrim(attribute.value #>> '{}') <> '')
+                                              AND (jsonb_typeof(attribute.value) <> 'string' OR btrim(attribute.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                                         ), '{}'::jsonb)
                                     ELSE nested.value END)
                                 FROM jsonb_each(evidence.value) AS nested(key, value)
                                 WHERE nested.value <> 'null'::jsonb
-                                  AND (jsonb_typeof(nested.value) <> 'string' OR btrim(nested.value #>> '{}') <> '')
+                                  AND (jsonb_typeof(nested.value) <> 'string' OR btrim(nested.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                             ), '{}'::jsonb)
                         ELSE evidence.value END)
                     FROM jsonb_each(value) AS evidence(key, value)
                     WHERE evidence.value <> 'null'::jsonb
-                      AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}') <> '')
+                      AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                 ), '{}'::jsonb) || CASE WHEN $27::jsonb IS NOT NULL
                     THEN $27::jsonb
                     ELSE '{}'::jsonb END
             ELSE value END)
         FROM jsonb_each(EXCLUDED.raw)
         WHERE value <> 'null'::jsonb
-          AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}') <> '')
+          AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
     ), '{}'::jsonb),
     source_url = EXCLUDED.source_url, last_seen = clock_timestamp(),
     season = COALESCE(EXCLUDED.season, results.season),
-    grade = CASE WHEN btrim(EXCLUDED.grade) <> '' THEN EXCLUDED.grade ELSE results.grade END,
-    gender = CASE WHEN btrim(EXCLUDED.gender) <> '' THEN EXCLUDED.gender ELSE results.gender END,
+    grade = CASE WHEN btrim(EXCLUDED.grade, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.grade ELSE results.grade END,
+    gender = CASE WHEN btrim(EXCLUDED.gender, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.gender ELSE results.gender END,
     normalized_numeric = EXCLUDED.normalized_numeric,
     normalized_unit = EXCLUDED.normalized_unit,
     specification = EXCLUDED.specification,
     status = EXCLUDED.status
-WHERE results.athlete_source_id IS NULL OR results.athlete_source_id = EXCLUDED.athlete_source_id
+WHERE NOT $28
+  AND (results.athlete_source_id IS NULL OR results.athlete_source_id = EXCLUDED.athlete_source_id)
 RETURNING id

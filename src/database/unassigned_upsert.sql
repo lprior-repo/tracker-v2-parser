@@ -8,15 +8,15 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     athlete_source_id = CASE WHEN EXCLUDED.is_relay THEN NULL ELSE results.athlete_source_id END,
     athlete_id = CASE WHEN EXCLUDED.is_relay THEN NULL ELSE results.athlete_id END,
     represented_school_id = COALESCE(EXCLUDED.represented_school_id, results.represented_school_id),
-    event = CASE WHEN btrim(EXCLUDED.event) <> '' THEN EXCLUDED.event ELSE results.event END,
-    raw_mark = CASE WHEN btrim(EXCLUDED.raw_mark) <> '' THEN EXCLUDED.raw_mark ELSE results.raw_mark END,
+    event = CASE WHEN btrim(EXCLUDED.event, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.event ELSE results.event END,
+    raw_mark = CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.raw_mark ELSE results.raw_mark END,
     sport = EXCLUDED.sport,
-    meet_id = CASE WHEN btrim(EXCLUDED.meet_id) <> '' THEN EXCLUDED.meet_id ELSE results.meet_id END,
-    meet_date = CASE WHEN btrim(EXCLUDED.meet_date) <> '' THEN EXCLUDED.meet_date ELSE results.meet_date END,
+    meet_id = CASE WHEN btrim(EXCLUDED.meet_id, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.meet_id ELSE results.meet_id END,
+    meet_date = CASE WHEN btrim(EXCLUDED.meet_date, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '' THEN EXCLUDED.meet_date ELSE results.meet_date END,
     status = EXCLUDED.status,
     is_relay = EXCLUDED.is_relay,
     source_url = EXCLUDED.source_url,
-    raw = (CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+    raw = (CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
         THEN results.raw - 'reported_status' ELSE results.raw END) || COALESCE((
         SELECT jsonb_object_agg(key, value)
         FROM jsonb_each(EXCLUDED.raw)
@@ -24,9 +24,9 @@ ON CONFLICT (source_result_key) DO UPDATE SET
           AND NOT (key = 'members' AND value = '[]'::jsonb
               AND COALESCE(EXCLUDED.raw #> '{raw,relayLegs}', 'null'::jsonb) = 'null'::jsonb)
           AND value <> 'null'::jsonb
-          AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}') <> '')
+          AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
     ), '{}'::jsonb) || jsonb_build_object('raw',
-        (CASE WHEN btrim(EXCLUDED.raw_mark) <> ''
+        (CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
             THEN COALESCE(results.raw->'raw', '{}'::jsonb) - 'statusCode'
             ELSE COALESCE(results.raw->'raw', '{}'::jsonb) END)
         || COALESCE((
@@ -47,17 +47,17 @@ ON CONFLICT (source_result_key) DO UPDATE SET
                                                 SELECT jsonb_object_agg(attribute.key, attribute.value)
                                                 FROM jsonb_each(nested.value) AS attribute(key, value)
                                                 WHERE attribute.value <> 'null'::jsonb
-                                                  AND (jsonb_typeof(attribute.value) <> 'string' OR btrim(attribute.value #>> '{}') <> '')
+                                                  AND (jsonb_typeof(attribute.value) <> 'string' OR btrim(attribute.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                                             ), '{}'::jsonb)
                                         ELSE nested.value END)
                                     FROM jsonb_each(evidence.value) AS nested(key, value)
                                     WHERE nested.value <> 'null'::jsonb
-                                      AND (jsonb_typeof(nested.value) <> 'string' OR btrim(nested.value #>> '{}') <> '')
+                                      AND (jsonb_typeof(nested.value) <> 'string' OR btrim(nested.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                                 ), '{}'::jsonb)
                             ELSE evidence.value END)
                         FROM jsonb_each(value) AS evidence(key, value)
                         WHERE evidence.value <> 'null'::jsonb
-                          AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}') <> '')
+                          AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                     ), '{}'::jsonb)
                 ELSE value END)
             FROM jsonb_each(CASE WHEN jsonb_typeof(EXCLUDED.raw->'raw') = 'object'
@@ -68,7 +68,7 @@ ON CONFLICT (source_result_key) DO UPDATE SET
     normalized_numeric = EXCLUDED.normalized_numeric,
     normalized_unit = EXCLUDED.normalized_unit,
     specification = EXCLUDED.specification
-WHERE results.athlete_source_id IS NULL
+WHERE NOT $17 AND (results.athlete_source_id IS NULL
    OR (EXCLUDED.is_relay AND (
        EXCLUDED.source <> 'milesplit'
        OR EXISTS (
@@ -76,4 +76,4 @@ WHERE results.athlete_source_id IS NULL
            WHERE athlete_sources.id = results.athlete_source_id
              AND athlete_sources.source_id = EXCLUDED.raw #>> '{raw,athleteId}'
        )
-   ))
+   )))

@@ -225,8 +225,9 @@ fn batch_sql() -> Result<(String, String)> {
     let conflict = format!("ON CONFLICT (source_result_key) DO UPDATE SET{conflict}")
         .replace("$26", "FALSE")
         .replace("$27::jsonb", "NULL::jsonb")
+        .replace("$28", "FALSE")
         .replace("RETURNING id", "RETURNING source_result_key");
-    if conflict.contains("$26") || conflict.contains("$27") {
+    if conflict.contains("$26") || conflict.contains("$27") || conflict.contains("$28") {
         bail!("result upsert replay controls could not be specialized");
     }
     if !conflict.ends_with("RETURNING source_result_key\n") {

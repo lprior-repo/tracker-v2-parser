@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use futures::{TryStreamExt, stream};
 use serde_json::Value;
 use sqlx::PgConnection;
@@ -9,6 +9,8 @@ use crate::model::{Capture, ParsedPage, Source, Target};
 
 mod adoption;
 
+const MAX_FILES: usize = 64;
+
 pub(in crate::database) async fn prepare(
     connection: &mut PgConnection,
     target: &Target,
@@ -16,9 +18,42 @@ pub(in crate::database) async fn prepare(
     page: &ParsedPage,
 ) -> Result<()> {
     if target.source == Source::MileSplit {
+        lock_files(connection, page).await?;
         super::legacy_history::review_masked(connection, target, capture).await?;
         adoption::reconcile(connection, page).await?;
     }
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+async fn lock_files(connection: &mut PgConnection, page: &ParsedPage) -> Result<()> {
+    let files = page
+        .performances
+        .iter()
+        .filter_map(|row| row.source_values.as_ref())
+        .chain(page.unassigned_results.iter().map(|row| &row.raw))
+        .filter_map(proven_file)
+        .try_fold(Vec::new(), |mut files, file| -> Result<_> {
+            if !files.contains(&file) {
+                ensure!(
+                    files.len() < MAX_FILES,
+                    "published file reconciliation exceeds 64 files per page"
+                );
+                files.try_reserve(1)?;
+                files.push(file);
+            }
+            Ok(files)
+        })?;
+    if files.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "WITH ordered AS MATERIALIZED ( \
+         SELECT DISTINCT hashtext(file) AS lock_id FROM unnest($1::text[]) AS incoming(file) \
+         ORDER BY lock_id) \
+         SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':milesplit-file-revisions'),lock_id) \
+         FROM ordered ORDER BY lock_id",
+    ).bind(files).execute(connection).await?;
     Ok(())
 }
 

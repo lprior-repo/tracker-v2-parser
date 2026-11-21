@@ -64,13 +64,34 @@ async fn upsert(
     key: &str,
     result_id: Option<&str>,
 ) -> Result<u64> {
+    let (saved, guarded) = write(connection, source, row, location, key, result_id, true).await?;
+    if saved == 0 && guarded {
+        return Ok(
+            write(connection, source, row, location, key, result_id, false)
+                .await?
+                .0,
+        );
+    }
+    Ok(saved)
+}
+
+#[tracing::instrument(skip(connection, row))]
+async fn write(
+    connection: &mut PgConnection,
+    source: Source,
+    row: &UnassignedResult,
+    location: (&str, usize),
+    key: &str,
+    result_id: Option<&str>,
+    guard_missing: bool,
+) -> Result<(u64, bool)> {
     let school = schools::find(connection, source, row.school_id.as_deref()).await?;
     let reported_status = row
         .raw
         .get("statusCode")
         .and_then(serde_json::Value::as_str)
         .and_then(crate::marks::failure_status);
-    let normalized = results::normalize_effective(
+    let (normalized, missing) = results::normalize_effective(
         connection,
         key,
         &row.event,
@@ -79,6 +100,7 @@ async fn upsert(
         reported_status,
     )
     .await?;
+    let guarded = guard_missing && missing;
     let saved = sqlx::query(include_str!("unassigned_upsert.sql"))
         .bind(key)
         .bind(school)
@@ -96,7 +118,8 @@ async fn upsert(
         .bind(normalized.value)
         .bind(normalized.unit)
         .bind(normalized.specification)
+        .bind(guarded)
         .execute(connection)
         .await?;
-    Ok(saved.rows_affected())
+    Ok((saved.rows_affected(), guarded))
 }

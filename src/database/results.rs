@@ -151,23 +151,42 @@ async fn save(
 
 #[tracing::instrument(skip(connection, row))]
 async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64> {
+    let key = keys::performance(row.source, row.performance, row.location.0, row.location.1)?;
+    let (saved, guarded) = write(connection, &row, &key, true).await?;
+    let saved = if saved.is_none() && guarded {
+        write(connection, &row, &key, false).await?.0
+    } else {
+        saved
+    };
+    saved.context(
+        "source result ID belongs to a different athlete; refusing to overwrite its identity",
+    )
+}
+
+#[tracing::instrument(skip_all)]
+async fn write(
+    connection: &mut PgConnection,
+    row: &ResultRow<'_>,
+    key: &str,
+    guard_missing: bool,
+) -> Result<(Option<i64>, bool)> {
     let performance = row.performance;
     let reported_status = performance
         .reported_status
         .as_deref()
         .and_then(marks::failure_status);
-    let key = keys::performance(row.source, performance, row.location.0, row.location.1)?;
-    let normalized = normalize_effective(
+    let (normalized, missing) = normalize_effective(
         connection,
-        &key,
+        key,
         &performance.event,
         &performance.mark,
         performance.is_relay,
         reported_status,
     )
     .await?;
-    let school_replay = school_evidence::resolve(connection, row.source, performance, &key).await?;
-    sqlx::query_scalar(include_str!("result_upsert.sql"))
+    let school_replay = school_evidence::resolve(connection, row.source, performance, key).await?;
+    let guarded = guard_missing && missing;
+    let saved = sqlx::query_scalar(include_str!("result_upsert.sql"))
         .bind(key)
         .bind(row.profile)
         .bind(row.school)
@@ -195,11 +214,10 @@ async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64
         .bind(normalized.status)
         .bind(school_replay.clear)
         .bind(school_replay.evidence)
+        .bind(guarded)
         .fetch_optional(connection)
-        .await?
-        .context(
-            "source result ID belongs to a different athlete; refusing to overwrite its identity",
-        )
+        .await?;
+    Ok((saved, guarded))
 }
 
 #[tracing::instrument(skip(connection))]
@@ -210,18 +228,19 @@ pub(super) async fn normalize_effective(
     mark: &str,
     relay: bool,
     reported_status: Option<&'static str>,
-) -> Result<Normalized> {
-    let previous: Option<(String, String, String)> =
-        if event.trim().is_empty() || mark.trim().is_empty() {
-            sqlx::query_as(
-                "SELECT event,raw_mark,status FROM results WHERE source_result_key=$1 FOR UPDATE",
-            )
-            .bind(key)
-            .fetch_optional(connection)
-            .await?
-        } else {
-            None
-        };
+) -> Result<(Normalized, bool)> {
+    let sparse = event.trim().is_empty() || mark.trim().is_empty();
+    let previous: Option<(String, String, String)> = if sparse {
+        sqlx::query_as(
+            "SELECT event,raw_mark,status FROM results WHERE source_result_key=$1 FOR UPDATE",
+        )
+        .bind(key)
+        .fetch_optional(connection)
+        .await?
+    } else {
+        None
+    };
+    let missing = sparse && previous.is_none();
     let event = if event.trim().is_empty() {
         previous.as_ref().map_or(event, |row| row.0.as_str())
     } else {
@@ -243,12 +262,16 @@ pub(super) async fn normalize_effective(
     });
     let (value, unit, specification) =
         normalization(event, effective_mark, relay || failure.is_some());
-    Ok(Normalized {
-        value,
-        unit,
-        specification,
-        status: failure.map_or_else(|| status(effective_mark, value.is_some()), |status| status),
-    })
+    Ok((
+        Normalized {
+            value,
+            unit,
+            specification,
+            status: failure
+                .map_or_else(|| status(effective_mark, value.is_some()), |status| status),
+        },
+        missing,
+    ))
 }
 
 pub(super) fn normalization(

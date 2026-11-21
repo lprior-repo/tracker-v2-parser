@@ -130,6 +130,42 @@ async fn given_duplicate_sparse_or_large_rows_when_saved_then_serial_semantics_a
 }
 
 #[tokio::test]
+async fn given_sparse_first_observations_when_completed_in_a_batch_then_exact_serial_state_matches()
+-> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            seed(pool, Source::AthleticNet).await?;
+            let incoming = rows(8, 8)?;
+            let mut initial = incoming.clone();
+            for (index, row) in initial.iter_mut().enumerate() {
+                if index % 2 == 0 {
+                    row.event.clear();
+                } else {
+                    row.mark.clear();
+                }
+                row.reported_status = Some("DQ".into());
+                row.source_values = Some(json!({"statusCode":"DQ"}));
+            }
+            let serial = state(pool, Source::AthleticNet, &initial, &incoming, true).await?;
+            let batched = state(pool, Source::AthleticNet, &initial, &incoming, false).await?;
+            assert_eq!(batched, serial);
+            assert_eq!(batched.len(), 8);
+            for row in batched {
+                assert_eq!(row["event"], "100m");
+                assert_eq!(row["raw_mark"], "11.20");
+                assert_eq!(row["normalized_numeric"], 11_200_000_000_i64);
+                assert_eq!(row["normalized_unit"], "ns");
+                assert_eq!(row["status"], "recorded");
+                assert!(row["raw"].get("reported_status").is_none());
+                assert!(row["raw"]["source_values"].get("statusCode").is_none());
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn given_cross_athlete_conflict_when_batch_rejected_then_outer_transaction_rolls_back()
 -> Result<()> {
     with_database(|pool| {
