@@ -20,6 +20,24 @@ MileSplit raw revisions serialize by proven published-file identity before adopt
 
 Run `cargo test --locked --test result_whitespace_replay --test concurrent_result_writes -- --nocapture` with an isolated PostgreSQL test database. The concurrency scenarios coordinate actual database waits, enforce finite deadlines, verify stored values and ownership, and replay durable receipts without further mutations. The assigned sparse scenario exercises the public persistence contract; the unassigned and raw-file scenarios also exercise the source parsers.
 
+## Identity, contact and queue concurrency
+
+Concurrent conflicting updates to linked profiles can both decide to split from the same canonical athlete. After the existing update of that canonical row, a separate statement removes it only when it has no source profiles and no results. The fresh statement sees the competing committed split after the canonical-row wait. Profile-owned reviewed identity history and reviewed-result records remain retained. This cleanup introduces no new profile/canonical lock order; it does not claim to eliminate existing identity-merge deadlocks.
+
+Contact captures serialize by the schema-scoped `(source, school_id)` identity before reviewing previous office claims, saving schools or updating coach claims. One transaction advisory lock protects a contact revision even when its school does not yet exist. Lock acquisition is a separate statement so later claim queries use a fresh Read Committed snapshot after waiting. The lock lasts through the page transaction and receipt commit, and is released on rollback. Non-contact pages add no contact lock query. Source captures remain retained; superseded claims receive review notes, and an unconfirmed office mailbox is withdrawn.
+
+Non-contact, non-refresh checkpoint rediscovery uses `ON CONFLICT DO NOTHING`. A no-op conflict UPDATE would still lock the existing row, unnecessarily waiting for a checkpoint owner and potentially completing a cycle with shared profile writes. The insert-only path also applies to non-contact items in a mixed contact batch. Explicit refresh behavior, contact alias suppression, duplicate precedence, affected counts and sequence consumption retain their prior contracts. This avoids locks on already committed duplicate rows; PostgreSQL may still wait for a competing uncommitted insertion of the same unique key.
+
+Run `cargo test --locked --test concurrent_identity_split --test concurrent_contact_revisions --test concurrent_checkpoint_enqueue --test persistence_batches -- --nocapture` with isolated PostgreSQL schemas. These cases exercise overlapping splits, retained review history, coach and office revisions, checkpoint ownership, actual parsed profile navigation, receipt replay and queue parity.
+
+## Review export scope and public evidence
+
+Review selection compares requested and stored state values with the same Unicode whitespace and case normalization used by athlete/issue exports. Acquisition-state precedence and displayed source evidence remain authoritative. An invalid reviewed result link stays visible in its represented-school or acquisition-page scope as well as the current target scope. The invalid-link phase uses `EXISTS` predicates and retains one issue per result when multiple selected states match.
+
+A retained PR row marked with the JSON boolean `masked: true` is not evidence that a public mark was captured. Masked-only profile evidence therefore keeps the source-availability review diagnostic when progression is restricted. Missing, null and non-boolean legacy mask metadata retain the existing unmasked interpretation; the query does not infer or recover a hidden mark.
+
+Run `cargo test --locked --test export_review_state_scope --test export_review_masked_profile --test reviewed_result_links --test review_source_unavailable -- --nocapture` to verify state normalization, transfer invalidation, deduplication, parser-derived masked evidence and legacy mask values.
+
 ## Export observation count guards
 
 The observation preflight counts at most 10,001 output rows to reject an athlete above the 10,000-observation limit before record aggregation. Its ownership branches use `UNION ALL`: the direct branch requires a physical athlete-source owner, while `valid_reviewed_result_links` excludes every physically owned result. Primary and unique keys prevent duplicates within either branch. These rules make the branches disjoint; changes to reviewed ownership must revisit this proof and the export regressions. A distinct union could consume the full input while deduplicating before the outer limit.

@@ -69,6 +69,15 @@ WITH selected_states AS (
             SELECT 1 FROM schools s JOIN selected_states selected
               ON selected.state=lower(btrim(s.state,
                   U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))
+            WHERE s.id=r.represented_school_id
+        )
+        OR EXISTS (
+            SELECT 1 FROM scoped_pages p WHERE p.source=r.source AND p.url=r.source_url
+        )
+        OR EXISTS (
+            SELECT 1 FROM schools s JOIN selected_states selected
+              ON selected.state=lower(btrim(s.state,
+                  U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))
             WHERE s.id=(SELECT p.school_id FROM athlete_sources p WHERE p.id=l.target_athlete_source_id)
         )
         OR EXISTS (

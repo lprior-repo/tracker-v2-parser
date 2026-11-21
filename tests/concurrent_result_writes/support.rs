@@ -27,6 +27,12 @@ pub const REVISION_GATE: &str = "CREATE FUNCTION hold_result_checkpoint() RETURN
     END IF; RETURN NEW; END $$; CREATE TRIGGER hold_result_checkpoint BEFORE INSERT ON scrape_pages \
     FOR EACH ROW EXECUTE FUNCTION hold_result_checkpoint();";
 
+pub const NAVIGATION_GATE: &str = "CREATE FUNCTION hold_profile_navigation() RETURNS trigger LANGUAGE plpgsql AS $$ \
+    BEGIN IF NEW.status='pending' AND NEW.url='https://oh.milesplit.com/athletes/15005189-brice-fuller/stats' \
+    THEN PERFORM pg_advisory_xact_lock(hashtext(current_schema()),7318322); \
+    END IF; RETURN NEW; END $$; CREATE TRIGGER hold_profile_navigation BEFORE INSERT ON scrape_pages \
+    FOR EACH ROW EXECUTE FUNCTION hold_profile_navigation();";
+
 #[derive(Clone, Copy)]
 pub enum SparseCase {
     MissingMark,
@@ -68,6 +74,26 @@ pub struct Prepared {
 impl Prepared {
     pub fn page_id(&self) -> i64 {
         self.reservation.request.binding.page_id
+    }
+
+    pub fn has_navigation_to(&self, other: &Self) -> Result<bool> {
+        let expected = serde_json::to_value(&other.reservation.request.target)?;
+        for target in &self.parsed.next {
+            if serde_json::to_value(target)? == expected {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub async fn milesplit_profile_navigation(database: &Database, section: &str) -> Result<Self> {
+        let mut target = crate::page_support::profile();
+        target.url.push_str(section);
+        let body = String::from_utf8(crate::page_support::capture()?.body)?;
+        let parsed = sources::parse(&target, &body)?;
+        assert_eq!(parsed.athletes.len(), 1);
+        assert!(!parsed.performances.is_empty());
+        Self::prepare_page(database, target, body, "text/html", parsed).await
     }
 
     pub async fn athleticnet(

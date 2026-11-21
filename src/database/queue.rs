@@ -81,6 +81,9 @@ pub(super) async fn note_contact_stops(connection: &mut PgConnection) -> Result<
 
 #[tracing::instrument(skip(connection, target))]
 async fn enqueue_one(connection: &mut PgConnection, target: &Target, refresh: bool) -> Result<u64> {
+    if !refresh && target.kind != crate::model::PageKind::Contacts {
+        return batch::enqueue(connection, std::slice::from_ref(target)).await;
+    }
     Ok(sqlx::query(
         "INSERT INTO scrape_pages(page_key,source,url,cursor) \
          SELECT $1,$2,$3,$4 WHERE NOT ($6 AND EXISTS( \

@@ -79,7 +79,7 @@ async fn mark_previous_claims(
 }
 
 #[tracing::instrument(skip(connection, target))]
-pub(super) async fn review_office(
+pub(super) async fn prepare_revision(
     connection: &mut PgConnection,
     target: &Target,
     url: &str,
@@ -87,6 +87,16 @@ pub(super) async fn review_office(
     if target.kind != PageKind::Contacts {
         return Ok(());
     }
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock( \
+         hashtext(current_schema() || ':contact-school-revisions'), \
+         hashtext(jsonb_build_array($1::text,$2::text)::text)) \
+         WHERE $2::text IS NOT NULL",
+    )
+    .bind(target.source.as_str())
+    .bind(target.context.school_id.as_deref())
+    .execute(&mut *connection)
+    .await?;
     sqlx::query(
         "UPDATE contacts c SET raw=jsonb_set(c.raw,'{review_notes}', \
          COALESCE(c.raw->'review_notes','[]'::jsonb) || jsonb_build_array($5::text)) \

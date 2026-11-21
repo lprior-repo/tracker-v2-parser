@@ -147,6 +147,14 @@ async fn separate_conflicting_profile(
          FROM athlete_sources p WHERE a.id=$1 AND p.athlete_id=a.id",
     )
     .bind(previous)
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query(
+        "DELETE FROM athletes a WHERE a.id=$1 \
+         AND NOT EXISTS (SELECT 1 FROM athlete_sources p WHERE p.athlete_id=a.id) \
+         AND NOT EXISTS (SELECT 1 FROM results r WHERE r.athlete_id=a.id)",
+    )
+    .bind(previous)
     .execute(connection)
     .await?;
     Ok(true)

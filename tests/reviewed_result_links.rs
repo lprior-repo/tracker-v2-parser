@@ -1,3 +1,5 @@
+#[path = "reviewed_result_links/acquisition_scope.rs"]
+mod acquisition_scope;
 #[path = "reviewed_result_links/availability.rs"]
 mod availability;
 #[allow(dead_code)]

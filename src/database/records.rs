@@ -87,7 +87,7 @@ async fn save_profiles(
     timings
         .measure(
             Stage::ContactReview,
-            contacts::review_office(connection, target, url),
+            contacts::prepare_revision(connection, target, url),
         )
         .await?;
     timings

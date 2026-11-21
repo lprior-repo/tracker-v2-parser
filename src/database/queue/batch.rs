@@ -116,8 +116,7 @@ async fn write(connection: &mut PgConnection, rows: &[Row<'_>]) -> Result<u64> {
          SELECT incoming.page_key,incoming.source,incoming.url,incoming.cursor::jsonb \
          FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) WITH ORDINALITY \
            AS incoming(page_key,source,url,cursor,position) ORDER BY incoming.position \
-         ON CONFLICT(source,page_key) DO UPDATE \
-           SET status='pending',attempts=0,last_error=NULL,cursor=EXCLUDED.cursor WHERE FALSE",
+         ON CONFLICT(source,page_key) DO NOTHING",
     )
     .bind(keys)
     .bind(sources)

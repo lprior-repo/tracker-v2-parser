@@ -31,7 +31,7 @@ WITH missing_records AS MATERIALIZED (
         OFFSET 0
     ) AND NOT EXISTS (
         SELECT 1 FROM athlete_sources p WHERE p.athlete_id=a.id
-          AND jsonb_path_exists(p.details,'$.source_values.pages.*.pr_rows[*]')
+          AND jsonb_path_exists(p.details,'$.source_values.pages.*.pr_rows[*] ? (!exists(@ ? (@.masked.type() == "boolean" && @.masked == true)))')
         OFFSET 0
     )
 ), availability_pages AS MATERIALIZED (
@@ -70,7 +70,11 @@ WITH missing_records AS MATERIALIZED (
     WHERE p.id>$3::bigint AND (p.status IN ('failed','blocked') OR availability.id IS NOT NULL)
 ), scoped AS MATERIALIZED (
     SELECT * FROM candidates p
-    WHERE p.availability_diagnostic OR cardinality($1::text[])=0 OR upper(p.scope_state)=ANY($1::text[])
+    WHERE p.availability_diagnostic OR cardinality($1::text[])=0 OR EXISTS (
+        SELECT 1 FROM unnest($1::text[]) selected(state)
+        WHERE lower(btrim(selected.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))=
+              lower(btrim(p.scope_state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))
+    )
        OR (p.scope_state IS NULL AND COALESCE(p.context->>'school_id','')=''
            AND COALESCE(p.context->>'athlete_id','')='' AND p.cursor->>'kind' IN ('directory','contacts'))
     ORDER BY id LIMIT $4::bigint
