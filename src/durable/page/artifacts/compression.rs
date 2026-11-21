@@ -1,7 +1,10 @@
 use super::ArtifactRef;
+#[cfg(target_os = "macos")]
 use anyhow::{Result, ensure};
+#[cfg(target_os = "macos")]
+use std::fs::File;
 use std::{
-    fs::{self, File},
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -34,27 +37,30 @@ fn report_cleanup(result: std::io::Result<()>) {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(super) fn prepare(
     root: &Path,
     raw: &Path,
     reference: &ArtifactRef,
     bytes: &[u8],
 ) -> Option<Stage> {
-    #[cfg(target_os = "macos")]
-    {
-        match prepare_with(root, raw, reference, bytes, copy) {
-            Ok(stage) => stage,
-            Err(error) => {
-                tracing::debug!(%error,"artifact compression unavailable; retaining raw publication");
-                None
-            }
+    match prepare_with(root, raw, reference, bytes, copy) {
+        Ok(stage) => stage,
+        Err(error) => {
+            tracing::debug!(%error,"artifact compression unavailable; retaining raw publication");
+            None
         }
     }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _inputs = (root, raw, reference, bytes);
-        None
-    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(super) const fn prepare(
+    _root: &Path,
+    _raw: &Path,
+    _reference: &ArtifactRef,
+    _bytes: &[u8],
+) -> Option<Stage> {
+    None
 }
 
 #[cfg(target_os = "macos")]

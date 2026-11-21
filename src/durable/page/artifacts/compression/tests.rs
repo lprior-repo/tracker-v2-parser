@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Result;
 use sha2::{Digest, Sha256};
 
 fn body() -> Vec<u8> {
