@@ -266,17 +266,26 @@ impl<'a> ExportSnapshot<'a> {
             return Ok(None);
         };
         count_guard?;
+        self.read_bounded_record(id, Arc::clone(&self.record_sql))
+            .await
+            .map(Some)
+    }
+
+    async fn read_bounded_record(
+        &mut self,
+        id: i64,
+        statement: Arc<str>,
+    ) -> Result<(AthleteRecord, usize)> {
         self.check_components(id).await?;
         let budget = i64::try_from(EXPORT_BATCH_BYTES)?;
-        let row: Option<(Option<String>, i64)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(Arc::clone(&self.record_sql)))
-                .bind(&self.states)
-                .bind(&self.years)
-                .bind(id)
-                .bind(budget)
-                .fetch_optional(&mut *self.transaction)
-                .await
-                .context("loading bounded canonical athlete")?;
+        let row: Option<(Option<String>, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(statement))
+            .bind(&self.states)
+            .bind(&self.years)
+            .bind(id)
+            .bind(budget)
+            .fetch_optional(&mut *self.transaction)
+            .await
+            .context("loading bounded canonical athlete")?;
         let (document, size) =
             row.context("selected athlete disappeared inside repeatable-read snapshot")?;
         let document = document.ok_or(ExportLimitExceeded {
@@ -287,7 +296,7 @@ impl<'a> ExportSnapshot<'a> {
         })?;
         let record =
             serde_json::from_str(&document).context("decoding canonical athlete report")?;
-        Ok(Some((record, usize::try_from(size)?)))
+        Ok((record, usize::try_from(size)?))
     }
 
     async fn prefetch_athlete_ids(&mut self) -> Result<()> {

@@ -58,6 +58,15 @@ WITH selected_states AS (
         OR EXISTS (
             SELECT 1 FROM scoped_pages p WHERE p.source=r.source AND p.url=r.source_url
         )
+        OR (r.source='milesplit' AND r.raw#>>'{raw,kind}'='raw_result' AND EXISTS (
+            SELECT 1 FROM scoped_pages p
+            WHERE p.source=r.source AND p.url=r.raw#>>'{raw,source_url}'
+        ))
+        OR EXISTS (
+            SELECT 1 FROM durable_page_receipts receipt
+            JOIN scoped_pages p ON p.id=receipt.page_id
+            WHERE p.source=r.source AND receipt.capture->>'url'=r.source_url
+        )
       )
     ORDER BY r.id LIMIT $6::bigint
 ), invalid_reviewed_results AS MATERIALIZED (
@@ -73,6 +82,15 @@ WITH selected_states AS (
         )
         OR EXISTS (
             SELECT 1 FROM scoped_pages p WHERE p.source=r.source AND p.url=r.source_url
+        )
+        OR (r.source='milesplit' AND r.raw#>>'{raw,kind}'='raw_result' AND EXISTS (
+            SELECT 1 FROM scoped_pages p
+            WHERE p.source=r.source AND p.url=r.raw#>>'{raw,source_url}'
+        ))
+        OR EXISTS (
+            SELECT 1 FROM durable_page_receipts receipt
+            JOIN scoped_pages p ON p.id=receipt.page_id
+            WHERE p.source=r.source AND receipt.capture->>'url'=r.source_url
         )
         OR EXISTS (
             SELECT 1 FROM schools s JOIN selected_states selected

@@ -2,6 +2,8 @@
 mod acquisition_scope;
 #[path = "reviewed_result_links/availability.rs"]
 mod availability;
+#[path = "reviewed_result_links/redirect_scope.rs"]
+mod redirect_scope;
 #[allow(dead_code)]
 mod support;
 use anyhow::{Context, Result, ensure};

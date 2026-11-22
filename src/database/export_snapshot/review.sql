@@ -29,13 +29,9 @@ WITH missing_records AS MATERIALIZED (
         SELECT 1 FROM athlete_sources p WHERE p.athlete_id=a.id AND p.source='milesplit'
           AND jsonb_path_exists(p.details,'$.source_values.pages.*.sections[*] ? (@.attributes.id == "progression" && @.attributes.class like_regex "(^|[[:space:]])progression-cta([[:space:]]|$)")')
         OFFSET 0
-    ) AND NOT EXISTS (
-        SELECT 1 FROM athlete_sources p WHERE p.athlete_id=a.id
-          AND jsonb_path_exists(p.details,'$.source_values.pages.*.pr_rows[*] ? (!exists(@ ? (@.masked.type() == "boolean" && @.masked == true)))')
-        OFFSET 0
     )
 ), availability_pages AS MATERIALIZED (
-    SELECT min(p.id) AS id,min(school_state.state) AS scope_state FROM scrape_pages p
+    SELECT min(p.id) AS id,min(school_state.state) AS scope_state,a.athlete_id FROM scrape_pages p
     JOIN athlete_sources a ON a.source=p.source AND a.source_id=p.cursor->'context'->>'athlete_id'
     JOIN unavailable_athletes unavailable ON unavailable.id=a.athlete_id
     JOIN school_state_values school_state ON school_state.athlete_id=a.athlete_id
@@ -49,6 +45,7 @@ WITH missing_records AS MATERIALIZED (
 ), candidates AS MATERIALIZED (
     SELECT p.*, p.cursor->'context' AS context,
            availability.id IS NOT NULL AS availability_diagnostic,
+           availability.athlete_id AS availability_athlete_id,
            s.name AS observed_school, a.name AS observed_athlete,
            COALESCE(availability.scope_state,NULLIF(btrim(p.cursor->'context'->>'acquisition_state'),''),
                     NULLIF(btrim(p.cursor->'context'->>'state'),''),
@@ -79,7 +76,13 @@ WITH missing_records AS MATERIALIZED (
            AND COALESCE(p.context->>'athlete_id','')='' AND p.cursor->>'kind' IN ('directory','contacts'))
     ORDER BY id LIMIT $4::bigint
 ), documents AS (
-    SELECT id, jsonb_build_object(
+    SELECT id,
+    CASE WHEN availability_diagnostic AND EXISTS (
+        SELECT 1 FROM athlete_sources p WHERE p.athlete_id=scoped.availability_athlete_id AND p.source='milesplit'
+          AND jsonb_path_exists(p.details,'$.source_values.pages.*.pr_rows[*] ? (!exists(@ ? (@.masked.type() == "boolean" && @.masked == true)))')
+        OFFSET 0
+    ) THEN availability_athlete_id END AS inspect_athlete_id,
+    jsonb_build_object(
         'checkpoint_id',id,'source',source,'kind',cursor->>'kind','state',COALESCE(upper(scope_state),''),
         'school',school_name,'school_source_id',school_source_id,
         'athlete',COALESCE(observed_athlete,''),'athlete_source_id',COALESCE(context->>'athlete_id',''),
@@ -93,6 +96,8 @@ WITH missing_records AS MATERIALIZED (
     ) AS document FROM scoped
     LEFT JOIN LATERAL (SELECT state,retry_at_ms FROM durable_page_operations WHERE page_id=scoped.id ORDER BY created_at DESC,operation_id DESC LIMIT 1) durable ON TRUE
 )
-SELECT CASE WHEN octet_length(document::text)<=65536 THEN document::text END,
-       octet_length(document::text)::bigint
+SELECT id AS checkpoint_id,
+       CASE WHEN octet_length(document::text)<=65536 THEN document::text END AS document,
+       octet_length(document::text)::bigint AS bytes,
+       inspect_athlete_id AS athlete_id
 FROM documents ORDER BY id

@@ -2,6 +2,14 @@
 
 The workload runs on a shared 16 GiB Mac with an 8 GiB scraper stack target. Changes must preserve exact result identities, retained source evidence, manual research, access stops, the shared three-acquisition budget, page/domain/receipt atomicity and durable workflow recovery. A configured 3 RPS ceiling is an admission limit, not a throughput guarantee.
 
+## PostgreSQL release target
+
+Native deployment and current qualification target PostgreSQL 18 with the current 18.x minor release. On November 22, 2026, that release is 18.7. PostgreSQL 19.0 is the newest major release according to the official [version policy](https://www.postgresql.org/support/versioning/); changing the major deployment target requires its own qualification. The earlier November 21 audits retain their actual PostgreSQL 18.1 evidence.
+
+Verify the running database with `SELECT version()`, `SHOW server_version`, and `SHOW server_version_num`. The November 22 isolated audit server reports 18.7 and 180007, with an ordinary application role, eight application-pool connections, forty server connections, 128 MiB shared buffers, 4 MiB work memory, and durability settings enabled. Its `pg_stat_statements` extension was rebuilt from the same 18.7 source tree.
+
+Read the [18.7 migration notes](https://www.postgresql.org/docs/18/release-18-7.html) before updating an existing deployment, including the linked 18.6 notes when upgrading from an earlier minor. The fresh audit cluster does not qualify an in-place production upgrade. Existing affected indexes, C extensions, and incremental backups require the release-specific review; do not apply a blanket reindex or change durability settings as a performance shortcut.
+
 ## Query and transaction boundaries
 
 Two additive MileSplit HASH indexes support exact source-result ID and source-URL reconciliation. Original source, equality, JSON kind/mask, order and limit predicates remain authoritative; PostgreSQL rechecks hash collisions. HASH avoids a B-tree tuple-size failure on untrusted long identifiers. No uniqueness or historical result-key assumption is introduced. A raw meet row is inspected only if the exact lookup reaches it; unlinked observations are retained.
@@ -30,13 +38,19 @@ Non-contact, non-refresh checkpoint rediscovery uses `ON CONFLICT DO NOTHING`. A
 
 Run `cargo test --locked --test concurrent_identity_split --test concurrent_contact_revisions --test concurrent_checkpoint_enqueue --test persistence_batches -- --nocapture` with isolated PostgreSQL schemas. These cases exercise overlapping splits, retained review history, coach and office revisions, checkpoint ownership, actual parsed profile navigation, receipt replay and queue parity.
 
+Reviewed identity approvals and subsequent captures share Rust's Unicode trim/lowercase normalization. Do not substitute locale-dependent SQL `lower(btrim(...))`: it can invalidate an unchanged approved Unicode name. Group validation reads at most three narrow rows and accepts an exact two-profile group with matching ownership, audit membership, manifest digest and approved names. This adds no database round trips or locks. Run `cargo test --locked --test reviewed_identity_unicode --test athlete_identity_review --test athlete_identity_boundaries -- --nocapture` to retain the approved-alias and unapproved-name boundaries.
+
 ## Review export scope and public evidence
 
 Review selection compares requested and stored state values with the same Unicode whitespace and case normalization used by athlete/issue exports. Acquisition-state precedence and displayed source evidence remain authoritative. An invalid reviewed result link stays visible in its represented-school or acquisition-page scope as well as the current target scope. The invalid-link phase uses `EXISTS` predicates and retains one issue per result when multiple selected states match.
 
+Result acquisition scope distinguishes requested checkpoint URLs from final capture URLs. Exact, same-source committed receipt associations and parser-owned MileSplit raw request evidence supplement direct URL matching in both result-issue phases. Older receipts remain eligible after recapture; multiple receipts do not multiply issues. Four phase-2 unassigned-result plans on PostgreSQL 18.7 inspected the receipt relation once per query across 100,000 observations and 50,000 receipts. A trial capture-URL hash index was unused and was not added. Phase 3 has correctness coverage but no separate plan measurement here. This establishes the measured plans, not a guarantee for every production distribution or permanent per-result acquisition lineage after all relevant current URLs have been overwritten.
+
 A retained PR row marked with the JSON boolean `masked: true` is not evidence that a public mark was captured. Masked-only profile evidence therefore keeps the source-availability review diagnostic when progression is restricted. Missing, null and non-boolean legacy mask metadata retain the existing unmasked interpretation; the query does not infer or recover a hidden mark.
 
-Run `cargo test --locked --test export_review_state_scope --test export_review_masked_profile --test reviewed_result_links --test review_source_unavailable -- --nocapture` to verify state normalization, transfer invalidation, deduplication, parser-derived masked evidence and legacy mask values.
+Unmasked metadata can still contain an empty or placeholder mark. Availability candidates with potentially public rows are checked against the same bounded PR projection used by the workbook, preserving legacy source evidence. Each inspection retains the component and original-record size limits, and the examined keyset advances across rejected public-mark candidates. This path can inspect all selected availability candidates before returning an empty batch; its additional record queries and parsing are a correctness cost, with no claimed performance improvement.
+
+Run `cargo test --locked --test export_review_state_scope --test export_review_masked_profile --test export_review_placeholder_profile --test export_redirected_result_scope --test reviewed_result_links --test review_source_unavailable -- --nocapture` to verify state normalization, redirect/transfer scope, deduplication, parser-derived public evidence, legacy mask values and pagination across rejected candidates.
 
 ## Export observation count guards
 
@@ -60,7 +74,7 @@ There is no approved age-based deletion rule. Cold evidence remains recoverable 
 
 Retain the SQLx pool cap of eight, PostgreSQL connection cap of forty and global work_mem of 4 MiB. The coverage selector uses a short read-only transaction with local work_mem of 16 MiB. Its restored-snapshot alternating trial reduced median latency from 969 to 845 ms and eliminated temporary-file I/O; real PostgreSQL tests verify restoration of the pooled backend's 4 MiB default after success, failure and cancellation. The optimized selector preserved all 10,292 ordered candidates and reduced the preceding baseline median from 2,076 to 977 ms before the local-memory change.
 
-The 512 MiB shared-buffer trial removed buffer reads without a convincing latency gain under whole-host compression churn, so the 128 MiB baseline remains. A larger candidate requires separate measurement. Whole-host compression/swap deltas, available disk and runtime latency decide acceptance; summed backend RSS is not unique physical memory. Selection batching saved only two startup queries per 2,000-page rolling batch and could change greedy exclusions, so it was withheld; no frontier cache or planner override is installed.
+The 512 MiB shared-buffer trial removed buffer reads without a convincing latency gain under whole-host compression churn, so the 128 MiB baseline remains. A larger candidate requires separate measurement. Whole-host compression/swap deltas, available disk and runtime latency decide acceptance; summed backend RSS is not unique physical memory. Selection batching saved only two startup queries per 2,000-page rolling batch and could change greedy exclusions, so selection-batch prefetch was withheld. The existing selector retains its snapshot-validated compiled candidate cache; no planner override was installed.
 
 Prepare configuration from fresh read-only PostgreSQL 18 observations, exact prior-file SHA256 and private owned files. Preserve existing preload entries, add pg_stat_statements only during a backed-up controlled restart, and verify effective settings and pending_restart afterward. Query metrics stay private. Maintain durability settings on. Per-table autovacuum/analyze changes require relation-specific churn evidence; avoid blanket VACUUM FULL, REINDEX, statistics resets or planner forcing.
 

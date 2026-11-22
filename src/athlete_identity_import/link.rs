@@ -5,11 +5,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::PgConnection;
 
-use super::{
-    Report,
-    manifest::{Reviewed, normalized},
-};
-use crate::database::reviewed_identity;
+use super::{Report, manifest::Reviewed};
+use crate::database::reviewed_identity::{self, normalized};
 
 #[derive(sqlx::FromRow, Serialize)]
 struct Existing {

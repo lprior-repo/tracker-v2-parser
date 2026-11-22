@@ -1,7 +1,37 @@
 use anyhow::{Result, ensure};
+use serde_json::Value;
 use sqlx::PgConnection;
 
 use crate::model::{Athlete, PageContext, PageKind, Source, Target};
+
+#[derive(sqlx::FromRow)]
+struct ReviewedProfile {
+    athlete_id: i64,
+    manifest_sha256: Option<String>,
+    name: Option<String>,
+    accepted_names: Option<Value>,
+    valid: bool,
+}
+
+pub fn normalized(value: &str) -> String {
+    value.trim().to_lowercase()
+}
+
+fn accepted(profile: &ReviewedProfile) -> bool {
+    let Some(name) = profile.name.as_deref() else {
+        return false;
+    };
+    let name = normalized(name);
+    profile
+        .accepted_names
+        .as_ref()
+        .and_then(Value::as_array)
+        .is_some_and(|names| {
+            names
+                .iter()
+                .any(|value| value.as_str() == Some(name.as_str()))
+        })
+}
 
 pub fn validate_profile_url(source: Source, expected: &str, url: &str) -> Result<()> {
     let target = Target::get(
@@ -24,18 +54,29 @@ pub fn validate_profile_url(source: Source, expected: &str, url: &str) -> Result
 
 #[tracing::instrument(skip(connection, profiles))]
 pub(super) async fn same_group(connection: &mut PgConnection, profiles: &[i64]) -> Result<bool> {
-    sqlx::query_scalar(
-        "SELECT count(*)=2 AND count(DISTINCT p.athlete_id)=1 \
-         AND count(DISTINCT p.details#>>'{_reviewed_identity,manifest_sha256}')=1 \
-         AND COALESCE(bool_and(COALESCE( \
+    let rows = sqlx::query_as::<_, ReviewedProfile>(
+        "SELECT p.athlete_id,p.name, \
+         p.details#>>'{_reviewed_identity,manifest_sha256}' AS manifest_sha256, \
+         p.details#>'{_reviewed_identity,accepted_names}' AS accepted_names, \
+         COALESCE( \
            p.details#>>'{_reviewed_identity,reviewed_by}'='user' \
            AND p.details#>>'{_reviewed_identity,canonical_athlete_id}'=p.athlete_id::text \
            AND jsonb_array_length(p.details#>'{_reviewed_identity,profiles}')=2 \
            AND p.details#>'{_reviewed_identity,profiles}' @> jsonb_build_array(jsonb_build_object('source',p.source,'source_id',p.source_id)) \
-           AND p.details#>'{_reviewed_identity,accepted_names}' @> jsonb_build_array(lower(btrim(p.name))) \
-         ,FALSE)),FALSE) FROM athlete_sources p WHERE p.athlete_id IN \
-         (SELECT athlete_id FROM athlete_sources WHERE id=ANY($1))",
-    ).bind(profiles).fetch_one(connection).await.map_err(Into::into)
+         ,FALSE) AS valid FROM athlete_sources p WHERE p.athlete_id IN \
+         (SELECT athlete_id FROM athlete_sources WHERE id=ANY($1)) LIMIT 3",
+    ).bind(profiles).fetch_all(connection).await?;
+    let Some(first) = rows.first() else {
+        return Ok(false);
+    };
+    Ok(rows.len() == 2
+        && first.manifest_sha256.is_some()
+        && rows.iter().all(|row| {
+            row.valid
+                && row.athlete_id == first.athlete_id
+                && row.manifest_sha256 == first.manifest_sha256
+                && accepted(row)
+        }))
 }
 
 #[tracing::instrument(skip(connection, name))]
@@ -47,8 +88,8 @@ pub(super) async fn accepts_name(
     if !same_group(connection, &[profile]).await? {
         return Ok(false);
     }
-    sqlx::query_scalar("SELECT details#>'{_reviewed_identity,accepted_names}' @> jsonb_build_array(lower(btrim($2::text))) FROM athlete_sources WHERE id=$1")
-        .bind(profile).bind(name).fetch_one(connection).await.map_err(Into::into)
+    sqlx::query_scalar("SELECT details#>'{_reviewed_identity,accepted_names}' @> jsonb_build_array($2::text) FROM athlete_sources WHERE id=$1")
+        .bind(profile).bind(normalized(name)).fetch_one(connection).await.map_err(Into::into)
 }
 
 #[tracing::instrument(skip(connection, observed))]

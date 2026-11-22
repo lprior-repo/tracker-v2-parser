@@ -84,6 +84,10 @@ pub(super) fn prepare(record: &AthleteRecord) -> Result<Prepared> {
     })
 }
 
+pub fn has_public_marks(record: &AthleteRecord) -> Result<bool> {
+    Ok(!prs::prepare(record)?.is_empty())
+}
+
 pub(super) fn headers(columns: &BTreeSet<String>) -> Vec<String> {
     HEADERS
         .iter()

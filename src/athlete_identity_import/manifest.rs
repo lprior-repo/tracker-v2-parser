@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::model::Source;
+use crate::{database::reviewed_identity::normalized, model::Source};
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -29,10 +29,6 @@ pub(super) struct Manifest {
 pub(super) struct Reviewed {
     pub manifest: Manifest,
     pub sha256: String,
-}
-
-pub(super) fn normalized(value: &str) -> String {
-    value.trim().to_lowercase()
 }
 
 impl Manifest {

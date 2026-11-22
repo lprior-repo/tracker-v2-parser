@@ -15,6 +15,7 @@ pub use prepared::{
     PreparedChunk, prepare_chunk, verify_chunk_source, verify_chunks, verify_chunks_with_review,
 };
 pub use review::{ReviewRow, ReviewStatus};
+pub(crate) use single_sheet::has_public_marks;
 pub use types::{ExportIssue, ExportLayout, ExportOptions, MAX_EXPORT_BYTES};
 
 use crate::model::AthleteRecord;

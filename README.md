@@ -11,7 +11,10 @@ entry point, restart semantics, fixed workbook delivery and native recovery test
 
 ## Prerequisites
 
-- PostgreSQL and a database URL with migration permission for scraping/imports.
+- PostgreSQL 18, kept on the current 18.x minor release, and a database URL with
+  migration permission for scraping/imports. The November 22, 2026 qualification
+  uses PostgreSQL 18.7 (`server_version_num = 180007`); verify the running server
+  with `SHOW server_version` rather than relying on the client executable version.
   Export requires SELECT access to a compatible schema and `_sqlx_migrations`;
   it does not apply migrations or repair the database.
 - The Rust toolchain pinned in `rust-toolchain.toml`.
@@ -421,7 +424,7 @@ Every existing and new school receives a unique, persistent PostgreSQL UUID.
 Existing numeric foreign keys stay intact. The spreadsheet includes canonical
 school UUIDs; an imported NCES row and an unlinked athletics-site row retain
 separate UUIDs until reliable identity evidence establishes that they are the
-same school. PostgreSQL 13 or newer is required for `gen_random_uuid()`.
+same school. PostgreSQL 18 supplies `gen_random_uuid()` for UUID generation.
 
 To enrich already-observed schools without contacting providers, supply both a
 local reference directory CSV and its manifest:
