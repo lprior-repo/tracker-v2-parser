@@ -53,10 +53,10 @@ fixture replay and imports also run as recorded Restate operations.
 cargo run -- durable --help
 cargo run -- durable operation --help
 ```
-The checked-in configuration starts with Wisconsin (`WI`), graduation year 2027,
-season 2026, a 1,000-page checkpoint budget, and MileSplit enabled. Add states to the `states` array after
-checking the Wisconsin acquisition/export loop. Athletic.net is disabled in this
-starting configuration; enable it only when ordinary public access is available.
+The checked-in configuration targets Michigan, Minnesota, Iowa, Illinois, and
+Colorado for graduation year 2028. Discovery uses competition season 2026,
+independently of graduation year. The starter budget is 1,000 pages with
+MileSplit enabled. Enable Athletic.net only when ordinary public access is available.
 Changing states restricts resumed checkpoint acquisition and unfinished-work
 reporting without deleting or resetting saved data from other states. Unknown
 checkpoint scope is not permission to start an unrelated national crawl.
@@ -842,8 +842,8 @@ their contents so security assertions exercise the selected path itself.
 
 A fresh database does not restore the real dataset. Durable source access stops
 apply across machines and databases. The checked-in starting settings keep
-Athletic.net disabled, Wisconsin scope, one request per second and a 1,000-page
-budget. A production operator can choose a 2,000-page batch to reduce export
+Athletic.net disabled, one request per second and a 1,000-page budget.
+A production operator can choose a 2,000-page batch to reduce export
 pauses without changing those checked-in defaults.
 
 For an explicitly requested fresh collection of public results, an operator can
@@ -930,11 +930,12 @@ start a new generation; a running generation keeps its frozen configuration.
 | `export.rows_per_file` | Single-sheet athlete capacity, at most 1,000,000 |
 
 ```sh
-env -u CI moon run pipeline:run -- durable crawl --config config/runs/next-states.toml --generation next-states-2027-20261030
+env -u CI moon run pipeline:run -- durable crawl --config config/runs/next-states.toml --generation next-states-2028-unique-run
 ```
 
-For 2028/2029, copy a run profile, set `graduation_years = [2028, 2029]` and choose
-a different `export.name`, such as `next-states-2028-2029`. No Rust changes are
+For a combined 2028/2029 cohort, copy a run profile, set
+`graduation_years = [2028, 2029]` and choose a different `export.name`, such as
+`next-states-2028-2029`. No Rust changes are
 needed. Keep years together in one campaign per state set: overlapping year runs
 share school/unknown-year work and must not compete for the same checkpoints.
 Optional `--hours`, `--max-batches` and `--cooldown-seconds` override the TOML values.

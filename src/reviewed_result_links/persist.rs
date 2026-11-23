@@ -56,6 +56,7 @@ struct TargetRow {
     profile_name: Option<String>,
     profile_school_id: Option<i64>,
     profile_gender: Option<String>,
+    latest_profile_gender: Option<String>,
     profile_grade: Option<String>,
     profile_graduation_year: Option<i32>,
     athlete_name: Option<String>,
@@ -139,6 +140,7 @@ async fn lock_target(connection: &mut PgConnection, link: &ResultLink) -> Result
     sqlx::query_as::<_, TargetRow>(
         "SELECT p.id AS athlete_source_id,p.source,p.source_id,p.profile_url,p.athlete_id, \
          p.name AS profile_name,p.school_id AS profile_school_id,p.gender AS profile_gender, \
+         p.details->>'gender' AS latest_profile_gender, \
          p.grade AS profile_grade,p.graduation_year AS profile_graduation_year, \
          a.name AS athlete_name,a.gender AS athlete_gender, \
          a.graduation_year AS athlete_graduation_year,a.school_id AS athlete_school_id, \
@@ -180,6 +182,7 @@ fn validate_match(link: &ResultLink, result: &ResultRow, target: &TargetRow) -> 
         result.gender.as_deref(),
         &result.event,
         target.profile_gender.as_deref(),
+        target.latest_profile_gender.as_deref(),
         target.athlete_gender.as_deref(),
     )?;
     validate_target(link, target)
@@ -189,27 +192,21 @@ fn validate_gender_compatibility(
     result_gender: Option<&str>,
     event: &str,
     profile_gender: Option<&str>,
+    latest_profile_gender: Option<&str>,
     canonical_gender: Option<&str>,
 ) -> Result<()> {
-    let result_gender = known_gender(result_gender);
-    let event_gender = event_gender(event);
-    let profile_gender = known_gender(profile_gender);
-    let canonical_gender = known_gender(canonical_gender);
-    let known = [
-        result_gender,
-        event_gender,
-        profile_gender,
-        canonical_gender,
+    let mut known = [
+        known_gender(result_gender),
+        event_gender(event),
+        known_gender(profile_gender),
+        known_gender(latest_profile_gender),
+        known_gender(canonical_gender),
     ]
     .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
+    .flatten();
+    let first = known.next();
     ensure!(
-        known.windows(2).all(|pair| {
-            pair.first()
-                .zip(pair.get(1))
-                .is_some_and(|(left, right)| left == right)
-        }),
+        known.all(|gender| Some(gender) == first),
         "reviewed result, profile, and canonical athlete genders conflict"
     );
     Ok(())

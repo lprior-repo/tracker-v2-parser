@@ -20,6 +20,15 @@ pub(super) fn id(value: &Value, key: &str) -> Option<String> {
     text(value, key).filter(|s| s.parse::<u64>().is_ok_and(|n| n > 0))
 }
 
+pub(super) fn native_id(row: &Value, key: &str) -> Option<u64> {
+    match row.get(key)? {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+    .filter(|id| *id > 0)
+}
+
 pub(super) fn array<'a>(value: &'a Value, key: &str) -> Result<&'a [Value]> {
     value
         .get(key)
@@ -111,14 +120,16 @@ pub(super) fn source_row(row: &Value, coordinate: &str) -> String {
     text(row, "shortCode")
         .or_else(|| text(row, "ShortCode"))
         .map_or_else(
-            || {
-                format!(
-                    "{coordinate}:content:{:x}",
-                    Sha256::digest(row.to_string().as_bytes())
-                )
-            },
+            || positional_source_row(row, coordinate),
             |id| format!("shortCode:{id}"),
         )
+}
+
+pub(super) fn positional_source_row(row: &Value, coordinate: &str) -> String {
+    format!(
+        "{coordinate}:content:{:x}",
+        Sha256::digest(row.to_string().as_bytes())
+    )
 }
 
 pub(super) fn performance(
@@ -164,8 +175,18 @@ pub(super) fn unassigned(
     sport: Sport,
     is_relay: bool,
 ) -> UnassignedResult {
+    unassigned_with_id(row, event, sport, is_relay, id(row, "IDResult"))
+}
+
+pub(super) fn unassigned_with_id(
+    row: &Value,
+    event: String,
+    sport: Sport,
+    is_relay: bool,
+    result_id: Option<String>,
+) -> UnassignedResult {
     UnassignedResult {
-        result_id: id(row, "IDResult"),
+        result_id,
         source_row: None,
         event,
         mark: row

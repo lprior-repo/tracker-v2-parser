@@ -1,5 +1,5 @@
 states = ["MI", "MN", "IA", "IL", "CO"]
-graduation_years = [2027]
+graduation_years = [2028]
 season = 2026
 
 [run]
@@ -24,7 +24,7 @@ enabled = true
 transport = "http"
 
 [export]
-name = "next-states-2027"
+name = "next-states-2028"
 review_sheet = true
 layout = "single_sheet"
 rows_per_file = 1000000

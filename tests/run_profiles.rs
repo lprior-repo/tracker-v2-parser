@@ -3,11 +3,17 @@ use track_scrapper_v2::config::Config;
 
 #[test]
 fn configured_run_profiles_keep_scope_and_future_cohorts_in_data() -> Result<()> {
+    let starter = Config::parse(include_str!("../config.toml"))?;
     let wisconsin = Config::parse(include_str!("../config/runs/wisconsin.toml"))?;
     let mut others = Config::parse(include_str!("../config/runs/next-states.toml"))?;
     assert_eq!(wisconsin.states, ["WI"]);
     assert_eq!(others.states, ["CO", "IA", "IL", "MI", "MN"]);
-    assert_eq!(others.graduation_years, [2027]);
+    assert_eq!(starter.states, others.states);
+    assert_eq!(
+        (starter.graduation_years.as_slice(), starter.season),
+        (&[2028][..], 2026)
+    );
+    assert_eq!(others.graduation_years, [2028]);
     others.graduation_years = vec![2029, 2028, 2029];
     others.validate()?;
     assert_eq!(others.graduation_years, [2028, 2029]);

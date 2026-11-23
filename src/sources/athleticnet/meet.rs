@@ -13,6 +13,8 @@ use super::{API, api_target, athlete_target, competition, event_types, scope, va
 struct ResultsContext<'a> {
     target: &'a Target,
     body: &'a Value,
+    sport: Sport,
+    repeated_ids: BTreeMap<u64, bool>,
     legs: BTreeMap<u64, Vec<&'a Value>>,
     competition: Option<&'a CompetitionEvidence>,
 }
@@ -73,6 +75,8 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
     let context = ResultsContext {
         target,
         body,
+        sport,
+        repeated_ids: repeated_result_ids(blocks),
         legs: relay_index(body),
         competition: competition::validated(target),
     };
@@ -114,12 +118,26 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
     Ok(page)
 }
 
+fn repeated_result_ids(blocks: &[Value]) -> BTreeMap<u64, bool> {
+    blocks
+        .iter()
+        .filter_map(|block| block.get("results").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|row| v::native_id(row, "IDResult"))
+        .fold(BTreeMap::new(), |mut ids, id| {
+            ids.entry(id)
+                .and_modify(|repeated| *repeated = true)
+                .or_insert(false);
+            ids
+        })
+}
+
 fn relay_index(body: &Value) -> BTreeMap<u64, Vec<&Value>> {
     body.get("relayLegs")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|leg| Some((leg.get("ResultID")?.as_u64()?, leg)))
+        .filter_map(|leg| v::native_id(leg, "ResultID").map(|id| (id, leg)))
         .fold(BTreeMap::new(), |mut index, (id, leg)| {
             index.entry(id).or_default().push(leg);
             index
@@ -146,6 +164,8 @@ fn retain_block(
     let ResultsContext {
         target,
         body,
+        sport,
+        repeated_ids,
         legs,
         competition,
     } = context;
@@ -163,6 +183,21 @@ fn retain_block(
             let relay = label.to_ascii_lowercase().contains("relay")
                 || block.get("isPersonal").and_then(Value::as_bool) == Some(false)
                 || row.get("PersonalEvent").and_then(Value::as_bool) == Some(false);
+            let coordinate = format!("flatEvents:{block_ordinal}:results:{ordinal}");
+            if v::native_id(row, "IDResult")
+                .and_then(|id| repeated_ids.get(&id))
+                .copied()
+                == Some(true)
+            {
+                let mut result = v::unassigned_with_id(row, event, *sport, relay, None);
+                contextualize_unassigned(target, &mut result);
+                result.source_row = Some(v::positional_source_row(row, &coordinate));
+                if relay {
+                    populate_relay(&mut result, relay_legs(legs, row), None);
+                }
+                page.unassigned_results.push(result);
+                return;
+            }
             if relay {
                 retain_relay(
                     target,
@@ -176,10 +211,7 @@ fn retain_block(
             } else {
                 retain_individual(target, block, row, &event, &mut entities.athletes, page);
             }
-            let source_row = v::source_row(
-                row,
-                &format!("flatEvents:{block_ordinal}:results:{ordinal}"),
-            );
+            let source_row = v::source_row(row, &coordinate);
             if page.performances.len() > performances {
                 if let Some(result) = page.performances.last_mut() {
                     result.source_row = Some(source_row);
@@ -271,13 +303,25 @@ fn retain_relay(
     let Some(sport) = target.context.sport else {
         return;
     };
-    let legs = row
-        .get("IDResult")
-        .and_then(Value::as_u64)
-        .and_then(|id| index.get(&id));
     let mut result = unassigned(target, row, label, sport, true);
+    populate_relay(&mut result, relay_legs(index, row), Some((block, athletes)));
+    if result.members.is_empty() {
+        page.notes.push(format!("Relay result {:?} has no published athlete legs; relay-team identity was not made a person", result.result_id));
+    }
+    page.unassigned_results.push(result);
+}
+
+fn relay_legs<'a>(index: &'a BTreeMap<u64, Vec<&Value>>, row: &Value) -> Option<&'a [&'a Value]> {
+    v::native_id(row, "IDResult").and_then(|id| index.get(&id).map(Vec::as_slice))
+}
+
+fn populate_relay(
+    result: &mut UnassignedResult,
+    legs: Option<&[&Value]>,
+    mut profiles: Option<(&Value, &mut BTreeMap<String, Athlete>)>,
+) {
     let mut retained = BTreeSet::new();
-    legs.into_iter().flatten().copied().for_each(|leg| {
+    legs.into_iter().flatten().for_each(|leg| {
         let identity = v::id(leg, "AthleteID");
         let name = v::text(leg, "Name").filter(|s| !s.contains(['*', '<', '•']));
         if let Some(member) = identity
@@ -287,7 +331,8 @@ fn retain_relay(
         {
             retained.insert(member);
         }
-        let (Some(id), Some(name)) = (identity, name) else {
+        let (Some(id), Some(name), Some((block, athletes))) = (identity, name, profiles.as_mut())
+        else {
             return;
         };
         let athlete = Athlete {
@@ -296,19 +341,19 @@ fn retain_relay(
             )),
             id: id.clone(),
             name,
-            school_id: v::id(row, "TeamID"),
+            school_id: v::id(&result.raw, "TeamID"),
             gender: v::gender(block.get("Gender").and_then(Value::as_str)),
             grade: v::grade(leg, "ShortDesc"),
             ..Athlete::default()
         };
         athletes.entry(id).or_insert(athlete);
     });
-    if retained.is_empty() {
-        page.notes.push(format!("Relay result {:?} has no published athlete legs; relay-team identity was not made a person", result.result_id));
-    }
+    let row = std::mem::take(&mut result.raw);
     result.members = retained.into_iter().collect();
-    result.raw = serde_json::json!({"row":row,"relayLegs":legs});
-    page.unassigned_results.push(result);
+    result.raw = Value::Object(serde_json::Map::from_iter([
+        ("row".to_owned(), row),
+        ("relayLegs".to_owned(), serde_json::json!(legs)),
+    ]));
 }
 
 fn unassigned(
@@ -319,9 +364,13 @@ fn unassigned(
     is_relay: bool,
 ) -> UnassignedResult {
     let mut result = v::unassigned(row, label.to_owned(), sport, is_relay);
+    contextualize_unassigned(target, &mut result);
+    result
+}
+
+fn contextualize_unassigned(target: &Target, result: &mut UnassignedResult) {
     result.meet_id.clone_from(&target.context.subject_id);
     if result.date.is_none() {
         result.date.clone_from(&target.context.meet_date);
     }
-    result
 }

@@ -1,9 +1,13 @@
-WITH school_links AS (
-    SELECT DISTINCT p.athlete_id, p.school_id,
+WITH school_claims AS (
+    SELECT p.athlete_id, p.school_id,
            COALESCE((p.details#>>'{source_values,current_affiliation,school_state_unverified}')::boolean
                AND p.details#>>'{source_values,current_affiliation,unverified_school_state}'=s.state,FALSE) AS state_unverified
     FROM athlete_sources p JOIN schools s ON s.id=p.school_id
     WHERE p.school_id IS NOT NULL
+), school_links AS (
+    SELECT athlete_id,school_id,bool_and(state_unverified) AS state_unverified,
+           bool_or(state_unverified) AS has_unverified_state
+    FROM school_claims GROUP BY athlete_id,school_id
 ), school_state_values AS (
     SELECT sl.athlete_id,
            lower(btrim(CASE WHEN sl.state_unverified THEN NULL ELSE s.state END, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) AS state
@@ -19,7 +23,7 @@ WITH school_links AS (
     GROUP BY athlete_id
 ), selected AS (
     SELECT a.*,
-           a.needs_review OR EXISTS (SELECT 1 FROM school_links sl WHERE sl.athlete_id=a.id AND sl.state_unverified)
+           a.needs_review OR EXISTS (SELECT 1 FROM school_links sl WHERE sl.athlete_id=a.id AND sl.has_unverified_state)
                OR NOT EXISTS (SELECT 1 FROM school_links sl WHERE sl.athlete_id = a.id)
                OR (NULLIF(btrim(a.state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'), '') IS NULL AND NOT COALESCE(ss.has_state, false))
                OR a.graduation_year IS NULL AS report_needs_review

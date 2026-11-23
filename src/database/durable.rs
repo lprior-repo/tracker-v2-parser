@@ -1,3 +1,4 @@
+mod checkpoint;
 mod effects;
 mod exclusion;
 mod lineage;

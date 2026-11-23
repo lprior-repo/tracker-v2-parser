@@ -126,6 +126,8 @@ impl Database {
             "invalid durable failure detail"
         );
         let mut transaction = self.pool.begin().await?;
+        super::super::queue::lock_contact_target(&mut transaction, &reservation.request.target)
+            .await?;
         lock_reservation(&mut transaction, reservation).await?;
         let existing: Option<serde_json::Value> =
             sqlx::query_scalar("SELECT outcome FROM durable_page_attempts WHERE attempt_id=$1")
@@ -144,7 +146,7 @@ impl Database {
             id: reservation.request.binding.page_id,
             target: reservation.request.target.clone(),
         };
-        super::super::queue::fail(
+        super::super::queue::fail_locked(
             &mut transaction,
             &job,
             capture,

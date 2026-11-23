@@ -9,11 +9,39 @@ use futures::{TryStreamExt, stream};
 use sqlx::{PgConnection, PgPool};
 
 use crate::{
-    model::{Capture, Target},
+    model::{Capture, PageKind, Target},
     transport::validate_target,
 };
 
 use super::{Job, JobClass, keys};
+
+pub(super) fn has_contacts(targets: &[Target]) -> bool {
+    targets
+        .iter()
+        .any(|target| target.kind == PageKind::Contacts)
+}
+
+#[tracing::instrument(skip(connection))]
+pub(super) async fn lock_contacts(connection: &mut PgConnection) -> Result<()> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtext(current_schema() || ':contact-checkpoint-queue'),0)",
+    )
+    .execute(connection)
+    .await
+    .context("locking contact checkpoint queue")?;
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, target))]
+pub(super) async fn lock_contact_target(
+    connection: &mut PgConnection,
+    target: &Target,
+) -> Result<()> {
+    if target.kind == PageKind::Contacts {
+        lock_contacts(connection).await?;
+    }
+    Ok(())
+}
 
 #[tracing::instrument(skip(connection, targets))]
 pub(super) async fn enqueue(
@@ -21,28 +49,33 @@ pub(super) async fn enqueue(
     targets: &[Target],
     refresh: bool,
 ) -> Result<u64> {
-    let count = enqueue_rows(connection, targets, refresh).await?;
-    if targets
-        .iter()
-        .any(|target| target.kind == crate::model::PageKind::Contacts)
-    {
+    if has_contacts(targets) {
+        lock_contacts(connection).await?;
+    }
+    enqueue_locked(connection, targets, refresh).await
+}
+
+#[tracing::instrument(skip(connection, targets))]
+pub(super) async fn enqueue_locked(
+    connection: &mut PgConnection,
+    targets: &[Target],
+    refresh: bool,
+) -> Result<u64> {
+    let count = enqueue_rows_locked(connection, targets, refresh).await?;
+    if has_contacts(targets) {
         note_contact_stops(connection).await?;
     }
     Ok(count)
 }
 
 #[tracing::instrument(skip(connection, targets))]
-pub(super) async fn enqueue_rows(
+pub(super) async fn enqueue_rows_locked(
     connection: &mut PgConnection,
     targets: &[Target],
     refresh: bool,
 ) -> Result<u64> {
     targets.iter().try_for_each(validate_target)?;
-    if !refresh
-        && targets
-            .iter()
-            .all(|target| target.kind != crate::model::PageKind::Contacts)
-    {
+    if !refresh && !has_contacts(targets) {
         return batch::enqueue(connection, targets).await;
     }
     let (_, count) = stream::iter(targets.iter().map(Ok::<_, anyhow::Error>))
@@ -81,7 +114,7 @@ pub(super) async fn note_contact_stops(connection: &mut PgConnection) -> Result<
 
 #[tracing::instrument(skip(connection, target))]
 async fn enqueue_one(connection: &mut PgConnection, target: &Target, refresh: bool) -> Result<u64> {
-    if !refresh && target.kind != crate::model::PageKind::Contacts {
+    if !refresh && target.kind != PageKind::Contacts {
         return batch::enqueue(connection, std::slice::from_ref(target)).await;
     }
     Ok(sqlx::query(
@@ -93,7 +126,7 @@ async fn enqueue_one(connection: &mut PgConnection, target: &Target, refresh: bo
          WHERE $5 AND scrape_pages.status = 'succeeded' AND scrape_pages.cursor->>'kind' <> 'contacts'",
     ).bind(keys::target(target)?).bind(target.source.as_str()).bind(&target.url)
         .bind(serde_json::to_value(target)?).bind(refresh)
-        .bind(target.kind == crate::model::PageKind::Contacts).bind(&target.context.school_id)
+        .bind(target.kind == PageKind::Contacts).bind(&target.context.school_id)
         .execute(connection).await?.rows_affected())
 }
 
@@ -154,6 +187,19 @@ pub(super) async fn fail(
     blocked: bool,
     stopped_origin: Option<&str>,
 ) -> Result<()> {
+    lock_contact_target(connection, &job.target).await?;
+    fail_locked(connection, job, response, detail, blocked, stopped_origin).await
+}
+
+#[tracing::instrument(skip(connection, job, response, detail))]
+pub(super) async fn fail_locked(
+    connection: &mut PgConnection,
+    job: &Job,
+    response: Option<&Capture>,
+    detail: &str,
+    blocked: bool,
+    stopped_origin: Option<&str>,
+) -> Result<()> {
     let status = if blocked { "blocked" } else { "failed" };
     let stopped_origin = stopped_origin
         .or_else(|| response.map(|capture| capture.url.as_str()))
@@ -192,7 +238,7 @@ pub(super) async fn fail(
     if !blocked && response.is_some_and(|capture| capture.status == 404) {
         recover_contact_root(connection, job).await?;
     }
-    if blocked && job.target.kind == crate::model::PageKind::Contacts {
+    if blocked && job.target.kind == PageKind::Contacts {
         note_contact_stops(connection).await?;
     }
     Ok(())
@@ -213,7 +259,7 @@ async fn recover_contact_root(connection: &mut PgConnection, job: &Job) -> Resul
     .fetch_one(&mut *connection)
     .await?;
     if !alias_exists {
-        enqueue(connection, std::slice::from_ref(&root), false).await?;
+        enqueue_locked(connection, std::slice::from_ref(&root), false).await?;
     }
     let note = format!(
         "Published contact URL returned HTTP 404; same-site root checkpoint: {}",

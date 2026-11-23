@@ -1,6 +1,9 @@
 use anyhow::{Context, Result, ensure};
 
-use super::super::performance::{Stage, Timings};
+use super::super::{
+    performance::{Stage, Timings},
+    records,
+};
 use super::{Database, lock_reservation};
 use crate::{
     durable::page::{CaptureRef, PageOutcome, PageReservation, ParsedRef},
@@ -62,12 +65,7 @@ impl Database {
         let mut transaction = timings
             .measure(Stage::PoolAndBegin, self.pool.begin())
             .await?;
-        timings
-            .measure(
-                Stage::ReservationLock,
-                lock_reservation(&mut transaction, reservation),
-            )
-            .await?;
+        lock_persist_reservation(&mut transaction, reservation, parsed, &mut timings).await?;
         let capture_json = capture_json?;
         let parsed_json = parsed_json?;
         let existing: Option<(serde_json::Value, serde_json::Value, serde_json::Value)> =
@@ -110,13 +108,13 @@ impl Database {
         let page_id = timings
             .measure(
                 Stage::Domain,
-                super::super::records::persist(
+                Box::pin(records::persist_locked(
                     &mut transaction,
                     Some(request.binding.page_id),
                     &request.target,
                     capture,
                     parsed,
-                ),
+                )),
             )
             .await?;
         let receipt_sha256 = receipt_digest?;
@@ -145,6 +143,22 @@ impl Database {
             .context("committing durable domain effects and receipt")?;
         Ok(outcome)
     }
+}
+
+#[tracing::instrument(skip_all)]
+async fn lock_persist_reservation(
+    connection: &mut sqlx::PgConnection,
+    reservation: &PageReservation,
+    parsed: &ParsedPage,
+    timings: &mut Timings,
+) -> Result<()> {
+    records::lock_persist_contacts(connection, &reservation.request.target, parsed).await?;
+    timings
+        .measure(
+            Stage::ReservationLock,
+            lock_reservation(connection, reservation),
+        )
+        .await
 }
 
 fn capture_matches(capture: &Capture, reference: &CaptureRef) -> bool {

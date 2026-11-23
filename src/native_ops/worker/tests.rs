@@ -158,8 +158,6 @@ fn launchagent_escapes_xml_and_invokes_rust_launcher_with_exact_config_path() ->
     let receipt = fixture.prepare(&fixture.args())?;
     let body = fs::read_to_string(&receipt.plist)?;
     assert!(body.contains("Runtime &amp; &lt;&apos;&quot;&gt;"));
-    assert!(body.contains("<string>worker-launch</string><string>--config</string>"));
-    assert!(!body.contains("python"));
     assert!(!body.contains("postgres://fixture-only/private"));
     #[cfg(target_os = "macos")]
     {
@@ -175,6 +173,19 @@ fn launchagent_escapes_xml_and_invokes_rust_launcher_with_exact_config_path() ->
         .parent()
         .ok_or_else(|| anyhow::anyhow!("version"))?
         .join("worker.json");
+    let xml_path = |path: &Path| {
+        path.to_string_lossy()
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    };
+    assert!(body.contains(&format!(
+        "<key>ProgramArguments</key><array><string>{}</string><string>worker-launch</string><string>--config</string><string>{}</string></array>",
+        xml_path(&receipt.configuration.launcher),
+        xml_path(&config),
+    )));
     let prepared = launch::prepare(&config)?;
     let command = launch::command(&prepared);
     assert_eq!(

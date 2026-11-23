@@ -125,23 +125,8 @@ pub(super) async fn replay_page(
     database
         .enqueue(std::slice::from_ref(&target), true)
         .await?;
-    let cursor = serde_json::to_value(&target)?;
-    let (id, cursor): (i64, serde_json::Value) = sqlx::query_as(
-        "SELECT id,cursor FROM scrape_pages WHERE source=$1 AND (cursor=$2 OR ( \
-         cursor->>'kind'='contacts' AND $2::jsonb->>'kind'='contacts' \
-         AND url=$2::jsonb->>'url' \
-         AND cursor->'context'->>'school_id'=$2::jsonb->'context'->>'school_id')) \
-         ORDER BY (cursor=$2) DESC,id LIMIT 1",
-    )
-    .bind(target.source.as_str())
-    .bind(cursor)
-    .fetch_one(database.pool())
-    .await
-    .context("finding replay checkpoint")?;
-    let job = Job {
-        id,
-        target: serde_json::from_value(cursor).context("decoding replay checkpoint target")?,
-    };
+    let job = database.replay_checkpoint(&target).await?;
+    let id = job.id;
     if !database
         .start_attempt(id, config.limits.max_attempts)
         .await?

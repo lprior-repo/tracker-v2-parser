@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlx::PgConnection;
 
-use crate::model::{Capture, ParsedPage, Target};
+use crate::model::{Capture, PageKind, ParsedPage, Target};
 
 use super::performance::{Stage, Timings};
 use super::{contacts, identity, queue, results, schools, unassigned};
@@ -14,10 +14,26 @@ pub(super) fn persist<'a>(
     response: &'a Capture,
     page: &'a ParsedPage,
 ) -> futures::future::BoxFuture<'a, Result<i64>> {
-    Box::pin(persist_inner(connection, job_id, target, response, page))
+    Box::pin(async move {
+        lock_persist_contacts(connection, target, page).await?;
+        persist_locked(connection, job_id, target, response, page).await
+    })
 }
 
-async fn persist_inner(
+#[tracing::instrument(skip_all)]
+pub(super) async fn lock_persist_contacts(
+    connection: &mut PgConnection,
+    target: &Target,
+    page: &ParsedPage,
+) -> Result<()> {
+    if target.kind == PageKind::Contacts || queue::has_contacts(&page.next) {
+        queue::lock_contacts(connection).await?;
+    }
+    Ok(())
+}
+
+#[tracing::instrument(skip(connection, target, response, page))]
+pub(super) async fn persist_locked(
     connection: &mut PgConnection,
     job_id: Option<i64>,
     target: &Target,
@@ -35,7 +51,7 @@ async fn persist_inner(
     timings
         .measure(
             Stage::Enqueue,
-            queue::enqueue(connection, &page.next, false),
+            queue::enqueue_locked(connection, &page.next, false),
         )
         .await?;
     let id = timings

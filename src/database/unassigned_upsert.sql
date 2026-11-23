@@ -25,10 +25,13 @@ ON CONFLICT (source_result_key) DO UPDATE SET
               AND COALESCE(EXCLUDED.raw #> '{raw,relayLegs}', 'null'::jsonb) = 'null'::jsonb)
           AND value <> 'null'::jsonb
           AND (jsonb_typeof(value) <> 'string' OR btrim(value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
-    ), '{}'::jsonb) || jsonb_build_object('raw',
-        (CASE WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
-            THEN COALESCE(results.raw->'raw', '{}'::jsonb) - 'statusCode'
-            ELSE COALESCE(results.raw->'raw', '{}'::jsonb) END)
+    ), '{}'::jsonb) || jsonb_build_object('raw', CASE
+        WHEN jsonb_typeof(EXCLUDED.raw->'raw') <> 'object' THEN EXCLUDED.raw->'raw'
+        ELSE (CASE
+            WHEN jsonb_typeof(results.raw->'raw') IS DISTINCT FROM 'object' THEN '{}'::jsonb
+            WHEN btrim(EXCLUDED.raw_mark, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> ''
+                THEN (results.raw->'raw') - 'statusCode'
+            ELSE results.raw->'raw' END)
         || COALESCE((
             SELECT jsonb_object_agg(key,
                 CASE WHEN key = 'source_values' AND jsonb_typeof(value) = 'object' THEN
@@ -60,10 +63,9 @@ ON CONFLICT (source_result_key) DO UPDATE SET
                           AND (jsonb_typeof(evidence.value) <> 'string' OR btrim(evidence.value #>> '{}', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000') <> '')
                     ), '{}'::jsonb)
                 ELSE value END)
-            FROM jsonb_each(CASE WHEN jsonb_typeof(EXCLUDED.raw->'raw') = 'object'
-                THEN EXCLUDED.raw->'raw' ELSE '{}'::jsonb END)
+            FROM jsonb_each(EXCLUDED.raw->'raw')
             WHERE key <> 'relayLegs' OR value <> 'null'::jsonb
-        ), '{}'::jsonb)),
+        ), '{}'::jsonb) END),
     last_seen = clock_timestamp(),
     normalized_numeric = EXCLUDED.normalized_numeric,
     normalized_unit = EXCLUDED.normalized_unit,

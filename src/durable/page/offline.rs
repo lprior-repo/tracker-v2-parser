@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::{
     FetchDecision, PageOutcome, PageRequest, PageScope, ParseDecision, ReservationDecision,
 };
 use crate::{
-    database::{Database, Job},
+    database::Database,
     model::{Capture, Target},
 };
 
@@ -63,8 +63,5 @@ pub async fn bind_target(
     database
         .enqueue(std::slice::from_ref(&target), false)
         .await?;
-    let (id,cursor): (i64,serde_json::Value) = sqlx::query_as("SELECT id,cursor FROM scrape_pages WHERE source=$1 AND ((cursor-'access_stop_url')=$2 OR (cursor->>'kind'='contacts' AND $2::jsonb->>'kind'='contacts' AND url=$2::jsonb->>'url' AND cursor->'context'->>'school_id'=$2::jsonb->'context'->>'school_id')) ORDER BY ((cursor-'access_stop_url')=$2) DESC,id LIMIT 1")
-        .bind(target.source.as_str()).bind(serde_json::to_value(&target)?).fetch_one(database.pool()).await?;
-    let target = serde_json::from_value(cursor).context("decoding bound durable target")?;
-    super::request(Job { id, target }, scope)
+    super::request(database.replay_checkpoint(&target).await?, scope)
 }

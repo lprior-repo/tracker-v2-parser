@@ -2,15 +2,20 @@ WITH selected_states AS (
     SELECT lower(btrim(state, U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')) AS state,
            ordinal
     FROM unnest($1::text[]) WITH ORDINALITY AS selected(state, ordinal)
+), page_scopes AS NOT MATERIALIZED (
+    SELECT p.*,COALESCE(
+        NULLIF(lower(btrim(p.cursor->'context'->>'acquisition_state', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')),''),
+        NULLIF(lower(btrim(p.cursor->'context'->>'state', U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000')),'')
+    ) AS scope_state
+    FROM scrape_pages p
 ), scoped_pages AS NOT MATERIALIZED (
-    SELECT p.* FROM scrape_pages p
+    SELECT p.* FROM page_scopes p
     WHERE cardinality($1::text[]) = 0
        OR EXISTS (
            SELECT 1 FROM selected_states selected
-           WHERE selected.state = lower(btrim(COALESCE(p.cursor->'context'->>'acquisition_state', p.cursor->'context'->>'state'),
-               U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'))
+           WHERE selected.state = p.scope_state
        )
-       OR (COALESCE(p.cursor->'context'->>'acquisition_state', p.cursor->'context'->>'state') IS NULL AND (
+       OR (p.scope_state IS NULL AND (
            EXISTS (
                SELECT 1 FROM schools s JOIN selected_states selected
                  ON selected.state = lower(btrim(s.state,

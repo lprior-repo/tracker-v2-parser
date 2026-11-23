@@ -1,5 +1,5 @@
-states = ["WI"]
-graduation_years = [2027]
+states = ["MI", "MN", "IA", "IL", "CO"]
+graduation_years = [2028]
 season = 2026
 
 [limits]
