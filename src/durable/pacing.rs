@@ -136,8 +136,10 @@ impl PersistentPacing {
         S: Fn(&T) -> Option<u16>,
     {
         let token = wire::before(deadline, self.admit(scope)).await?;
-        let wire_end = Instant::now() + WIRE_TIMEOUT;
-        let result = operation(deadline.map_or(wire_end, |deadline| deadline.min(wire_end))).await;
+        let result = match Instant::now().checked_add(WIRE_TIMEOUT) {
+            Some(end) => operation(deadline.map_or(end, |deadline| deadline.min(end))).await,
+            None => Err(anyhow::anyhow!("persistent wire deadline overflow")),
+        };
         let completed = wire::settle(self.complete(scope, &token, started.get().copied())).await;
         match (result, completed) {
             (Ok(value), Ok(())) => Ok(value),
