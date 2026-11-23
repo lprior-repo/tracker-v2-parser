@@ -77,7 +77,7 @@ async fn given_reviewed_photo_stop_when_public_work_is_scoped_then_exclusions_co
         assert!(track_scrapper_v2::durable::page::select(&database,&config,&scope,chrono::Utc::now().timestamp_millis()).await?.is_none());
         let mut transport=track_scrapper_v2::transport::Transport::new(track_scrapper_v2::transport::Options {mode:track_scrapper_v2::transport::Mode::Http,driver_url:None,profile:test.directory().join("browser"),headless:true,rps:1.0})?;
         let refused=transport.fetch(&page("https://wi.milesplit.com/rankings",PageKind::Directory)).await.err().context("robots-restricted route")?;
-        assert!(refused.blocked && refused.capture.is_none());assert!(refused.detail.contains("robots"));
+        assert!(refused.is_blocked() && refused.capture().is_none());assert!(refused.detail.contains("robots"));
         transport.close().await?;
         let after: (i64, String, i32, String) = sqlx::query_as("SELECT id,status,attempts,last_error FROM scrape_pages WHERE url=$1").bind(REVIEWED).fetch_one(database.pool()).await?;
         assert_eq!(after,before);

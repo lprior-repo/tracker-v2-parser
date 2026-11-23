@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         Command::WorkerInstall(args) => worker::run_install(args).await,
         Command::WorkerLaunch(args) => worker::run_launch(args).await,
         Command::Migration { command } => migration::run(command).await,
-        Command::Recovery(args) => recovery::run(args).await,
+        Command::Recovery(args) => Box::pin(recovery::run(args)).await,
         Command::Resources { command } => resources::run(command).await,
     }
 }

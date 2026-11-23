@@ -61,23 +61,24 @@ async fn retained_capture_manifest_recovers_before_any_second_get_after_database
 -> Result<()> {
     with_database(|pool|Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root=tempfile::tempdir()?;
         let fixture=WireFixture::start(FixtureKind::Page {status:200,body:include_str!("../../../fixtures/milesplit/athlete-oh-15005189.html")}).await?;
         let request=page::bind_target(&database,target(),&scope()?).await?;
         let now=chrono::Utc::now().timestamp_millis();
         let ReservationDecision::Reserved {reservation}=page::reserve(&database,&request,now).await? else {anyhow::bail!("reservation")};
         let mut first=transport(root.path(),&fixture,&database)?;
-        let FetchDecision::Captured {capture}=page::fetch(&database,root.path(),&reservation,&mut first,now).await? else {anyhow::bail!("capture")};
+        let FetchDecision::Captured {capture}=page::fetch(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut first,now).await? else {anyhow::bail!("capture")};
         first.close().await?;
         sqlx::query("UPDATE durable_page_attempts SET capture=NULL,state='reserved' WHERE attempt_id=$1").bind(&reservation.attempt_id).execute(pool).await?;
         let mut restarted=transport(root.path(),&fixture,&database)?;
-        let FetchDecision::Captured {capture:replayed}=page::fetch(&database,root.path(),&reservation,&mut restarted,now).await? else {anyhow::bail!("retained replay")};
+        let FetchDecision::Captured {capture:replayed}=page::fetch(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut restarted,now).await? else {anyhow::bail!("retained replay")};
         assert_eq!(capture,replayed);
         restarted.close().await?;
-        let ParseDecision::Parsed {parsed}=page::parse(&database,root.path(),&reservation,&capture,now).await? else {anyhow::bail!("parse")};
-        let outcome=page::persist(&database,root.path(),&reservation,&capture,&parsed).await?;
+        let ParseDecision::Parsed {parsed}=page::parse(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,now).await? else {anyhow::bail!("parse")};
+        let outcome=page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?;
         assert!(matches!(outcome,PageOutcome::Completed {..}));
-        assert_eq!(page::persist(&database,root.path(),&reservation,&capture,&parsed).await?,outcome);
+        assert_eq!(page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?,outcome);
         assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,1);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_receipts").fetch_one(pool).await?,1);
         assert_eq!(fixture.finish().await?.len(),1);
@@ -91,6 +92,7 @@ async fn http_access_denial_is_retained_and_never_retried_in_the_same_or_new_ope
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 403,
@@ -107,17 +109,34 @@ async fn http_access_denial_is_retained_and_never_retried_in_the_same_or_new_ope
             };
             let mut first = transport(root.path(), &fixture, &database)?;
             assert!(matches!(
-                page::fetch(&database, root.path(), &reservation, &mut first, now).await?,
+                page::fetch(
+                    &database,
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
+                    &reservation,
+                    &mut first,
+                    now
+                )
+                .await?,
                 FetchDecision::Settled {
                     outcome: PageOutcome::Blocked { .. }
                 }
             ));
             first.close().await?;
-            let (capture, _, _) = database.durable_stages(&reservation).await?;
-            assert_eq!(capture.context("denial evidence retained")?.status, 403);
+            let stages = database.durable_stages(&reservation).await?;
+            assert_eq!(
+                stages.capture().context("denial evidence retained")?.status,
+                403
+            );
             let mut restarted = transport(root.path(), &fixture, &database)?;
             assert!(matches!(
-                page::fetch(&database, root.path(), &reservation, &mut restarted, now).await?,
+                page::fetch(
+                    &database,
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
+                    &reservation,
+                    &mut restarted,
+                    now
+                )
+                .await?,
                 FetchDecision::Settled {
                     outcome: PageOutcome::Blocked { .. }
                 }

@@ -142,6 +142,7 @@ async fn freeze_discards_unused_profile_json_with_full_cell_parity_and_retains_h
             .with_layout(ExportLayout::SingleSheet);
             export.stage_part(&records, &[])?;
             export.finish()?;
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let workspace = Workspace::open(
                 &test.directory().join("artifacts"),
                 "projected-export",
@@ -149,7 +150,7 @@ async fn freeze_discards_unused_profile_json_with_full_cell_parity_and_retains_h
                     config: config.clone(),
                 },
             )?;
-            let frozen = freeze_export(&workspace, &config, &test.url).await?;
+            let frozen = freeze_export(&workspace, &config, &test.url, &blocking).await?;
             let plan = frozen_plan(&workspace, &frozen)?;
             assert_eq!((plan.rows, plan.chunks.len()), (1, 1));
             assert!(plan.bytes < 20_000 && plan.bytes * 100 < u64::try_from(full_bytes.len())?);
@@ -260,8 +261,9 @@ async fn given_oversized_original_record_when_freezing_small_sheet_projection_th
         let mut snapshot=database.begin_export_snapshot(&config.states,&config.graduation_years).await?;
         let original=snapshot.next_records(1000).await.err().context("original record must exceed its limit")?;
         let expected=original.downcast_ref::<track_scrapper_v2::database::ExportLimitExceeded>().context("typed original limit")?;
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let workspace=Workspace::open(&test.directory().join("artifacts"),"over-budget-export",&OperationSpec::Export {config:config.clone()})?;
-        let projected=freeze_export(&workspace,&config,&test.url).await.err().context("projection must preserve the original limit")?;
+        let projected=freeze_export(&workspace,&config,&test.url, &blocking).await.err().context("projection must preserve the original limit")?;
         let actual=projected.downcast_ref::<track_scrapper_v2::database::ExportLimitExceeded>().context("typed projected limit")?;
         assert_eq!((actual.kind,actual.id,actual.actual,actual.limit),(expected.kind,expected.id,expected.actual,expected.limit));
         assert!(actual.actual>actual.limit);
@@ -292,14 +294,15 @@ async fn given_multiple_raw_batches_when_projection_is_small_then_new_frozen_chu
         let options=ExportOptions {states:config.states.clone(),graduation_years:config.graduation_years.clone(),rows_per_file:1000,per_athlete_sheets:false};
         let mut writer=StagedExport::new(&baseline,&options)?.with_layout(ExportLayout::SingleSheet);
         writer.stage_part(&records,&[])?;writer.finish()?;
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let workspace=Workspace::open(&test.directory().join("artifacts"),"coalesced-export",&OperationSpec::Export {config:config.clone()})?;
-        let frozen=freeze_export(&workspace,&config,&test.url).await?;
+        let frozen=freeze_export(&workspace,&config,&test.url, &blocking).await?;
         let plan=frozen_plan(&workspace,&frozen)?;
         assert_eq!((plan.rows,plan.chunks.len()),(30,1));
         assert!(plan.bytes<20000);
         let workbook=render_export(&workspace,&frozen)?;
         assert_eq!(cells(&workbook.path)?,cells(&baseline)?);
-        assert_eq!(freeze_export(&workspace,&config,&test.url).await?.manifest,frozen.manifest);
+        assert_eq!(freeze_export(&workspace,&config,&test.url, &blocking).await?.manifest,frozen.manifest);
         database.close().await;
         Ok(())
     })).await

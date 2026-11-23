@@ -162,13 +162,14 @@ pub(super) async fn replay_page(
         },
     ) {
         Ok(capture) => capture,
-        Err(failure) => {
+        Err(mut failure) => {
+            let error = anyhow!(std::mem::take(&mut failure.detail));
             return record_failure(
                 database,
                 &job,
-                failure.capture.as_ref(),
-                failure.blocked,
-                anyhow!(failure.detail),
+                failure.capture(),
+                failure.is_blocked(),
+                error,
             )
             .await;
         }

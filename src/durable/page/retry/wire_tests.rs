@@ -47,6 +47,7 @@ async fn configured_retry_binding_mismatch_has_no_database_or_http_effects() -> 
                     .await
                     .is_err()
             );
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 503,
@@ -57,7 +58,7 @@ async fn configured_retry_binding_mismatch_has_no_database_or_http_effects() -> 
             assert!(
                 super::fetch_configured(
                     &database,
-                    root.path(),
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
                     &reservation,
                     &mut transport,
                     now,
@@ -106,6 +107,7 @@ async fn configured_fetch_failure_exhausts_total_limit_and_public_library_keeps_
             else {
                 anyhow::bail!("reservation missing")
             };
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 503,
@@ -117,7 +119,7 @@ async fn configured_fetch_failure_exhausts_total_limit_and_public_library_keeps_
                 outcome: PageOutcome::Exhausted { detail },
             } = super::fetch_configured(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &reservation,
                 &mut transport,
                 now,

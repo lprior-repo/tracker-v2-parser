@@ -7,12 +7,13 @@ const BODY: &str = include_str!("../../../../fixtures/milesplit/athlete-oh-15005
 async fn over_budget_reserved_attempt_never_starts_another_http_request() -> Result<()> {
     with_database(|pool| Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root=tempfile::tempdir()?;
         let fixture=WireFixture::start(FixtureKind::Page {status:200,body:BODY}).await?;
         let now=chrono::Utc::now().timestamp_millis();
         let reservation=old_reservation(&database,now).await?;
         let mut connection=transport(root.path(),&fixture,&database)?;
-        let result=page::fetch(&database,root.path(),&reservation,&mut connection,now).await;
+        let result=page::fetch(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut connection,now).await;
         connection.close().await?;
         let wires=fixture.finish().await?;
         assert_eq!(wires.len(),0);
@@ -27,21 +28,22 @@ async fn over_budget_reserved_attempt_never_starts_another_http_request() -> Res
 async fn over_budget_retained_capture_recovers_after_ack_loss_without_new_wire() -> Result<()> {
     with_database(|pool| Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root=tempfile::tempdir()?;
         let fixture=WireFixture::start(FixtureKind::Page {status:200,body:BODY}).await?;
         let now=chrono::Utc::now().timestamp_millis();
         let reservation=old_reservation(&database,now).await?;
-        let capture=page::execution::retain(&database,root.path(),&reservation,Capture {url:reservation.request.target.url.clone(),status:200,content_type:"text/html".into(),body:BODY.as_bytes().to_vec()},now).await?;
+        let capture=page::execution::retain(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,Capture {url:reservation.request.target.url.clone(),status:200,content_type:"text/html".into(),body:BODY.as_bytes().to_vec()},now).await?;
         sqlx::query("UPDATE durable_page_attempts SET capture=NULL,state='reserved' WHERE attempt_id=$1").bind(&reservation.attempt_id).execute(pool).await?;
         let mut connection=transport(root.path(),&fixture,&database)?;
-        let fetched=page::fetch(&database,root.path(),&reservation,&mut connection,now).await;
+        let fetched=page::fetch(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut connection,now).await;
         connection.close().await?;
         assert_eq!(fixture.finish().await?.len(),0);
         assert!(matches!(fetched?,FetchDecision::Captured {capture:ref actual} if actual==&capture));
-        let ParseDecision::Parsed {parsed}=page::parse(&database,root.path(),&reservation,&capture,now).await? else {anyhow::bail!("parse retained capture")};
-        let completed=page::persist(&database,root.path(),&reservation,&capture,&parsed).await?;
+        let ParseDecision::Parsed {parsed}=page::parse(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,now).await? else {anyhow::bail!("parse retained capture")};
+        let completed=page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?;
         assert!(matches!(completed,PageOutcome::Completed {..}));
-        assert_eq!(page::persist(&database,root.path(),&reservation,&capture,&parsed).await?,completed);
+        assert_eq!(page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?,completed);
         assert_eq!(database.durable_acquisition_attempts(&reservation.request).await?,45);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_receipts").fetch_one(pool).await?,1);
         Ok(())

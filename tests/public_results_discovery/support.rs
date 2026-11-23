@@ -63,7 +63,17 @@ pub async fn replay(
 ) -> Result<()> {
     let response = capture(&target, html);
     assert!(matches!(
-        page::offline_replay(database, root, scope, target, response).await?,
+        page::offline_replay(
+            database,
+            track_scrapper_v2::durable::page::PageFiles::new(
+                root,
+                &track_scrapper_v2::durable::blocking::BlockingStages::new()
+            ),
+            scope,
+            target,
+            response
+        )
+        .await?,
         page::PageOutcome::Completed { .. }
     ));
     Ok(())

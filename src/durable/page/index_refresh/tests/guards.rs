@@ -55,12 +55,13 @@ async fn wiaa_index_refresh_requires_bound_wisconsin_contact_scope_and_preserves
 -> Result<()> {
     with_database(|pool|Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root=tempfile::tempdir()?;
         let configured=config("2028,2029")?;
         let now=chrono::Utc::now().timestamp_millis();
         let old_scope=scope(root.path(),&configured,"old-index",now)?;
         let target=target(false);
-        assert!(matches!(page::offline_replay(&database,root.path(),&old_scope,target.clone(),capture(&target,body(false))).await?,PageOutcome::Completed {..}));
+        assert!(matches!(page::offline_replay(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&old_scope,target.clone(),capture(&target,body(false))).await?,PageOutcome::Completed {..}));
         for (index,input) in ["states=['MI']\n[acquisition]\nmode='public_results'\ncollect_contacts=true", "states=['WI']\n[acquisition]\nmode='public_results'\ncollect_contacts=false", "states=['WI']\n[acquisition]\nmode='public_results'\ncollect_contacts=true\n[sources.milesplit]\nenabled=false"].into_iter().enumerate() {
             let config=crate::config::Config::parse(input)?;
             let scope=scope(root.path(),&config,&format!("denied-config-{index}"),now)?;

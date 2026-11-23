@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{CaptureRef, PageReservation};
+use super::{CaptureRef, PageFiles, PageReservation};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -47,63 +47,70 @@ fn load_sync(root: &Path, reservation: &PageReservation) -> Result<Option<Captur
     Ok(Some(manifest.capture))
 }
 
-pub(super) async fn load(root: &Path, reservation: &PageReservation) -> Result<Option<CaptureRef>> {
-    let root = root.to_owned();
+pub(super) async fn load(
+    files: PageFiles<'_>,
+    reservation: &PageReservation,
+) -> Result<Option<CaptureRef>> {
+    let root = files.root.to_owned();
     let reservation = reservation.clone();
-    tokio::task::spawn_blocking(move || load_sync(&root, &reservation))
+    files
+        .blocking
+        .run_when_available(move || load_sync(&root, &reservation))
         .await
-        .context("reading retained capture manifest")?
+        .context("reading retained capture manifest")
 }
 
 pub(super) async fn save(
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     capture: &CaptureRef,
 ) -> Result<()> {
-    let root = root.to_owned();
+    let root = files.root.to_owned();
     let reservation = reservation.clone();
     let manifest = Manifest {
         attempt_id: reservation.attempt_id.clone(),
         operation_id: reservation.request.binding.operation_id.clone(),
         capture: capture.clone(),
     };
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let bytes = serde_json::to_vec(&manifest)?;
-        ensure!(
-            bytes.len() <= 32_768,
-            "durable capture manifest exceeds limit"
-        );
-        let path = root.join(format!("{}.capture", manifest.attempt_id));
-        let temporary = root.join(format!(
-            ".{}.{}.{}.capture.tmp",
-            manifest.attempt_id,
-            std::process::id(),
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        let result = (|| -> Result<()> {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            match fs::hard_link(&temporary, &path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    ensure!(
-                        load_sync(&root, &reservation)?.as_ref() == Some(&manifest.capture),
-                        "capture manifest differs on replay"
-                    );
+    files
+        .blocking
+        .run_when_available(move || -> Result<()> {
+            let bytes = serde_json::to_vec(&manifest)?;
+            ensure!(
+                bytes.len() <= 32_768,
+                "durable capture manifest exceeds limit"
+            );
+            let path = root.join(format!("{}.capture", manifest.attempt_id));
+            let temporary = root.join(format!(
+                ".{}.{}.{}.capture.tmp",
+                manifest.attempt_id,
+                std::process::id(),
+                SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            let result = (|| -> Result<()> {
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+                match fs::hard_link(&temporary, &path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        ensure!(
+                            load_sync(&root, &reservation)?.as_ref() == Some(&manifest.capture),
+                            "capture manifest differs on replay"
+                        );
+                    }
+                    Err(error) => return Err(error).context("publishing durable capture manifest"),
                 }
-                Err(error) => return Err(error).context("publishing durable capture manifest"),
-            }
-            File::open(&root)?.sync_all()?;
-            Ok(())
-        })();
-        let cleanup = fs::remove_file(&temporary);
-        result?;
-        cleanup.context("removing staged capture manifest")
-    })
-    .await
-    .context("writing retained capture manifest")?
+                File::open(&root)?.sync_all()?;
+                Ok(())
+            })();
+            let cleanup = fs::remove_file(&temporary);
+            result?;
+            cleanup.context("removing staged capture manifest")
+        })
+        .await
+        .context("writing retained capture manifest")
 }

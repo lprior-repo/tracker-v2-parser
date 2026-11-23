@@ -586,12 +586,9 @@ async fn given_authentication_redirect_when_chromium_navigates_then_login_receiv
             .await
             .expect_err("login redirect must preserve a typed stop");
         let failure = crate::transport::failure(&error);
-        assert!(failure.blocked);
-        assert!(failure.capture.is_none());
-        assert_eq!(
-            failure.stopped_origin.as_deref(),
-            Some(safe.origin.as_str())
-        );
+        assert!(failure.is_blocked());
+        assert!(failure.capture().is_none());
+        assert_eq!(failure.stopped_origin(), Some(safe.origin.as_str()));
         let requests = safe.recorded()?;
         assert!(
             requests
@@ -679,7 +676,7 @@ async fn given_oversized_challenge_when_chromium_captures_then_access_stop_survi
             .context("challenge status must remain typed")?;
         assert_eq!(stop.status, 403);
         assert_eq!(
-            crate::transport::failure(&error).stopped_origin.as_deref(),
+            crate::transport::failure(&error).stopped_origin(),
             Some(safe.origin.as_str())
         );
         assert_eq!(browser.chromium.pages().await?.len(), initial_pages);

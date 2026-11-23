@@ -9,28 +9,113 @@ use crate::{
     },
 };
 
-pub type SavedStages = (Option<CaptureRef>, Option<ParsedRef>, Option<PageOutcome>);
+#[derive(Debug)]
+pub enum StageEvidence {
+    None,
+    Captured(CaptureRef),
+    Parsed {
+        capture: CaptureRef,
+        parsed: ParsedRef,
+    },
+}
+
+#[derive(Debug)]
+pub enum SavedStages {
+    Reserved,
+    Captured(CaptureRef),
+    Parsed {
+        capture: CaptureRef,
+        parsed: ParsedRef,
+    },
+    Settled(SettledStages),
+}
+
+#[derive(Debug)]
+pub struct SettledStages {
+    evidence: StageEvidence,
+    outcome: PageOutcome,
+}
+
+impl SettledStages {
+    #[must_use]
+    pub fn into_parts(self) -> (StageEvidence, PageOutcome) {
+        (self.evidence, self.outcome)
+    }
+}
+
+impl SavedStages {
+    #[must_use]
+    pub const fn capture(&self) -> Option<&CaptureRef> {
+        match self {
+            Self::Captured(capture)
+            | Self::Parsed { capture, .. }
+            | Self::Settled(SettledStages {
+                evidence: StageEvidence::Captured(capture) | StageEvidence::Parsed { capture, .. },
+                ..
+            }) => Some(capture),
+            Self::Reserved
+            | Self::Settled(SettledStages {
+                evidence: StageEvidence::None,
+                ..
+            }) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn outcome(&self) -> Option<&PageOutcome> {
+        match self {
+            Self::Settled(settled) => Some(&settled.outcome),
+            _ => None,
+        }
+    }
+}
+
+type StageRow = (
+    String,
+    Option<sqlx::types::Json<CaptureRef>>,
+    Option<sqlx::types::Json<ParsedRef>>,
+    Option<sqlx::types::Json<PageOutcome>>,
+);
+
+fn decode((state, capture, parsed, outcome): StageRow) -> Result<SavedStages> {
+    use sqlx::types::Json;
+    let evidence = match (capture, parsed) {
+        (None, None) => StageEvidence::None,
+        (Some(Json(capture)), None) => StageEvidence::Captured(capture),
+        (Some(Json(capture)), Some(Json(parsed))) => StageEvidence::Parsed { capture, parsed },
+        (None, Some(_)) => anyhow::bail!("recorded parsed stage has no capture"),
+    };
+    match (state.as_str(), evidence, outcome) {
+        ("reserved", StageEvidence::None, None) => Ok(SavedStages::Reserved),
+        ("captured", StageEvidence::Captured(capture), None) => Ok(SavedStages::Captured(capture)),
+        ("parsed", StageEvidence::Parsed { capture, parsed }, None) => {
+            Ok(SavedStages::Parsed { capture, parsed })
+        }
+        (
+            "completed",
+            evidence @ StageEvidence::Parsed { .. },
+            Some(Json(outcome @ PageOutcome::Completed { .. })),
+        ) => Ok(SavedStages::Settled(SettledStages { evidence, outcome })),
+        ("failed", evidence, Some(Json(outcome)))
+            if !matches!(outcome, PageOutcome::Completed { .. }) =>
+        {
+            Ok(SavedStages::Settled(SettledStages { evidence, outcome }))
+        }
+        _ => anyhow::bail!("recorded page stages do not match attempt state {state}"),
+    }
+}
 
 impl Database {
     pub async fn durable_stages(&self, reservation: &PageReservation) -> Result<SavedStages> {
         let mut transaction = self.pool.begin().await?;
         lock_reservation(&mut transaction, reservation).await?;
-        let (capture, parsed, outcome): (
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-        ) = sqlx::query_as(
-            "SELECT capture,parsed,outcome FROM durable_page_attempts WHERE attempt_id=$1",
+        let row: StageRow = sqlx::query_as(
+            "SELECT state,capture,parsed,outcome FROM durable_page_attempts WHERE attempt_id=$1",
         )
         .bind(&reservation.attempt_id)
         .fetch_one(&mut *transaction)
         .await?;
-        let result = Ok((
-            capture.map(serde_json::from_value).transpose()?,
-            parsed.map(serde_json::from_value).transpose()?,
-            outcome.map(serde_json::from_value).transpose()?,
-        ));
-        super::super::finish(transaction, result).await
+        super::super::finish(transaction, decode(row)).await
     }
 
     pub async fn durable_record_capture(

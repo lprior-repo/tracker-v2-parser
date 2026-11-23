@@ -144,7 +144,10 @@ async fn denied_script(status: u16) -> Result<()> {
     let fixture = Fixture::start(BTreeMap::from([
         (
             "/page".into(),
-            html("<script src='/denied.js'></script><script src='/after.js'></script>".into()),
+            html(
+                r#"<script src="/denied.js" onerror="const next = document.createElement('script'); next.src = '/after.js'; document.head.append(next)"></script>"#
+                    .into(),
+            ),
         ),
         (
             "/denied.js".into(),
@@ -187,8 +190,8 @@ async fn denied_script(status: u16) -> Result<()> {
             .any(|request| request.starts_with("GET /after.js "))
     );
     let failure = crate::transport::failure(&error);
-    assert!(failure.blocked);
-    assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
+    assert!(failure.is_blocked());
+    assert_eq!(failure.stopped_origin(), Some(origin.as_str()));
     assert_eq!(remaining_pages, initial_pages);
     Ok(())
 }
@@ -281,8 +284,8 @@ async fn given_denial_headers_and_stalled_body_when_page_deadline_cancels_then_s
             .context(format!("typed stop lost: {error:#}"))?;
         assert_eq!(stop.status, Some(status));
         let failure = crate::transport::failure(&error);
-        assert!(failure.blocked);
-        assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
+        assert!(failure.is_blocked());
+        assert_eq!(failure.stopped_origin(), Some(origin.as_str()));
     }
     Ok(())
 }
@@ -319,12 +322,11 @@ async fn given_file_login_redirect_when_policy_rejects_then_original_authority_r
             .expect_err("rejected file redirect must block"),
         Err(error) => crate::transport::failure(&error),
     };
-    assert!(failure.blocked);
-    assert_ne!(failure.stopped_origin.as_deref(), Some("null"));
+    assert!(failure.is_blocked());
+    assert_ne!(failure.stopped_origin(), Some("null"));
     let address = failure
-        .stopped_origin
-        .as_deref()
-        .or_else(|| failure.capture.as_ref().map(|capture| capture.url.as_str()))
+        .stopped_origin()
+        .or_else(|| failure.capture().map(|capture| capture.url.as_str()))
         .context("durable stop must identify an HTTP authority")?;
     assert_eq!(
         url::Url::parse(address)?.origin().ascii_serialization(),
@@ -346,11 +348,9 @@ async fn given_robots_redirect_when_authority_has_trailing_dot_then_stop_is_norm
     let requests = peer.recorded()?;
     let connections = peer.connections.load(Ordering::SeqCst);
     peer.close().await?;
-    assert!(failure.blocked);
-    assert_eq!(
-        failure.stopped_origin,
-        Some(format!("http://www.milesplit.com:{port}").into_boxed_str())
-    );
+    assert!(failure.is_blocked());
+    let expected = format!("http://www.milesplit.com:{port}");
+    assert_eq!(failure.stopped_origin(), Some(expected.as_str()));
     assert!(requests.is_empty());
     assert_eq!(connections, 0);
     Ok(())
@@ -364,9 +364,9 @@ async fn given_non_http_robots_redirect_when_rejected_then_http_stop_remains_dur
         "file://www.milesplit.com/api/v1/test",
     ] {
         let failure = robots_redirect(address, None).await?;
-        assert!(failure.blocked);
-        let origin = failure.stopped_origin.context("HTTP stop authority")?;
-        let url = url::Url::parse(&origin)?;
+        assert!(failure.is_blocked());
+        let origin = failure.stopped_origin().context("HTTP stop authority")?;
+        let url = url::Url::parse(origin)?;
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
     }

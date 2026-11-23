@@ -43,9 +43,9 @@ fn sanitizer_diagnostics_do_not_override_observed_access_classification() {
             body: body.as_bytes().to_vec(),
         })
         .expect_err("unsupported script must still reject");
-        assert_eq!(failure.blocked, blocked);
-        assert!(!failure.retryable);
-        assert!(failure.capture.is_none());
+        assert_eq!(failure.is_blocked(), blocked);
+        assert!(!failure.is_retryable());
+        assert!(failure.capture().is_none());
         assert!(
             failure
                 .detail
@@ -94,9 +94,9 @@ fn malformed_and_access_stop_responses_keep_their_failure_classification() {
 }
 
 fn assert_failure_class(failure: &Failure, blocked: bool) {
-    assert_eq!(failure.blocked, blocked);
-    assert!(!failure.retryable);
-    assert!(failure.capture.is_none());
+    assert_eq!(failure.is_blocked(), blocked);
+    assert!(!failure.is_retryable());
+    assert!(failure.capture().is_none());
 }
 
 #[test]

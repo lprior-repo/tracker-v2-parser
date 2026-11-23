@@ -112,11 +112,9 @@ async fn denied_body(status: u16) -> Result<()> {
     let failure = result
         .context("fixture watchdog expired")?
         .expect_err("stalled body");
-    assert!(failure.blocked, "{}", failure.detail);
-    assert_eq!(
-        failure.stopped_origin.as_deref(),
-        Some("http://www.milesplit.com")
-    );
+    assert!(failure.is_blocked(), "{}", failure.detail);
+    assert!(!failure.is_retryable());
+    assert_eq!(failure.stopped_origin(), Some("http://www.milesplit.com"));
     assert!(
         failure.detail.contains(&format!("HTTP {status}")),
         "{}",
@@ -170,11 +168,8 @@ async fn given_disallowed_http_hop_when_requested_then_fixture_receives_no_reque
     transport.close().await?;
     fixture.close().await?;
     let failure = crate::transport::failure(&result.expect_err("wire policy stop"));
-    assert!(failure.blocked);
-    assert_eq!(
-        failure.stopped_origin.as_deref(),
-        Some("http://www.milesplit.com")
-    );
+    assert!(failure.is_blocked());
+    assert_eq!(failure.stopped_origin(), Some("http://www.milesplit.com"));
     assert_eq!(requests, 0);
     Ok(())
 }

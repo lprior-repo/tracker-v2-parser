@@ -458,12 +458,9 @@ mod robots_tests {
             .url("https://www.milesplit.com/api/v1/meets/123/performances")
             .expect_err("policy rejects subresource or redirect");
         let failure = crate::transport::failure(&error);
-        assert!(failure.blocked);
-        assert_eq!(
-            failure.stopped_origin.as_deref(),
-            Some("https://www.milesplit.com")
-        );
-        assert!(failure.capture.is_none());
+        assert!(failure.is_blocked());
+        assert_eq!(failure.stopped_origin(), Some("https://www.milesplit.com"));
+        assert!(failure.capture().is_none());
         assert!(policy.url("https://wi.milesplit.com/athletes/123").is_ok());
         Ok(())
     }
@@ -500,9 +497,9 @@ mod robots_authority_tests {
         ] {
             let error = policy.url(address).expect_err("robots restriction");
             let failure = crate::transport::failure(&error);
-            assert!(failure.blocked);
-            assert_eq!(failure.stopped_origin.as_deref(), Some(expected));
-            assert!(failure.capture.is_none());
+            assert!(failure.is_blocked());
+            assert_eq!(failure.stopped_origin(), Some(expected));
+            assert!(failure.capture().is_none());
         }
         Ok(())
     }

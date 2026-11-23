@@ -3,29 +3,29 @@ mod fetch;
 pub use fetch::fetch;
 pub(super) use fetch::{FetchPolicy, fetch_with_policy};
 
-use std::{borrow::Cow, path::Path};
+use std::borrow::Cow;
 
 use anyhow::{Context, Result, ensure};
 
 use super::{
-    CaptureRef, FailureClass, FailureRecord, FetchDecision, PageOutcome, PageReservation,
-    ParseDecision, ParsedRef, RetryPolicy, artifacts,
+    CaptureRef, FailureClass, FailureRecord, FetchDecision, PageFiles, PageOutcome,
+    PageReservation, ParseDecision, ParsedRef, RetryPolicy, artifacts,
 };
 use crate::{
-    database::Database,
+    database::{Database, durable::SavedStages},
     model::{Capture, PageKind, ParsedPage, Source},
 };
 
 pub(super) async fn retain_response(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     capture: Capture,
     now_ms: i64,
 ) -> Result<FetchDecision> {
     retain_response_with_policy(
         database,
-        root,
+        files,
         reservation,
         capture,
         now_ms,
@@ -36,20 +36,20 @@ pub(super) async fn retain_response(
 
 async fn retain_response_with_policy(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     capture: Capture,
     now_ms: i64,
     policy: &RetryPolicy,
 ) -> Result<FetchDecision> {
     match crate::transport::sanitize_response(capture) {
-        Ok(capture) => retain_sanitized(database, root, reservation, capture, now_ms)
+        Ok(capture) => retain_sanitized(database, files, reservation, capture, now_ms)
             .await
             .map(|capture| FetchDecision::Captured { capture }),
         Err(failure) => {
             super::failures::record_with_policy(
                 database,
-                root,
+                files,
                 reservation,
                 failure,
                 now_ms,
@@ -62,23 +62,23 @@ async fn retain_response_with_policy(
 
 pub(super) async fn retain(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     capture: Capture,
     now_ms: i64,
 ) -> Result<CaptureRef> {
     let capture = crate::transport::redact_capture(capture)?;
-    retain_sanitized(database, root, reservation, capture, now_ms).await
+    retain_sanitized(database, files, reservation, capture, now_ms).await
 }
 
 async fn retain_sanitized(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     capture: Capture,
     now_ms: i64,
 ) -> Result<CaptureRef> {
-    if let Some(existing) = super::retained::load(root, reservation).await? {
+    if let Some(existing) = super::retained::load(files, reservation).await? {
         ensure!(
             existing.url == capture.url
                 && existing.status == capture.status
@@ -95,7 +95,7 @@ async fn retain_sanitized(
         capture.url.len() <= 8192 && capture.content_type.len() <= 1024,
         "capture metadata exceeds durable bound"
     );
-    let body = artifacts::write(root, capture.body, crate::transport::MAX_BODY_BYTES).await?;
+    let body = artifacts::write(files, capture.body, crate::transport::MAX_BODY_BYTES).await?;
     let reference = CaptureRef {
         body,
         url: capture.url,
@@ -103,7 +103,7 @@ async fn retain_sanitized(
         content_type: capture.content_type,
         retained_at_ms: now_ms,
     };
-    super::retained::save(root, reservation, &reference).await?;
+    super::retained::save(files, reservation, &reference).await?;
     database
         .durable_record_capture(reservation, &reference)
         .await?;
@@ -112,24 +112,28 @@ async fn retain_sanitized(
 
 pub async fn parse(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     reference: &CaptureRef,
     now_ms: i64,
 ) -> Result<ParseDecision> {
-    let (saved, parsed, outcome) = database.durable_stages(reservation).await?;
+    let stages = database.durable_stages(reservation).await?;
     ensure!(
-        saved.as_ref() == Some(reference),
+        stages.capture() == Some(reference),
         "parse input differs from recorded capture"
     );
-    if let Some(outcome) = outcome {
-        return Ok(ParseDecision::Settled { outcome });
+    match stages {
+        SavedStages::Settled(settled) => {
+            let (_, outcome) = settled.into_parts();
+            return Ok(ParseDecision::Settled { outcome });
+        }
+        SavedStages::Parsed { parsed, .. } => {
+            artifacts::read(files, &parsed.body, artifacts::MAX_PARSED_BYTES).await?;
+            return Ok(ParseDecision::Parsed { parsed });
+        }
+        SavedStages::Reserved | SavedStages::Captured(_) => {}
     }
-    if let Some(parsed) = parsed {
-        artifacts::read(root, &parsed.body, artifacts::MAX_PARSED_BYTES).await?;
-        return Ok(ParseDecision::Parsed { parsed });
-    }
-    let capture = artifacts::capture(root, reference).await?;
+    let capture = artifacts::capture(files, reference).await?;
     let target = &reservation.request.target;
     let adjusted = if target.kind == PageKind::Contacts && target.url != capture.url {
         let mut value = target.clone();
@@ -173,10 +177,10 @@ pub async fn parse(
         }
     };
     if target.source == Source::MileSplit && target.kind == PageKind::Athlete {
-        artifacts::attach(root, reference, &target.url, &mut page)?;
+        artifacts::attach(files.root, reference, &target.url, &mut page)?;
     }
     let bytes = serde_json::to_vec(&page)?;
-    let body = artifacts::write(root, bytes, artifacts::MAX_PARSED_BYTES).await?;
+    let body = artifacts::write(files, bytes, artifacts::MAX_PARSED_BYTES).await?;
     let parsed = ParsedRef {
         body,
         capture_sha256: super::capture_digest(reference)?,
@@ -187,13 +191,13 @@ pub async fn parse(
 
 pub async fn persist(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     reference: &CaptureRef,
     parsed: &ParsedRef,
 ) -> Result<PageOutcome> {
-    let capture = artifacts::capture(root, reference).await?;
-    let bytes = artifacts::read(root, &parsed.body, artifacts::MAX_PARSED_BYTES).await?;
+    let capture = artifacts::capture(files, reference).await?;
+    let bytes = artifacts::read(files, &parsed.body, artifacts::MAX_PARSED_BYTES).await?;
     let page: ParsedPage =
         serde_json::from_slice(&bytes).context("decoding durable parsed page")?;
     database

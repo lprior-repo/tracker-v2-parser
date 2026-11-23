@@ -213,10 +213,10 @@ impl Database {
         let result = queue::fail(
             &mut transaction,
             job,
-            failure.capture.as_ref(),
+            failure.capture(),
             &failure.detail,
-            failure.blocked,
-            failure.stopped_origin.as_deref(),
+            failure.is_blocked(),
+            failure.stopped_origin(),
         )
         .await;
         finish(transaction, result).await

@@ -17,6 +17,7 @@ async fn real_fetch_admission_contention_is_persisted_as_deferred_and_resumes_wi
 -> Result<()> {
     with_database(|pool| Box::pin(async move {
         let database = Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root = tempfile::tempdir()?;
         let request = page::bind_target(&database, target(), &scope()?).await?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -26,7 +27,7 @@ async fn real_fetch_admission_contention_is_persisted_as_deferred_and_resumes_wi
             .execute(pool).await?;
         let fixture = WireFixture::start(FixtureKind::Page { status:200,body:"<html>reachable source</html>" }).await?;
         let mut connection = transport(root.path(), &fixture, &database)?.with_pacing_test_polls(1)?;
-        let FetchDecision::Settled { outcome: PageOutcome::Deferred { retry_at_ms, cycle } } = page::fetch(&database, root.path(), &reservation, &mut connection, now).await? else { anyhow::bail!("contention must defer") };
+        let FetchDecision::Settled { outcome: PageOutcome::Deferred { retry_at_ms, cycle } } = page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut connection, now).await? else { anyhow::bail!("contention must defer") };
         assert_eq!(cycle, 1);
         assert!(retry_at_ms >= now + 1000);
         let state: (String, i64, serde_json::Value) = sqlx::query_as("SELECT state,retry_at_ms,outcome FROM durable_page_operations WHERE operation_id=$1")
@@ -40,8 +41,8 @@ async fn real_fetch_admission_contention_is_persisted_as_deferred_and_resumes_wi
         let ReservationDecision::Reserved { reservation: retry } = page::reserve(&database, &request, retry_at_ms).await? else { anyhow::bail!("due retry reservation") };
         assert_eq!((retry.cycle, retry.ordinal, retry.total_attempts), (1,2,2));
         let mut recovered = transport(root.path(), &fixture, &database)?;
-        let FetchDecision::Captured { capture } = page::fetch(&database, root.path(), &retry, &mut recovered, retry_at_ms).await? else { anyhow::bail!("capture after capacity recovers") };
-        let FetchDecision::Captured { capture: replayed } = page::fetch(&database, root.path(), &retry, &mut recovered, retry_at_ms).await? else { anyhow::bail!("retained capture replay") };
+        let FetchDecision::Captured { capture } = page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &retry, &mut recovered, retry_at_ms).await? else { anyhow::bail!("capture after capacity recovers") };
+        let FetchDecision::Captured { capture: replayed } = page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &retry, &mut recovered, retry_at_ms).await? else { anyhow::bail!("retained capture replay") };
         assert_eq!(capture, replayed);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(pool).await?, 1);
         recovered.close().await?;
@@ -58,8 +59,8 @@ async fn elapsed_admission_retains_retry_metadata_at_transport_boundary() -> Res
     let error = anyhow::Error::from(elapsed)
         .context("persistent wire admission exceeded bounded wait budget");
     let failure = crate::transport::failure(&error);
-    assert!(failure.retryable);
-    assert!(!failure.blocked);
+    assert!(failure.is_retryable());
+    assert!(!failure.is_blocked());
     assert_eq!(page::classify(&failure), FailureClass::Transient);
     assert!(!failure.detail.contains("timeout"));
     assert!(!failure.detail.contains("timed out"));
@@ -69,26 +70,28 @@ async fn elapsed_admission_retains_retry_metadata_at_transport_boundary() -> Res
 #[test]
 fn retry_metadata_never_overrides_access_stops_or_captured_invalid_results() {
     let busy = anyhow::Error::from(AcquisitionBusy).context("bounded admission contention");
-    let mut failure = crate::transport::failure(&busy);
-    assert!(failure.retryable);
+    let failure = crate::transport::failure(&busy);
+    assert!(failure.is_retryable());
     assert_eq!(page::classify(&failure), FailureClass::Transient);
-    failure.capture = Some(crate::model::Capture {
+    let capture = crate::model::Capture {
         url: target().url,
         status: 200,
         content_type: "text/html".into(),
         body: Vec::new(),
-    });
+    };
+    let failure =
+        crate::transport::Failure::permanent("bounded admission contention", Some(capture));
     assert_eq!(page::classify(&failure), FailureClass::Rejected);
     let stop = busy.context(crate::transport::AccessStop {
         origin: "https://oh.milesplit.com".into(),
         status: Some(403),
     });
     let failure = crate::transport::failure(&stop);
-    assert!(failure.retryable);
-    assert!(failure.blocked);
+    assert!(!failure.is_retryable());
+    assert!(failure.is_blocked());
     assert_eq!(page::classify(&failure), FailureClass::Blocked);
     let invalid = anyhow::anyhow!("persistent wire admission exceeded bounded contention budget");
     let failure = crate::transport::failure(&invalid);
-    assert!(!failure.retryable);
+    assert!(!failure.is_retryable());
     assert_eq!(page::classify(&failure), FailureClass::Rejected);
 }

@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 
 use super::acquire;
@@ -49,6 +51,15 @@ async fn given_a_browser_slot_when_another_browser_arrives_then_http_can_progres
             );
             let http = acquire(&database, 3, false).await?;
             drop(browser);
+            let mut release_barrier = database.pool().begin().await?;
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                sqlx::query("SELECT pg_advisory_xact_lock(hashtext(current_schema()),194832749)")
+                    .execute(&mut *release_barrier),
+            )
+            .await
+            .context("cancelled browser admission did not release its lock")??;
+            release_barrier.rollback().await?;
             let replacement = acquire(&database, 3, true).await?;
             replacement.rollback().await?;
             http.rollback().await?;

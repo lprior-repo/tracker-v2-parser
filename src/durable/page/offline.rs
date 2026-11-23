@@ -1,9 +1,8 @@
-use std::path::Path;
-
 use anyhow::Result;
 
 use super::{
-    FetchDecision, PageOutcome, PageRequest, PageScope, ParseDecision, ReservationDecision,
+    FetchDecision, PageFiles, PageOutcome, PageRequest, PageScope, ParseDecision,
+    ReservationDecision,
 };
 use crate::{
     database::Database,
@@ -12,7 +11,7 @@ use crate::{
 
 pub async fn offline_replay(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     scope: &PageScope,
     target: Target,
     capture: Capture,
@@ -26,7 +25,8 @@ pub async fn offline_replay(
     let fetched = match crate::transport::prepare_response(reservation.request.target.kind, capture)
     {
         Ok(capture) => {
-            super::execution::retain_response(database, root, &reservation, capture, now_ms).await?
+            super::execution::retain_response(database, files, &reservation, capture, now_ms)
+                .await?
         }
         Err(failure) => FetchDecision::Settled {
             outcome: database
@@ -35,8 +35,8 @@ pub async fn offline_replay(
                     super::FailureRecord {
                         class: super::classify(&failure),
                         detail: &failure.detail,
-                        capture: failure.capture.as_ref(),
-                        stopped_origin: failure.stopped_origin.as_deref(),
+                        capture: failure.capture(),
+                        stopped_origin: failure.stopped_origin(),
                         observed_at_ms: now_ms,
                     },
                 )
@@ -47,11 +47,11 @@ pub async fn offline_replay(
         FetchDecision::Settled { outcome } => return Ok(outcome),
         FetchDecision::Captured { capture } => capture,
     };
-    let parsed = match super::parse(database, root, &reservation, &reference, now_ms).await? {
+    let parsed = match super::parse(database, files, &reservation, &reference, now_ms).await? {
         ParseDecision::Settled { outcome } => return Ok(outcome),
         ParseDecision::Parsed { parsed } => parsed,
     };
-    super::persist(database, root, &reservation, &reference, &parsed).await
+    super::persist(database, files, &reservation, &reference, &parsed).await
 }
 
 pub async fn bind_target(

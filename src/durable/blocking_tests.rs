@@ -64,7 +64,7 @@ async fn completed_work_is_reaped_so_more_than_eight_sequential_stages_can_run()
                     if error.downcast_ref::<BlockingStageUnavailable>()
                         == Some(&BlockingStageUnavailable::Busy) =>
                 {
-                    stages.join_next().await?;
+                    stages.join_next(false).await?;
                 }
                 Err(error) => return Err(error),
             }
@@ -122,7 +122,7 @@ async fn saturation_has_bounded_owned_tasks_and_retry_succeeds_after_reaping() -
     for result in futures::future::join_all(runs).await {
         result?;
     }
-    stages.join_next().await?;
+    stages.join_next(false).await?;
     assert_eq!(
         stages.run(|| Ok("retried successfully")).await?,
         "retried successfully"
@@ -172,7 +172,7 @@ async fn delivered_results_with_unfinished_handles_defer_without_running_new_wor
     releases
         .into_iter()
         .try_for_each(|release| release.send(()))?;
-    stages.join_next().await?;
+    stages.join_next(false).await?;
     let output = path.clone();
     stages
         .run(move || {
@@ -262,4 +262,167 @@ async fn cancelled_drain_keeps_registry_ownership_until_a_later_drain() -> Resul
     stages.drain().await?;
     assert_eq!(stages.state()?.tasks.len(), 0);
     Ok(())
+}
+
+#[tokio::test]
+async fn queued_but_unreceived_error_is_reported_after_awaiter_cancellation() -> Result<()> {
+    let stages = BlockingStages::new();
+    let (started, ready) = oneshot::channel();
+    let mut operation = Box::pin(stages.run(move || -> Result<()> {
+        started
+            .send(())
+            .map_err(|_| anyhow!("start receiver dropped"))?;
+        Err(anyhow!("unreceived file error"))
+    }));
+    tokio::select! {
+        biased;
+        result = ready => result?,
+        result = &mut operation => return Err(anyhow!("consumed result before test could cancel: {result:?}")),
+    }
+    stages.join_next(false).await?;
+    drop(operation);
+    let error = stages
+        .drain()
+        .await
+        .expect_err("the queued error was not consumed");
+    assert!(error.to_string().contains("unreceived file error"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifact_failure_delivered_to_caller_does_not_fail_drain_and_closed_intake_cannot_publish()
+-> Result<()> {
+    use crate::durable::page::{PageFiles, artifacts};
+
+    let stages = BlockingStages::new();
+    let root = tempfile::tempdir()?;
+    let files = PageFiles::new(root.path(), &stages);
+    let error = artifacts::write(files, b"evidence".to_vec(), 1)
+        .await
+        .expect_err("artifact exceeds its byte grant");
+    assert!(format!("{error:#}").contains("byte grant"));
+    stages.drain().await?;
+    let error = artifacts::write(files, b"evidence".to_vec(), 8)
+        .await
+        .expect_err("artifact writer must use the worker's closed intake");
+    assert_eq!(
+        error.downcast_ref::<BlockingStageUnavailable>(),
+        Some(&BlockingStageUnavailable::Stopping)
+    );
+    assert!(std::fs::read_dir(root.path())?.next().is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn blocking_panic_is_distinct_from_an_artifact_error_at_shutdown() -> Result<()> {
+    let stages = BlockingStages::new();
+    let result = stages
+        .run(|| -> Result<()> { panic!("injected blocking panic") })
+        .await;
+    assert!(result.is_err());
+    let error = stages
+        .drain()
+        .await
+        .expect_err("worker panic must fail shutdown");
+    let detail = error.to_string();
+    assert!(detail.contains("owned blocking stage panicked"));
+    assert!(detail.contains("injected blocking panic"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn artifact_publication_waits_for_a_slot_without_exceeding_the_worker_bound() -> Result<()> {
+    use crate::durable::page::{PageFiles, artifacts};
+
+    let stages = BlockingStages::new();
+    let root = tempfile::tempdir()?;
+    let files = PageFiles::new(root.path(), &stages);
+    let mut releases = Vec::new();
+    for _ in 0..MAX_TASKS {
+        let (release, wait) = mpsc::channel();
+        drop(stages.state()?.tasks.spawn_blocking(move || {
+            wait.recv()?;
+            Ok(())
+        }));
+        releases.push(release);
+    }
+    let mut write = std::pin::pin!(artifacts::write(files, b"evidence".to_vec(), 8));
+    assert!(futures::poll!(&mut write).is_pending());
+    assert!(std::fs::read_dir(root.path())?.next().is_none());
+    releases.pop().expect("one slot is occupied").send(())?;
+    let artifact = tokio::time::timeout(std::time::Duration::from_secs(5), write).await??;
+    assert!(
+        root.path()
+            .join(format!("{}.blob", artifact.sha256))
+            .exists()
+    );
+    for release in releases {
+        release.send(())?;
+    }
+    stages.drain().await?;
+    assert_eq!(std::fs::read_dir(root.path())?.count(), 1);
+    Ok(())
+}
+
+#[test]
+fn shutdown_finishes_admitted_artifact_publication_after_awaiter_cancellation() -> Result<()> {
+    use crate::durable::page::{PageFiles, artifacts};
+    use anyhow::Context;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .max_blocking_threads(1)
+        .build()?
+        .block_on(async {
+            let directory = tempfile::tempdir()?;
+            for invalid_root in [false, true] {
+                let root = directory
+                    .path()
+                    .join(if invalid_root { "file" } else { "artifacts" });
+                if invalid_root {
+                    std::fs::write(&root, b"not a directory")?;
+                }
+                let stages = BlockingStages::new();
+                let (started, ready) = oneshot::channel();
+                let (release, wait) = mpsc::channel();
+                let hold_pool = tokio::task::spawn_blocking(move || -> Result<()> {
+                    started
+                        .send(())
+                        .map_err(|_| anyhow!("start receiver dropped"))?;
+                    wait.recv()?;
+                    Ok(())
+                });
+                ready.await?;
+                let files = PageFiles::new(&root, &stages);
+                let bytes = b"evidence";
+                let mut write = Box::pin(artifacts::write(files, bytes.to_vec(), bytes.len()));
+                assert!(futures::poll!(&mut write).is_pending());
+                drop(write);
+                let mut shutdown = Box::pin(stages.drain());
+                assert!(futures::poll!(&mut shutdown).is_pending());
+                release.send(())?;
+                hold_pool.await??;
+                let disposition = shutdown.await;
+                if invalid_root {
+                    let failure =
+                        disposition.expect_err("an unreceived I/O error must fail shutdown");
+                    let expected =
+                        std::fs::create_dir_all(&root).expect_err("root is still a file");
+                    assert!(failure.to_string().contains(&expected.to_string()));
+                    assert_eq!(std::fs::read(&root)?, b"not a directory");
+                } else {
+                    disposition?;
+                    let artifact = std::fs::read_dir(&root)?
+                        .next()
+                        .context("shutdown did not publish the admitted artifact")??;
+                    assert_eq!(std::fs::read(artifact.path())?, bytes);
+                    assert_eq!(
+                        artifact.file_name(),
+                        format!("{}.blob", crate::durable::page::body_digest(bytes)).as_str()
+                    );
+                    assert_eq!(std::fs::read_dir(root)?.count(), 1);
+                }
+            }
+            Ok(())
+        })
 }

@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use sha2::{Digest, Sha256};
 
-use super::{ArtifactRef, CaptureRef};
+use super::{ArtifactRef, CaptureRef, PageFiles};
 use crate::model::Capture;
 
 pub(in crate::durable) const MAX_PARSED_BYTES: usize = 64 * 1024 * 1024;
@@ -122,32 +122,36 @@ fn publish(
         .context("syncing durable artifact directory")
 }
 
-pub async fn write(root: &Path, bytes: Vec<u8>, limit: usize) -> Result<ArtifactRef> {
-    let root = root.to_owned();
-    let span = tracing::debug_span!("publish_durable_artifact", logical_bytes = bytes.len());
-    tokio::task::spawn_blocking(move || span.in_scope(|| write_sync(&root, &bytes, limit)))
+#[tracing::instrument(skip_all, fields(logical_bytes = bytes.len()))]
+pub async fn write(files: PageFiles<'_>, bytes: Vec<u8>, limit: usize) -> Result<ArtifactRef> {
+    let root = files.root.to_owned();
+    files
+        .blocking
+        .run_when_available(move || write_sync(&root, &bytes, limit))
         .await
-        .context("durable artifact writer failed")?
+        .context("durable artifact writer failed")
 }
 
 pub(in crate::durable) async fn read(
-    root: &Path,
+    files: PageFiles<'_>,
     reference: &ArtifactRef,
     limit: usize,
 ) -> Result<Vec<u8>> {
-    let root = root.to_owned();
+    let root = files.root.to_owned();
     let reference = reference.clone();
-    tokio::task::spawn_blocking(move || read_sync(&root, &reference, limit))
+    files
+        .blocking
+        .run(move || read_sync(&root, &reference, limit))
         .await
-        .context("durable artifact reader failed")?
+        .context("durable artifact reader failed")
 }
 
-pub(super) async fn capture(root: &Path, reference: &CaptureRef) -> Result<Capture> {
+pub(super) async fn capture(files: PageFiles<'_>, reference: &CaptureRef) -> Result<Capture> {
     Ok(Capture {
         url: reference.url.clone(),
         status: reference.status,
         content_type: reference.content_type.clone(),
-        body: read(root, &reference.body, crate::transport::MAX_BODY_BYTES).await?,
+        body: read(files, &reference.body, crate::transport::MAX_BODY_BYTES).await?,
     })
 }
 

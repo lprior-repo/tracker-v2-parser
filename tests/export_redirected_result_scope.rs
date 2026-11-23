@@ -182,13 +182,14 @@ async fn given_durable_alias_recapture_when_raw_request_url_changes_then_prior_r
             let scope = page_support::scope(&config)?;
             let mut later = scope.clone();
             later.run_generation = "later-redirected-recapture".into();
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let root = test.directory().join("redirected-results");
             for (run, request, final_url) in [
                 (&scope, target(REQUESTED, "OH"), FINAL),
                 (&later, target(REQUESTED, "OH"), LATER_FINAL),
                 (&scope, target(ALIAS, "WI"), FINAL),
             ] {
-                let outcome = page::offline_replay(&database, &root, run, request, capture(final_url)).await?;
+                let outcome = page::offline_replay(&database, track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking), run, request, capture(final_url)).await?;
                 assert!(matches!(outcome, PageOutcome::Completed { .. }));
             }
             let facts: (i64, i64, i64, i64, i64) = sqlx::query_as(
@@ -205,7 +206,7 @@ async fn given_durable_alias_recapture_when_raw_request_url_changes_then_prior_r
             assert_eq!(facts, (80, 80, 2, 0, 3));
             assert_scopes(&database, &["OH", "WI"], FINAL).await?;
             let before = observation_state(&database).await?;
-            let replay = page::offline_replay(&database, &root, &scope, target(REQUESTED, "OH"), capture(FINAL)).await?;
+            let replay = page::offline_replay(&database, track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking), &scope, target(REQUESTED, "OH"), capture(FINAL)).await?;
             assert!(matches!(replay, PageOutcome::Completed { .. }));
             assert_eq!(observation_state(&database).await?, before);
             database.close().await;

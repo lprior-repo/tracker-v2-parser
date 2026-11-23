@@ -1,21 +1,20 @@
-use super::{FailureClass, FailureRecord, FetchDecision, PageReservation, RetryPolicy};
+use super::{FailureClass, FailureRecord, FetchDecision, PageFiles, PageReservation, RetryPolicy};
 use crate::{database::Database, model::Capture, transport::Failure};
 use anyhow::Result;
-use std::path::Path;
 
 pub(super) async fn record_with_policy(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     failure: Failure,
     now_ms: i64,
     policy: &RetryPolicy,
 ) -> Result<FetchDecision> {
-    if failure.blocked {
-        super::stopped::save(root, reservation, &failure, now_ms).await?;
+    if failure.is_blocked() {
+        super::stopped::save(files, reservation, &failure, now_ms).await?;
     }
     let mut detail = bounded_detail(&failure.detail);
-    if let Some(capture) = failure.capture.as_ref() {
+    if let Some(capture) = failure.capture() {
         let evidence = Capture {
             url: capture.url.clone(),
             status: capture.status,
@@ -23,7 +22,7 @@ pub(super) async fn record_with_policy(
             body: capture.body.clone(),
         };
         if let Err(error) =
-            super::execution::retain(database, root, reservation, evidence, now_ms).await
+            super::execution::retain(database, files, reservation, evidence, now_ms).await
         {
             detail = bounded_detail(&format!("{detail}; retaining failure evidence: {error:#}"));
         }
@@ -34,8 +33,8 @@ pub(super) async fn record_with_policy(
             FailureRecord {
                 class: classify(&failure),
                 detail: &detail,
-                capture: failure.capture.as_ref(),
-                stopped_origin: failure.stopped_origin.as_deref(),
+                capture: failure.capture(),
+                stopped_origin: failure.stopped_origin(),
                 observed_at_ms: now_ms,
             },
             policy,
@@ -46,17 +45,17 @@ pub(super) async fn record_with_policy(
 
 #[must_use]
 pub fn classify(failure: &Failure) -> FailureClass {
-    if failure.blocked {
+    if failure.is_blocked() {
         return FailureClass::Blocked;
     }
     if failure
-        .capture
-        .as_ref()
+        .capture()
         .is_some_and(|capture| matches!(capture.status, 408 | 425 | 500 | 502 | 503 | 504))
     {
         return FailureClass::Transient;
     }
-    if failure.capture.is_none() && (failure.retryable || transient_detail(&failure.detail)) {
+    if failure.capture().is_none() && (failure.is_retryable() || transient_detail(&failure.detail))
+    {
         return FailureClass::Transient;
     }
     FailureClass::Rejected

@@ -70,8 +70,9 @@ async fn frozen_chunks_resume_after_db_changes_and_publish_one_verified_sheet_id
                 config: config.clone(),
             };
             let root = test.directory().join("artifacts");
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let workspace = Workspace::open(&root, "export-a", &spec)?;
-            let frozen = freeze_export(&workspace, &config, &test.url).await?;
+            let frozen = freeze_export(&workspace, &config, &test.url, &blocking).await?;
             let plan = frozen_plan(&workspace, &frozen)?;
             assert_eq!(plan.rows, 1001);
             assert!(plan.chunks.len() >= 2);
@@ -82,7 +83,9 @@ async fn frozen_chunks_resume_after_db_changes_and_publish_one_verified_sheet_id
                 .await?;
             let resumed = Workspace::open(&root, "export-a", &spec)?;
             assert_eq!(
-                freeze_export(&resumed, &config, &test.url).await?.manifest,
+                freeze_export(&resumed, &config, &test.url, &blocking)
+                    .await?
+                    .manifest,
                 frozen.manifest
             );
             assert_eq!(prepare_export_chunk(&resumed, &frozen, 0)?, first);
@@ -132,6 +135,7 @@ async fn abandoned_freeze_generation_is_retained_and_new_generation_completes() 
             .execute(database.pool())
             .await?;
             let config = config();
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let workspace = Workspace::open(
                 &test.directory().join("artifacts"),
                 "export-a",
@@ -145,7 +149,7 @@ async fn abandoned_freeze_generation_is_retained_and_new_generation_completes() 
             )?;
             let abandoned =
                 workspace.store("freeze-1-chunk-0.json", b"abandoned original bytes")?;
-            let frozen = freeze_export(&workspace, &config, &test.url).await?;
+            let frozen = freeze_export(&workspace, &config, &test.url, &blocking).await?;
             assert_eq!(frozen_plan(&workspace, &frozen)?.generation, 2);
             assert_eq!(workspace.read(&abandoned)?, b"abandoned original bytes");
             assert!(!workspace.path("publication-receipt.json")?.exists());

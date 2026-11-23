@@ -104,7 +104,7 @@ async fn given_recorded_http_headers_without_page_capture_when_replayed_then_onl
                 .await
                 .expect_err("completed innerHTTP cannot repeat sameattempt");
             replay.close().await?;
-            assert!(!repeated.blocked);
+            assert!(!repeated.is_blocked());
             assert!(repeated.detail.contains("network interruption"));
             let mut next = configured(pool.clone(), &fixture)?;
             next.set_wire_context(&operation, &"3".repeat(64))?;

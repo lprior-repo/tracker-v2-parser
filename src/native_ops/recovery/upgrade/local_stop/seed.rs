@@ -108,7 +108,11 @@ pub(super) async fn retain(runtime: &Runtime, input: &Value, before: &Value) -> 
         )
         .as_bytes(),
     );
-    let reference = page::artifacts::write(&runtime.root, bytes.clone(), 16 * 1024 * 1024).await?;
+    let blocking = crate::durable::blocking::BlockingStages::new();
+    let files = page::PageFiles::new(&runtime.root, &blocking);
+    let reference = page::artifacts::write(files, bytes.clone(), 16 * 1024 * 1024).await;
+    blocking.drain().await?;
+    let reference = reference?;
     let hash = io::digest(&bytes);
     ensure!(
         reference.sha256 == hash && reference.bytes == u64::try_from(bytes.len())?,

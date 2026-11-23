@@ -12,8 +12,11 @@ mod stopped;
 #[cfg(test)]
 mod tests;
 
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
+use super::blocking::BlockingStages;
 use crate::model::Target;
 
 pub use binding::{request, validate_request};
@@ -29,6 +32,19 @@ pub(crate) use selection::{
     Scheduling, SelectionStep, reserve_configured, select_step_with_extension,
 };
 pub use selection::{reserve, select, select_excluding};
+
+#[derive(Clone, Copy)]
+pub struct PageFiles<'a> {
+    root: &'a Path,
+    blocking: &'a BlockingStages,
+}
+
+impl<'a> PageFiles<'a> {
+    #[must_use]
+    pub const fn new(root: &'a Path, blocking: &'a BlockingStages) -> Self {
+        Self { root, blocking }
+    }
+}
 
 pub(crate) fn body_digest(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

@@ -169,16 +169,14 @@ async fn given_precapture_stop_when_persisted_then_both_authorities_are_blocked_
             database
                 .enqueue(&[contact("https://b.example.edu/contact", "b")], false)
                 .await?;
-            let failure = track_scrapper_v2::transport::Failure {
-                stopped_origin: Some(
+            let failure = track_scrapper_v2::transport::Failure::blocked(
+                "login destination requires human review",
+                Some(
                     "https://b.example.edu/login?token=synthetic-stop-canary#synthetic-stop-canary"
                         .into(),
                 ),
-                capture: None,
-                blocked: true,
-                retryable: false,
-                detail: "login destination requires human review".into(),
-            };
+                None,
+            );
             database.fail_acquisition(&job, &failure).await?;
             let state: (String, String) = sqlx::query_as(
                 "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",
@@ -220,13 +218,11 @@ async fn given_non_http_login_rejection_when_origin_is_unavailable_then_original
             database
                 .enqueue(&[contact("https://a.example.edu/contact", "a")], false)
                 .await?;
-            let failure = track_scrapper_v2::transport::Failure {
-                stopped_origin: Some("https://a.example.edu".into()),
-                capture: None,
-                blocked: true,
-                retryable: false,
-                detail: "browser destination requires human access review".into(),
-            };
+            let failure = track_scrapper_v2::transport::Failure::blocked(
+                "browser destination requires human access review",
+                Some("https://a.example.edu".into()),
+                None,
+            );
             database.fail_acquisition(&job, &failure).await?;
             let state: (String, String) = sqlx::query_as(
                 "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",

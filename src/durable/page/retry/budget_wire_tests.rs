@@ -18,6 +18,7 @@ async fn three_real_http_failures_exhaust_budget_without_a_fourth_request_after_
             let mut now = chrono::Utc::now().timestamp_millis();
             let scope = scope(&config, now)?;
             let request = page::bind_target(&database, target(3), &scope).await?;
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 503,
@@ -34,7 +35,7 @@ async fn three_real_http_failures_exhaust_budget_without_a_fourth_request_after_
                 };
                 let FetchDecision::Settled { outcome } = super::fetch_configured(
                     &database,
-                    root.path(),
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
                     &reservation,
                     &mut transport,
                     now,
@@ -73,7 +74,7 @@ async fn three_real_http_failures_exhaust_budget_without_a_fourth_request_after_
             assert!(matches!(
                 super::fetch_configured(
                     &database,
-                    root.path(),
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
                     &reservation,
                     &mut transport,
                     now + scope.cooldown_ms * 10,
@@ -136,6 +137,7 @@ async fn successful_third_attempt_persists_and_replays_without_a_fourth_acquisit
                 anyhow::bail!("third reservation")
             };
             assert_eq!(reservation.total_attempts, 3);
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 200,
@@ -145,7 +147,7 @@ async fn successful_third_attempt_persists_and_replays_without_a_fourth_acquisit
             let mut transport = connection(root.path(), &fixture, &database)?;
             let FetchDecision::Captured { capture } = super::fetch_configured(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &reservation,
                 &mut transport,
                 now,
@@ -155,13 +157,25 @@ async fn successful_third_attempt_persists_and_replays_without_a_fourth_acquisit
             else {
                 anyhow::bail!("third capture")
             };
-            let page::ParseDecision::Parsed { parsed } =
-                page::parse(&database, root.path(), &reservation, &capture, now).await?
+            let page::ParseDecision::Parsed { parsed } = page::parse(
+                &database,
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
+                &reservation,
+                &capture,
+                now,
+            )
+            .await?
             else {
                 anyhow::bail!("third parse")
             };
-            let outcome =
-                page::persist(&database, root.path(), &reservation, &capture, &parsed).await?;
+            let outcome = page::persist(
+                &database,
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
+                &reservation,
+                &capture,
+                &parsed,
+            )
+            .await?;
             assert!(matches!(outcome, PageOutcome::Completed { .. }));
             let before = snapshot(&database).await?;
             assert!(matches!(
@@ -171,7 +185,14 @@ async fn successful_third_attempt_persists_and_replays_without_a_fourth_acquisit
                 }
             ));
             assert_eq!(
-                page::persist(&database, root.path(), &reservation, &capture, &parsed).await?,
+                page::persist(
+                    &database,
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
+                    &reservation,
+                    &capture,
+                    &parsed
+                )
+                .await?,
                 outcome
             );
             assert_eq!(snapshot(&database).await?, before);

@@ -17,25 +17,18 @@ const CLEANUP: &str = "page cleanup also failed: browser acquisition incomplete:
 #[test]
 fn given_exact_uncaptured_queue_saturation_when_classified_then_only_capacity_is_transient() {
     for detail in [DIRECT, CLEANUP] {
-        let mut failure = Failure {
-            blocked: false,
-            retryable: false,
-            capture: None,
-            stopped_origin: None,
-            detail: detail.into(),
-        };
+        let failure = Failure::permanent(detail, None);
         assert_eq!(page::classify(&failure), FailureClass::Transient);
-        failure.blocked = true;
+        let failure = Failure::blocked(detail, None, None);
         assert_eq!(page::classify(&failure), FailureClass::Blocked);
-        failure.blocked = false;
-        failure.capture = Some(crate::model::Capture {
+        let capture = crate::model::Capture {
             url: target().url,
             status: 200,
             content_type: "text/html".into(),
             body: Vec::new(),
-        });
+        };
+        let failure = Failure::permanent(detail, Some(capture));
         assert_eq!(page::classify(&failure), FailureClass::Rejected);
-        failure.capture = None;
         for changed in [
             format!("HTTP 403: {detail}"),
             format!(
@@ -45,7 +38,7 @@ fn given_exact_uncaptured_queue_saturation_when_classified_then_only_capacity_is
             detail.replace("no available capacity", "channel closed"),
             detail.replace("browser request admission", "unrecognized admission"),
         ] {
-            failure.detail = changed.into();
+            let failure = Failure::permanent(changed, None);
             assert_eq!(page::classify(&failure), FailureClass::Rejected);
         }
     }

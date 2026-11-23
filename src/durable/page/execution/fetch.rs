@@ -1,12 +1,14 @@
-use std::path::Path;
-
 use anyhow::{Context, Result};
 
 use super::super::{
-    FailureClass, FailureRecord, FetchDecision, PageReservation, RetryPolicy, artifacts, failures,
-    retained, stopped,
+    FailureClass, FailureRecord, FetchDecision, PageFiles, PageReservation, RetryPolicy, artifacts,
+    failures, retained, stopped,
 };
-use crate::{acquisition::ScopeExclusion, database::Database, transport::Transport};
+use crate::{
+    acquisition::ScopeExclusion,
+    database::{Database, durable::SavedStages},
+    transport::Transport,
+};
 
 pub struct FetchPolicy<'a> {
     pub retry: &'a RetryPolicy,
@@ -15,14 +17,14 @@ pub struct FetchPolicy<'a> {
 
 pub async fn fetch(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     transport: &mut Transport,
     now_ms: i64,
 ) -> Result<FetchDecision> {
     fetch_with_policy(
         database,
-        root,
+        files,
         reservation,
         transport,
         now_ms,
@@ -36,7 +38,7 @@ pub async fn fetch(
 
 pub async fn fetch_with_policy(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     transport: &mut Transport,
     now_ms: i64,
@@ -44,21 +46,25 @@ pub async fn fetch_with_policy(
 ) -> Result<FetchDecision> {
     policy.retry.check(&reservation.request)?;
     let started = tokio::time::Instant::now();
-    let (capture, _, outcome) = database.durable_stages(reservation).await?;
-    if let Some(outcome) = outcome {
-        return Ok(FetchDecision::Settled { outcome });
-    }
-    if let Some(stop) = stopped::load(root, reservation).await? {
+    let capture = match database.durable_stages(reservation).await? {
+        SavedStages::Settled(settled) => {
+            let (_, outcome) = settled.into_parts();
+            return Ok(FetchDecision::Settled { outcome });
+        }
+        SavedStages::Captured(capture) | SavedStages::Parsed { capture, .. } => Some(capture),
+        SavedStages::Reserved => None,
+    };
+    if let Some(stop) = stopped::load(files, reservation).await? {
         return stopped::record(database, reservation, &stop).await;
     }
-    if let Some(capture) = capture.or(retained::load(root, reservation).await?) {
-        let restored = artifacts::capture(root, &capture).await?;
+    if let Some(capture) = capture.or(retained::load(files, reservation).await?) {
+        let restored = artifacts::capture(files, &capture).await?;
         if let Err(failure) =
             crate::transport::prepare_response(reservation.request.target.kind, restored)
         {
             return failures::record_with_policy(
                 database,
-                root,
+                files,
                 reservation,
                 failure,
                 now_ms,
@@ -93,7 +99,7 @@ pub async fn fetch_with_policy(
         Ok(capture) => {
             super::retain_response_with_policy(
                 database,
-                root,
+                files,
                 reservation,
                 capture,
                 completed_at_ms,
@@ -104,7 +110,7 @@ pub async fn fetch_with_policy(
         Err(failure) => {
             failures::record_with_policy(
                 database,
-                root,
+                files,
                 reservation,
                 failure,
                 completed_at_ms,

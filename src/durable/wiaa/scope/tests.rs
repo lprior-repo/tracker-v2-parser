@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::bind;
 use crate::{
@@ -110,6 +110,7 @@ async fn wiaa_run_bound_retry_budget_is_used_by_actual_fetch_and_expired_bounds_
             let database = Database::durable_test_database(pool.clone());
             let config = configured()?;
             let now = chrono::Utc::now().timestamp_millis();
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let scope = bind(&config, "active", Some((now + 3_600_000, 120_000)), now)?;
             let request = page::bind_target(&database, target(), &scope).await?;
@@ -128,7 +129,7 @@ async fn wiaa_run_bound_retry_budget_is_used_by_actual_fetch_and_expired_bounds_
                 outcome: PageOutcome::Exhausted { detail },
             } = page::fetch_configured(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &reservation,
                 &mut transport,
                 now,
@@ -180,7 +181,7 @@ async fn wiaa_run_bound_retry_budget_is_used_by_actual_fetch_and_expired_bounds_
             assert!(matches!(
                 page::fetch_configured(
                     &database,
-                    root.path(),
+                    crate::durable::page::PageFiles::new(root.path(), &blocking),
                     &reservation,
                     &mut transport,
                     now + 1000,
@@ -193,12 +194,11 @@ async fn wiaa_run_bound_retry_budget_is_used_by_actual_fetch_and_expired_bounds_
             ));
             transport.close().await?;
             assert_eq!(fixture.finish().await?.len(), 0);
-            let saved = database
-                .durable_stages(&reservation)
-                .await?
-                .2
-                .context("expired outcome")?;
-            assert!(matches!(saved, PageOutcome::Exhausted { .. }));
+            let saved = database.durable_stages(&reservation).await?;
+            assert!(matches!(
+                saved.outcome(),
+                Some(PageOutcome::Exhausted { .. })
+            ));
             Ok(())
         })
     })

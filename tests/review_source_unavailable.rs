@@ -159,8 +159,9 @@ async fn captured_source_unavailability_is_scoped_deduplicated_and_frozen_withou
         snapshot.finish().await?;
         assert_eq!(actual.iter().map(|row|(row.checkpoint_id,row.athlete_source_id.as_str())).collect::<Vec<_>>(),expected);
         assert!(actual.iter().all(|row|row.status==ReviewStatus::Succeeded && row.state=="WI" && row.cells()[9]=="succeeded" && row.error=="No public PR/result rows in captured profile evidence; source progression is restricted. This does not establish career absence." && row.next_action.contains("Do not retry restricted sections") && row.ai_guidance.contains("do not infer missing results")));
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let workspace=Workspace::open(&test.directory().join("artifacts"),"source-unavailable-review",&OperationSpec::Export {config:config.clone()})?;
-        let frozen=freeze_export(&workspace,&config,&test.url).await?;
+        let frozen=freeze_export(&workspace,&config,&test.url, &blocking).await?;
         assert_eq!(frozen_plan(&workspace,&frozen)?.review_rows,Some(2));
         let workbook=render_export(&workspace,&frozen)?;
         let verified=verify_export(&workspace,&frozen,&workbook)?;
@@ -174,7 +175,7 @@ async fn captured_source_unavailability_is_scoped_deduplicated_and_frozen_withou
         assert!(athletes.iter().find(|row|row[0]=="Athlete 13").context("public result athlete")?.iter().any(|cell|cell=="11.00 (2026-05-15)"));
         assert_eq!(database_state(&database).await?,before);
         sqlx::query("UPDATE athlete_sources SET details=jsonb_set(details,'{source_values,pages}','{}'::jsonb)").execute(database.pool()).await?;
-        let replay=freeze_export(&workspace,&config,&test.url).await?;
+        let replay=freeze_export(&workspace,&config,&test.url, &blocking).await?;
         assert_eq!(replay.manifest,frozen.manifest);
         assert_eq!(render_export(&workspace,&replay)?,workbook);
         assert_eq!(sheet(&workbook.path,"Review")?,review);

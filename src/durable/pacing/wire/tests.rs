@@ -82,11 +82,8 @@ async fn given_durable_403_headers_and_a_pacing_failure_when_replayed_then_acces
                 .await
                 .expect_err("pacing completion failure");
             let failure = crate::transport::failure(&result);
-            assert!(failure.blocked);
-            assert_eq!(
-                failure.stopped_origin.as_deref(),
-                Some("https://wi.milesplit.com")
-            );
+            assert!(failure.is_blocked());
+            assert_eq!(failure.stopped_origin(), Some("https://wi.milesplit.com"));
             assert!(failure.detail.contains("403"));
             let replay = gate.with_wire_context(&"3".repeat(64), &"4".repeat(64))?;
             let repeated = replay

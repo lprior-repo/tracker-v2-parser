@@ -1,6 +1,7 @@
 mod client_cache;
 #[cfg(test)]
 mod contact_rate_tests;
+mod failures;
 mod http;
 mod persistent;
 pub(crate) mod policy;
@@ -9,7 +10,7 @@ pub(crate) mod robots;
 #[cfg(test)]
 mod sanitization_tests;
 
-use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, ensure};
 use futures::future::BoxFuture;
@@ -24,6 +25,8 @@ use crate::{
 
 pub(crate) const MAX_BODY_BYTES: usize = 16_777_216;
 pub(crate) use client_cache::SharedHttpClients;
+pub use failures::Failure;
+pub(crate) use failures::{AccessStop, AccessStopCaptureError, failure};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -40,74 +43,6 @@ pub struct Options {
     pub headless: bool,
     pub rps: f64,
 }
-
-#[derive(Debug)]
-pub struct Failure {
-    pub stopped_origin: Option<Box<str>>,
-    pub capture: Option<Capture>,
-    pub blocked: bool,
-    pub retryable: bool,
-    pub detail: Box<str>,
-}
-
-impl fmt::Display for Failure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for Failure {}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AccessStop {
-    pub origin: String,
-    pub status: Option<u16>,
-}
-
-impl fmt::Display for AccessStop {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "source access stopped at {} (HTTP {:?}); human review required",
-            self.origin, self.status
-        )
-    }
-}
-
-impl std::error::Error for AccessStop {}
-
-#[derive(Debug)]
-pub(crate) struct AccessStopCaptureError {
-    pub(crate) origin: Option<String>,
-    pub(crate) status: u16,
-    pub(crate) error: anyhow::Error,
-}
-
-impl AccessStopCaptureError {
-    pub(crate) fn new(status: u16, error: anyhow::Error, address: &str) -> Self {
-        let origin = url::Url::parse(address)
-            .ok()
-            .filter(|url| matches!(url.scheme(), "http" | "https"))
-            .map(|url| url.origin().ascii_serialization());
-        Self {
-            origin,
-            status,
-            error,
-        }
-    }
-}
-
-impl fmt::Display for AccessStopCaptureError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "source returned HTTP {}; capturing response failed: {:#}",
-            self.status, self.error
-        )
-    }
-}
-
-impl std::error::Error for AccessStopCaptureError {}
 
 pub(crate) const fn access_stop_status(status: u16) -> bool {
     matches!(status, 401 | 402 | 403 | 429 | 451)
@@ -344,46 +279,40 @@ fn finish_response(capture: Capture, denied: bool) -> Result<Capture, Failure> {
 pub(crate) fn sanitize_response(mut capture: Capture) -> Result<Capture, Failure> {
     let blocked = access_stop_status(capture.status) || denied_capture(&capture);
     capture.body = redact::body(&capture.body).map_err(|error| {
-        let detail = if blocked {
-            format!(
-                "source returned HTTP {}; sanitizing response failed: {error:#}",
-                capture.status
+        if blocked {
+            Failure::blocked(
+                format!(
+                    "source returned HTTP {}; sanitizing response failed: {error:#}",
+                    capture.status
+                ),
+                None,
+                None,
             )
         } else {
-            format!("{error:#}")
-        };
-        Failure {
-            stopped_origin: None,
-            capture: None,
-            blocked,
-            retryable: false,
-            detail: detail.into_boxed_str(),
+            Failure::permanent(format!("{error:#}"), None)
         }
     })?;
     Ok(capture)
 }
 
 fn finish_status(capture: Capture, denied: bool) -> Result<Capture, Failure> {
-    let blocked = access_stop_status(capture.status) || denied;
-    if !(200..300).contains(&capture.status) || denied {
-        return Err(Failure {
-            stopped_origin: None,
-            detail: format!(
-                "source returned HTTP {}{}; no alternate transport attempted",
-                capture.status,
-                if denied {
-                    " with an access challenge, login requirement, or paywall"
-                } else {
-                    ""
-                }
-            )
-            .into_boxed_str(),
-            capture: Some(capture),
-            blocked,
-            retryable: false,
-        });
+    if (200..300).contains(&capture.status) && !denied {
+        return Ok(capture);
     }
-    Ok(capture)
+    let reason = if denied {
+        " with an access challenge, login requirement, or paywall"
+    } else {
+        ""
+    };
+    let detail = format!(
+        "source returned HTTP {}{reason}; no alternate transport attempted",
+        capture.status
+    );
+    if access_stop_status(capture.status) || denied {
+        Err(Failure::blocked(detail, None, Some(capture)))
+    } else {
+        Err(Failure::permanent(detail, Some(capture)))
+    }
 }
 
 pub(crate) fn denied_capture(capture: &Capture) -> bool {
@@ -423,37 +352,6 @@ pub(crate) fn denied_body(capture: &Capture) -> bool {
     ]
     .iter()
     .any(|marker| text.contains(marker))
-}
-
-pub(crate) fn failure(error: &anyhow::Error) -> Failure {
-    let detail = format!("{error:#}");
-    let lower = detail.to_ascii_lowercase();
-    let stopped = error.downcast_ref::<AccessStop>();
-    let blocked = stopped.is_some()
-        || error.is::<AccessStopCaptureError>()
-        || [
-            "challenge",
-            "requires authentication",
-            "paywall",
-            "human review",
-            "human handling",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker));
-    Failure {
-        stopped_origin: stopped
-            .map(|stop| stop.origin.as_str())
-            .or_else(|| {
-                error
-                    .downcast_ref::<AccessStopCaptureError>()
-                    .and_then(|stop| stop.origin.as_deref())
-            })
-            .map(|origin| origin.to_owned().into_boxed_str()),
-        capture: None,
-        blocked,
-        retryable: crate::durable::retryable_error(error),
-        detail: detail.into_boxed_str(),
-    }
 }
 
 pub fn redact_capture(mut capture: Capture) -> Result<Capture> {
@@ -509,7 +407,7 @@ mod tests {
         assert!(String::from_utf8_lossy(&capture.body).contains("transient-canary"));
         let failure = super::prepare_response(PageKind::Athlete, capture)
             .expect_err("provider captures remain strict");
-        assert!(failure.capture.is_none());
+        assert!(failure.capture().is_none());
         assert!(!format!("{failure:?}").contains("transient-canary"));
     }
 
@@ -525,10 +423,12 @@ mod tests {
         ] {
             let failure = super::prepare_response(PageKind::Contacts, contact_capture(url, status))
                 .expect_err("nonpublic response");
-            assert_eq!(failure.blocked, blocked);
+            assert_eq!(failure.is_blocked(), blocked);
+            assert!(!failure.is_retryable());
+            assert!(failure.stopped_origin().is_none());
             assert!(!format!("{failure:?}").contains("transient-canary"));
             assert!(!failure.to_string().contains("transient-canary"));
-            let capture = failure.capture.expect("status metadata");
+            let capture = failure.into_capture().expect("status metadata");
             assert_eq!(capture.status, status);
             assert_eq!(capture.url, url);
             assert!(capture.body.is_empty());

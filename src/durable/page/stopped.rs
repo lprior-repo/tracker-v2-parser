@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{FailureClass, FailureRecord, FetchDecision, PageReservation};
+use super::{FailureClass, FailureRecord, FetchDecision, PageFiles, PageReservation};
 use crate::{database::Database, transport::Failure};
 
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -67,29 +67,33 @@ fn origin(address: &str) -> Result<String> {
     Ok(origin)
 }
 
-pub(super) async fn load(root: &Path, reservation: &PageReservation) -> Result<Option<Stop>> {
-    let root = root.to_owned();
+pub(super) async fn load(
+    files: PageFiles<'_>,
+    reservation: &PageReservation,
+) -> Result<Option<Stop>> {
+    let root = files.root.to_owned();
     let reservation = reservation.clone();
-    tokio::task::spawn_blocking(move || load_sync(&root, &reservation))
+    files
+        .blocking
+        .run(move || load_sync(&root, &reservation))
         .await
-        .context("reading retained access stop")?
+        .context("reading retained access stop")
 }
 
 pub(super) async fn save(
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     failure: &Failure,
     observed_at_ms: i64,
 ) -> Result<()> {
     ensure!(
-        failure.blocked,
+        failure.is_blocked(),
         "only access stops can be retained as stops"
     );
-    let address = failure.stopped_origin.as_deref().map_or_else(
+    let address = failure.stopped_origin().map_or_else(
         || {
             failure
-                .capture
-                .as_ref()
+                .capture()
                 .map_or(reservation.request.target.url.as_str(), |c| c.url.as_str())
         },
         |address| address,
@@ -98,14 +102,16 @@ pub(super) async fn save(
         attempt_id: reservation.attempt_id.clone(),
         operation_id: reservation.request.binding.operation_id.clone(),
         origin: origin(address)?,
-        status: failure.capture.as_ref().map(|capture| capture.status),
+        status: failure.capture().map(|capture| capture.status),
         observed_at_ms,
     };
-    let root = root.to_owned();
+    let root = files.root.to_owned();
     let reservation = reservation.clone();
-    tokio::task::spawn_blocking(move || save_sync(&root, &reservation, &stop))
+    files
+        .blocking
+        .run_when_available(move || save_sync(&root, &reservation, &stop))
         .await
-        .context("writing retained access stop")?
+        .context("writing retained access stop")
 }
 
 fn save_sync(root: &Path, reservation: &PageReservation, stop: &Stop) -> Result<()> {

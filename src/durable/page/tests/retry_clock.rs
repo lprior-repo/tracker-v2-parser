@@ -27,6 +27,7 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let scope = scope()?;
             let request = page::bind_target(&database, target(), &scope).await?;
@@ -71,7 +72,7 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
             let mut connection = transport(root.path(), &fixture, &database)?;
             let started = tokio::time::Instant::now();
             let fetched =
-                page::fetch(&database, root.path(), &reservation, &mut connection, now).await?;
+                page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut connection, now).await?;
             let elapsed = i64::try_from(started.elapsed().as_millis())?;
             if ordinal == 3 {
                 assert!(matches!(fetched, FetchDecision::Settled { outcome: PageOutcome::Exhausted { detail } } if detail.contains("acquisition attempt budget exhausted (3/3)")));
@@ -132,26 +133,36 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
 
 #[test]
 fn only_exact_uncaptured_invalid_interception_id_errors_are_transient_and_blocks_dominate() {
-    let mut failure=crate::transport::Failure {
-        blocked:false,retryable:false,capture:None,stopped_origin:None,
-        detail:"browser interception failed: Error -32602: Invalid InterceptionId.: Error -32602: Invalid InterceptionId.".into(),
-    };
-    assert_eq!(page::classify(&failure), FailureClass::Transient);
-    failure.blocked = true;
-    assert_eq!(page::classify(&failure), FailureClass::Blocked);
-    failure.blocked = false;
-    failure.capture = Some(crate::model::Capture {
+    use crate::transport::Failure;
+
+    let detail = "browser interception failed: Error -32602: Invalid InterceptionId.: Error -32602: Invalid InterceptionId.";
+    assert_eq!(
+        page::classify(&Failure::permanent(detail, None)),
+        FailureClass::Transient
+    );
+    assert_eq!(
+        page::classify(&Failure::blocked(detail, None, None)),
+        FailureClass::Blocked
+    );
+    let capture = crate::model::Capture {
         url: target().url,
         status: 200,
         content_type: "text/html".into(),
         body: Vec::new(),
-    });
-    assert_eq!(page::classify(&failure), FailureClass::Rejected);
-    failure.capture = None;
-    failure.detail = "browser interception failed: Error -32602: malformed response".into();
-    assert_eq!(page::classify(&failure), FailureClass::Rejected);
-    failure.detail = "other operation failed: Error -32602: Invalid InterceptionId.".into();
-    assert_eq!(page::classify(&failure), FailureClass::Rejected);
+    };
+    assert_eq!(
+        page::classify(&Failure::permanent(detail, Some(capture))),
+        FailureClass::Rejected
+    );
+    for detail in [
+        "browser interception failed: Error -32602: malformed response",
+        "other operation failed: Error -32602: Invalid InterceptionId.",
+    ] {
+        assert_eq!(
+            page::classify(&Failure::permanent(detail, None)),
+            FailureClass::Rejected
+        );
+    }
 }
 
 #[tokio::test]

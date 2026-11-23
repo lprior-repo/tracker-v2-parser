@@ -30,6 +30,7 @@ async fn succeeded_wiaa_indexes_refresh_in_a_new_future_cohort_operation_and_rep
 -> Result<()> {
     with_database(|pool| Box::pin(async move {
         let database=Database::durable_test_database(pool.clone());
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root=tempfile::tempdir()?;
         let old=config("2027")?;
         let future=config("2028,2029")?;
@@ -38,7 +39,7 @@ async fn succeeded_wiaa_indexes_refresh_in_a_new_future_cohort_operation_and_rep
         let future_scope=scope(root.path(),&future,"future-wiaa",now)?;
         for letter in [false,true] {
             let target=target(letter);
-            assert!(matches!(page::offline_replay(&database,root.path(),&old_scope,target.clone(),capture(&target,body(letter))).await?,PageOutcome::Completed {..}));
+            assert!(matches!(page::offline_replay(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&old_scope,target.clone(),capture(&target,body(letter))).await?,PageOutcome::Completed {..}));
             let previous=page::bind_target(&database,target.clone(),&old_scope).await?;
             let old_record=operation(&database,&previous.binding.operation_id).await?;
             let request=page::bind_target(&database,target,&future_scope).await?;
@@ -54,14 +55,14 @@ async fn succeeded_wiaa_indexes_refresh_in_a_new_future_cohort_operation_and_rep
             assert_eq!(snapshot(&database).await?,before_old_replay);
             let fixture=WireFixture::start(FixtureKind::Page {status:200,body:body(letter)}).await?;
             let mut transport=connection(root.path(),&fixture,&database,&request.target.url)?;
-            let FetchDecision::Captured {capture}=page::fetch_configured(&database,root.path(),&reservation,&mut transport,now,&future).await? else {anyhow::bail!("fresh index capture missing")};
-            let parsed=match page::parse(&database,root.path(),&reservation,&capture,now).await? {ParseDecision::Parsed {parsed}=>parsed, other=>anyhow::bail!("fresh index parse missing: {other:?}")};
-            let outcome=page::persist(&database,root.path(),&reservation,&capture,&parsed).await?;
+            let FetchDecision::Captured {capture}=page::fetch_configured(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut transport,now,&future).await? else {anyhow::bail!("fresh index capture missing")};
+            let parsed=match page::parse(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,now).await? {ParseDecision::Parsed {parsed}=>parsed, other=>anyhow::bail!("fresh index parse missing: {other:?}")};
+            let outcome=page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?;
             assert!(matches!(outcome,PageOutcome::Completed {..}));
             let before=snapshot(&database).await?;
             assert!(matches!(page::reserve_configured(&database,&future,&request,now).await?,ReservationDecision::Settled {outcome:PageOutcome::Completed {..}}));
-            assert!(matches!(page::fetch_configured(&database,root.path(),&reservation,&mut transport,now,&future).await?,FetchDecision::Settled {outcome:PageOutcome::Completed {..}}));
-            assert_eq!(page::persist(&database,root.path(),&reservation,&capture,&parsed).await?,outcome);
+            assert!(matches!(page::fetch_configured(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut transport,now,&future).await?,FetchDecision::Settled {outcome:PageOutcome::Completed {..}}));
+            assert_eq!(page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?,outcome);
             assert_eq!(snapshot(&database).await?,before);
             assert_eq!(operation(&database,&previous.binding.operation_id).await?,old_record);
             assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1").bind(&request.binding.operation_id).fetch_one(pool).await?,1);

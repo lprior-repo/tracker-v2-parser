@@ -203,8 +203,10 @@ mod deadline_tests {
             .expect("transport's own 45 second deadline must beat fixture watchdog")
             .expect_err("stalled resolution must time out");
         assert_eq!(elapsed, Duration::from_secs(45));
-        assert!(!failure.blocked);
-        assert!(failure.capture.is_none());
+        assert!(!failure.is_blocked());
+        assert!(failure.is_retryable());
+        assert!(failure.stopped_origin().is_none());
+        assert!(failure.capture().is_none());
         assert!(failure.detail.contains("timed out"), "{}", failure.detail);
         Ok(())
     }

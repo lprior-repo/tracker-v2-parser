@@ -1,3 +1,5 @@
+mod cleanup;
+
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -15,10 +17,7 @@ use super::{
     Browser, COMMAND_TIMEOUT, capture::PageCapture, finish_page_fetch, interception::Interception,
 };
 use super::{native::NativeStatus, owned::OwnedChromium};
-use crate::{
-    model::{Capture, Target},
-    transport::access_stop_status,
-};
+use crate::model::{Capture, Target};
 
 pub(super) struct Acquisition {
     pub chromium: Arc<OwnedChromium>,
@@ -30,36 +29,63 @@ pub(super) struct Acquisition {
     pub deadline: Duration,
     pub native_status: Arc<NativeStatus>,
     #[cfg(test)]
-    pub local_origin: Option<url::Origin>,
-    #[cfg(test)]
-    pub additional_origin: Option<url::Origin>,
-    #[cfg(test)]
-    pub fail_page_close: bool,
-    #[cfg(test)]
-    pub capture_ready: Option<Arc<tokio::sync::Notify>>,
+    pub test_controls: TestControls,
+}
+
+#[cfg(test)]
+pub(super) struct TestControls {
+    local_origin: Option<url::Origin>,
+    additional_origin: Option<url::Origin>,
+    fail_page_close: bool,
+    capture_ready: Option<Arc<tokio::sync::Notify>>,
+}
+
+#[cfg(test)]
+impl From<&Browser> for TestControls {
+    fn from(browser: &Browser) -> Self {
+        Self {
+            local_origin: browser.local_origin.clone(),
+            additional_origin: browser.additional_origin.clone(),
+            fail_page_close: browser.fail_page_close,
+            capture_ready: browser.capture_ready.clone(),
+        }
+    }
 }
 
 impl Acquisition {
     #[tracing::instrument(skip_all)]
     pub async fn run(self, mut reply: oneshot::Sender<Result<Capture>>) -> Result<()> {
-        #[cfg(test)]
-        let baseline = self
-            .native_status
-            .begin(
-                self.local_origin
-                    .iter()
-                    .chain(self.additional_origin.iter())
-                    .cloned()
-                    .collect(),
-            )
-            .await?;
-        #[cfg(not(test))]
-        let baseline = self.native_status.begin().await?;
+        let baseline = self.begin_native().await?;
         let params = CreateTargetParams::builder()
             .url("about:blank")
             .browser_context_id(self.context.clone())
             .build()
             .map_err(|error| anyhow!(error))?;
+        let result = self.acquire_page(params, &mut reply).await;
+        let native = self.verify_native(baseline).await;
+        Self::deliver(reply, finish_page_fetch(result, native));
+        Ok(())
+    }
+
+    async fn begin_native(&self) -> Result<usize> {
+        self.native_status
+            .begin(
+                #[cfg(test)]
+                self.test_controls
+                    .local_origin
+                    .iter()
+                    .chain(self.test_controls.additional_origin.iter())
+                    .cloned()
+                    .collect(),
+            )
+            .await
+    }
+
+    async fn acquire_page(
+        &self,
+        params: CreateTargetParams,
+        reply: &mut oneshot::Sender<Result<Capture>>,
+    ) -> Result<Capture> {
         let opened = timeout(
             COMMAND_TIMEOUT.saturating_mul(2),
             self.chromium.new_page(params),
@@ -67,8 +93,8 @@ impl Acquisition {
         .await
         .context("opening browser page timed out")
         .and_then(std::convert::identity);
-        let result = match opened {
-            Ok(page) => self.capture_and_close(page, &mut reply).await,
+        match opened {
+            Ok(page) => self.capture_and_close(page, reply).await,
             Err(error) => {
                 self.chromium.mark_unavailable();
                 match self.dispose_or_terminate().await {
@@ -78,26 +104,29 @@ impl Acquisition {
                     ))),
                 }
             }
-        };
-        let native = self.native_status.checkpoint().await.and_then(|count| {
-            let (accepted, probes, rejected_connects) = self.native_status.counts();
-            let (non_connects, invalid_connects, incomplete_connects) = self.native_status.denial_kinds();
-            ensure!(
-                count == baseline,
-                "browser acquisition incomplete: native request was blocked (accepted={accepted}, benign_probes={probes}, rejected_connects={rejected_connects}, non_connects={non_connects}, invalid_connects={invalid_connects}, incomplete_connects={incomplete_connects}, denied_before={baseline}, denied_after={count})"
-            );
-            Ok(())
-        });
-        let result = finish_page_fetch(result, native);
+        }
+    }
+
+    async fn verify_native(&self, baseline: usize) -> Result<()> {
+        let count = self.native_status.checkpoint().await?;
+        let (accepted, probes, rejected_connects) = self.native_status.counts();
+        let (non_connects, invalid_connects, incomplete_connects) =
+            self.native_status.denial_kinds();
+        ensure!(
+            count == baseline,
+            "browser acquisition incomplete: native request was blocked (accepted={accepted}, benign_probes={probes}, rejected_connects={rejected_connects}, non_connects={non_connects}, invalid_connects={invalid_connects}, incomplete_connects={incomplete_connects}, denied_before={baseline}, denied_after={count})"
+        );
+        Ok(())
+    }
+
+    fn deliver(reply: oneshot::Sender<Result<Capture>>, result: Result<Capture>) {
         match reply.send(result) {
-            Ok(()) => Ok(()),
+            Ok(()) => (),
             Err(Ok(_)) => {
                 tracing::debug!("browser caller cancelled after acquisition cleanup completed");
-                Ok(())
             }
             Err(Err(error)) => {
                 tracing::warn!(%error, "cancelled browser acquisition ended after owned cleanup");
-                Ok(())
             }
         }
     }
@@ -110,27 +139,31 @@ impl Acquisition {
         let installed = timeout(COMMAND_TIMEOUT, self.install_interception(&page))
             .await
             .context("installing browser destination policy timed out")
-            .and_then(|result| result);
+            .and_then(std::convert::identity);
         let (result, interceptor) = match installed {
             Ok(mut interceptor) => {
-                let operation = timeout(
-                    self.deadline,
-                    interceptor.run(Browser::fetch_page(
-                        &page,
-                        &self.target,
-                        &self.headers,
-                        self.interval,
-                    )),
-                );
-                let result = tokio::select! {
-                    () = reply.closed() => Err(anyhow!("browser acquisition cancelled by caller")),
-                    result = operation => result.context("browser request timed out").and_then(|result| result),
-                };
+                let result = self
+                    .capture_with_interception(&page, &mut interceptor, reply)
+                    .await;
                 (result, Some(interceptor))
             }
             Err(error) => (Err(error), None),
         };
         self.teardown(page, interceptor, result).await
+    }
+
+    async fn capture_with_interception(
+        &self,
+        page: &Page,
+        interceptor: &mut Interception,
+        reply: &mut oneshot::Sender<Result<Capture>>,
+    ) -> Result<PageCapture> {
+        let fetch = Browser::fetch_page(page, &self.target, &self.headers, self.interval);
+        let operation = timeout(self.deadline, interceptor.run(fetch));
+        tokio::select! {
+            () = reply.closed() => Err(anyhow!("browser acquisition cancelled by caller")),
+            result = operation => result.context("browser request timed out").and_then(std::convert::identity),
+        }
     }
 
     async fn install_interception(&self, page: &Page) -> Result<Interception> {
@@ -150,9 +183,9 @@ impl Acquisition {
             self.interval,
             self.persistent_pacing.clone(),
             #[cfg(test)]
-            self.local_origin.clone(),
+            self.test_controls.local_origin.clone(),
             #[cfg(test)]
-            self.additional_origin.clone(),
+            self.test_controls.additional_origin.clone(),
         )
         .await
     }
@@ -164,67 +197,19 @@ impl Acquisition {
         result: Result<PageCapture>,
     ) -> Result<Capture> {
         #[cfg(test)]
-        if let Some(ready) = &self.capture_ready {
+        if let Some(ready) = &self.test_controls.capture_ready {
             ready.notify_one();
         }
-        let prepared = match interceptor.as_mut() {
-            Some(interceptor) => {
-                let complete = result.as_ref().is_ok_and(|capture| {
-                    let capture = capture.capture();
-                    !access_stop_status(capture.status)
-                        && !crate::transport::denied_capture(capture)
-                });
-                interceptor.prepare_close(&page, complete).await
-            }
-            None => Ok(()),
-        };
-        let result = match result {
-            Ok(capture) if prepared.is_ok() => capture.finish(&page).await,
-            Ok(capture) => Ok(capture.into_capture()),
-            Err(error) => Err(error),
-        };
-        let result = finish_page_fetch(result, prepared);
-        let result = match interceptor.as_ref() {
-            Some(interceptor) => interceptor.preserve_stop(result),
-            None => result,
-        };
+        let result = Self::prepare_capture(&page, interceptor.as_mut(), result).await;
         let target = page.target_id().clone();
-        let closing = async {
+        let closed = Self::close_page(
+            page,
             #[cfg(test)]
-            if self.fail_page_close {
-                return Err(anyhow!("injected page-close failure"));
-            }
-            page.close().await.map_err(anyhow::Error::from)
-        };
-        let closed = timeout(COMMAND_TIMEOUT, closing)
+            self.test_controls.fail_page_close,
+        )
+        .await;
+        self.finish_teardown(&target, interceptor, result, closed)
             .await
-            .context("closing browser page timed out")
-            .and_then(|result| result);
-        if closed.is_err()
-            && let Err(emergency) = self.dispose_or_terminate().await
-        {
-            self.chromium.mark_unavailable();
-            if let Some(interceptor) = interceptor {
-                self.chromium.retain_interception(interceptor).await?;
-            }
-            return Err(
-                emergency.context("browser page remains owned pending owned-process cleanup")
-            );
-        }
-        let access_stop = result
-            .as_ref()
-            .is_ok_and(|capture| access_stop_status(capture.status));
-        let drained = match interceptor {
-            Some(interceptor) => interceptor.finish(access_stop).await,
-            None => Ok(()),
-        };
-        let cleanup = closed.and(drained);
-        let confirmed = self.chromium.confirm_page_closed(&target).await;
-        if confirmed.is_err() {
-            self.chromium.mark_unavailable();
-            self.dispose_or_terminate().await.context("native target verification failed and emergency cleanup failed; scope remains owned")?;
-        }
-        finish_page_fetch(result, cleanup.and(confirmed))
     }
 
     async fn dispose_or_terminate(&self) -> Result<()> {

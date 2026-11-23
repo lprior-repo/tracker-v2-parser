@@ -156,13 +156,15 @@ pub async fn download_durable(
     output_path: &Path,
     pool: PgPool,
     operation_id: &str,
+    blocking: &crate::durable::blocking::BlockingStages,
 ) -> Result<()> {
     super::validate_digest(expected_sha256)?;
     let bytes = fetch(pool, operation_id, expected_sha256).await?;
     ensure!(!bytes.is_empty(), "school address download was empty");
     let expected = expected_sha256.to_owned();
     let path = PathBuf::from(output_path);
-    tokio::task::spawn_blocking(move || super::save_verified(&bytes, &expected, &path))
+    blocking
+        .run(move || super::save_verified(&bytes, &expected, &path))
         .await
-        .context("school address file writer failed")?
+        .context("school address file writer failed")
 }

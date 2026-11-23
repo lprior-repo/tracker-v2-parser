@@ -21,10 +21,11 @@ async fn given_a_committed_implicit_get_capture_when_explicit_get_replays_then_t
             let scope = page_support::scope(&page_support::config()?)?;
             let target = page_support::profile();
             let request = page::bind_target(&database, target.clone(), &scope).await?;
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let root = test.directory().join("artifacts");
             let before = page::offline_replay(
                 &database,
-                &root,
+                track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),
                 &scope,
                 target.clone(),
                 page_support::capture()?,
@@ -45,7 +46,7 @@ async fn given_a_committed_implicit_get_capture_when_explicit_get_replays_then_t
             assert_eq!(stored_digest, receipt_sha256);
             let actual = page::offline_replay(
                 &database,
-                &root,
+                track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),
                 &scope,
                 explicit_get(target),
                 page_support::capture()?,

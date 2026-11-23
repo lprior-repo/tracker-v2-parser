@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    sync::{Mutex, MutexGuard},
+    sync::{Arc, Mutex, MutexGuard},
     task::Poll,
     time::Duration,
 };
@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, ensure};
 use futures::{TryStreamExt, future::poll_fn, stream};
 use tokio::{
-    sync::oneshot,
+    sync::{Mutex as AsyncMutex, oneshot},
     task::{JoinError, JoinSet},
 };
 
@@ -32,26 +32,99 @@ impl fmt::Display for BlockingStageUnavailable {
 
 impl std::error::Error for BlockingStageUnavailable {}
 
+#[derive(Debug)]
+enum BlockingJoinFailure {
+    Panicked(JoinError),
+    Cancelled(JoinError),
+}
+
+impl fmt::Display for BlockingJoinFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Panicked(error) => write!(formatter, "owned blocking stage panicked: {error}"),
+            Self::Cancelled(error) => write!(
+                formatter,
+                "owned blocking stage was cancelled before completion: {error}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BlockingJoinFailure {}
+
+impl From<JoinError> for BlockingJoinFailure {
+    fn from(error: JoinError) -> Self {
+        if error.is_panic() {
+            Self::Panicked(error)
+        } else {
+            Self::Cancelled(error)
+        }
+    }
+}
+
+#[derive(Default)]
+struct Failures {
+    details: Vec<String>,
+    count: u64,
+}
+
+impl Failures {
+    fn record(&mut self, detail: String) {
+        self.count = self.count.saturating_add(1);
+        if self.details.len() < MAX_TASKS {
+            self.details.push(detail);
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct FailureLog(Arc<Mutex<Failures>>);
+
+impl FailureLog {
+    fn lock(&self) -> Result<MutexGuard<'_, Failures>> {
+        self.0
+            .lock()
+            .map_err(|_| anyhow!("owned blocking stage failure log is poisoned"))
+    }
+
+    fn record(&self, error: &anyhow::Error) {
+        let detail: String = format!("{error:#}").chars().take(2048).collect();
+        tracing::error!(error = %detail, "owned blocking stage failed");
+        match self.lock() {
+            Ok(mut failures) => failures.record(detail),
+            Err(error) => tracing::error!(%error, "could not retain blocking stage failure"),
+        }
+    }
+}
+
+struct UndeliveredFailure {
+    error: Option<anyhow::Error>,
+    log: FailureLog,
+}
+
+impl Drop for UndeliveredFailure {
+    fn drop(&mut self) {
+        if let Some(error) = &self.error {
+            self.log.record(error);
+        }
+    }
+}
+
 #[derive(Default)]
 struct State {
     tasks: JoinSet<Result<()>>,
-    failures: Vec<String>,
-    failed: u64,
+    failures: FailureLog,
     stopping: bool,
 }
 
 impl State {
-    fn observe(&mut self, result: std::result::Result<Result<()>, JoinError>) {
-        let error = match result {
-            Ok(Ok(())) => return,
-            Ok(Err(error)) => error,
-            Err(error) => anyhow!(error).context("owned blocking stage join failed"),
-        };
-        self.failed = self.failed.saturating_add(1);
-        tracing::error!(error = %error, "owned blocking stage failed");
-        if self.failures.len() < MAX_TASKS {
-            self.failures
-                .push(format!("{error:#}").chars().take(2048).collect());
+    fn observe(&self, result: std::result::Result<Result<()>, JoinError>) {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => self.failures.record(&error),
+            Err(error) => self
+                .failures
+                .record(&BlockingJoinFailure::from(error).into()),
         }
     }
 
@@ -69,19 +142,24 @@ impl State {
             "{} owned blocking stages remain running; blocking work cannot be cancelled",
             self.tasks.len()
         );
+        let failures = self.failures.lock()?;
         ensure!(
-            self.failed == 0,
+            failures.count == 0,
             "{} owned blocking stages failed: {}",
-            self.failed,
-            self.failures.join("; ")
+            failures.count,
+            failures.details.join("; ")
         );
+        drop(failures);
         Ok(())
     }
 }
 
+type StageReceiver<T> = oneshot::Receiver<std::result::Result<T, UndeliveredFailure>>;
+
 #[derive(Default)]
 pub struct BlockingStages {
     state: Mutex<State>,
+    admission: AsyncMutex<()>,
 }
 
 impl BlockingStages {
@@ -102,41 +180,100 @@ impl BlockingStages {
         T: Send + 'static,
         F: FnOnce() -> Result<T> + Send + 'static,
     {
+        let receiver = {
+            let _admission = self
+                .admission
+                .try_lock()
+                .map_err(|_| BlockingStageUnavailable::Busy)?;
+            self.admit(&mut Some(operation))?
+                .ok_or(BlockingStageUnavailable::Busy)?
+        };
+        self.receive(receiver).await
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub(crate) async fn run_when_available<T, F>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T> + Send + 'static,
+    {
+        let receiver = self.wait_to_admit(operation).await?;
+        self.receive(receiver).await
+    }
+
+    async fn wait_to_admit<T, F>(&self, operation: F) -> Result<StageReceiver<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T> + Send + 'static,
+    {
+        let _admission = self.admission.lock().await;
+        let mut operation = Some(operation);
+        loop {
+            if let Some(receiver) = self.admit(&mut operation)? {
+                return Ok(receiver);
+            }
+            self.join_next(true).await?;
+        }
+    }
+
+    fn admit<T, F>(&self, operation: &mut Option<F>) -> Result<Option<StageReceiver<T>>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T> + Send + 'static,
+    {
         tokio::runtime::Handle::try_current()
             .context("owned blocking stages require a Tokio runtime")?;
-        let (sender, receiver) = oneshot::channel();
-        {
-            let mut state = self.state()?;
-            state.reap();
-            if state.stopping {
-                return Err(BlockingStageUnavailable::Stopping.into());
-            }
-            if state.tasks.len() >= MAX_TASKS {
-                return Err(BlockingStageUnavailable::Busy.into());
-            }
-            drop(state.tasks.spawn_blocking(move || {
-                let result = operation();
-                let error = result
-                    .as_ref()
-                    .err()
-                    .map(|error| format!("{error:#}").chars().take(2048).collect::<String>());
-                drop(sender.send(result));
-                error.map_or(Ok(()), |error| Err(anyhow!(error)))
-            }));
+        let mut state = self.state()?;
+        state.reap();
+        if state.stopping {
+            return Err(BlockingStageUnavailable::Stopping.into());
         }
+        if state.tasks.len() >= MAX_TASKS {
+            return Ok(None);
+        }
+        let operation = operation
+            .take()
+            .context("blocking stage was already admitted")?;
+        let (sender, receiver) = oneshot::channel();
+        let log = state.failures.clone();
+        let span = tracing::Span::current();
+        drop(state.tasks.spawn_blocking(move || {
+            let _entered = span.enter();
+            let result = operation().map_err(|error| UndeliveredFailure {
+                error: Some(error),
+                log,
+            });
+            drop(sender.send(result));
+            Ok(())
+        }));
+        drop(state);
+        Ok(Some(receiver))
+    }
+
+    async fn receive<T>(&self, receiver: StageReceiver<T>) -> Result<T> {
         let result = receiver
             .await
             .context("owned blocking stage ended without delivering its result")?;
+        let result = match result {
+            Ok(value) => Ok(value),
+            Err(mut failure) => Err(failure
+                .error
+                .take()
+                .context("blocking failure missing its cause")?),
+        };
         self.state()?.reap();
         result
     }
 
-    async fn join_next(&self) -> Result<()> {
+    async fn join_next(&self, only_when_full: bool) -> Result<()> {
         poll_fn(|context| {
             let mut state = match self.state() {
                 Ok(state) => state,
                 Err(error) => return Poll::Ready(Err(error)),
             };
+            if only_when_full && (state.stopping || state.tasks.len() < MAX_TASKS) {
+                return Poll::Ready(Ok(()));
+            }
             let result = match state.tasks.poll_join_next(context) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(Some(result)) => {
@@ -160,8 +297,12 @@ impl BlockingStages {
             state.stopping = true;
             state.reap();
         }
-        let drain = stream::iter((0..MAX_TASKS).map(Ok::<_, anyhow::Error>))
-            .try_for_each(|_| self.join_next());
+        let drain = async {
+            let _admission = self.admission.lock().await;
+            stream::iter((0..MAX_TASKS).map(Ok::<_, anyhow::Error>))
+                .try_for_each(|_| self.join_next(false))
+                .await
+        };
         if let Ok(result) = tokio::time::timeout(DRAIN_BUDGET, drain).await {
             result?;
         } else {

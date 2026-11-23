@@ -8,6 +8,7 @@ use super::{Batch, FrozenChunk, FrozenExport, FrozenPlan, OperationSpec, Workspa
 use crate::{
     config::Config,
     database::{Database, ExportSnapshot},
+    durable::blocking::BlockingStages,
     export::ExportLayout,
     model::{AthleteProfileDetails, AthleteRecord, Source},
 };
@@ -167,6 +168,7 @@ async fn collect(
     snapshot: ExportSnapshot<'_>,
     workspace: &Workspace,
     plan: FrozenPlan,
+    blocking: &BlockingStages,
 ) -> Result<FrozenPlan> {
     let review_enabled = plan.config.export.review_sheet;
     let batches = stream::try_unfold(
@@ -216,10 +218,10 @@ async fn collect(
     );
     batches
         .try_fold(buffer::Buffer::new(plan), |buffer, batch| async move {
-            buffer.push(workspace, batch).await
+            buffer.push(workspace, batch, blocking).await
         })
         .await?
-        .finish(workspace)
+        .finish(workspace, blocking)
         .await
 }
 
@@ -228,6 +230,7 @@ pub async fn freeze_export(
     workspace: &Workspace,
     config: &Config,
     database_url: &str,
+    blocking: &BlockingStages,
 ) -> Result<FrozenExport> {
     let mut config = config.clone();
     config.validate()?;
@@ -266,7 +269,7 @@ pub async fn freeze_export(
             review_rows: config.export.review_sheet.then_some(0),
             review_bytes: config.export.review_sheet.then_some(0),
         };
-        collect(snapshot, workspace, plan).await
+        collect(snapshot, workspace, plan, blocking).await
     }
     .await;
     database.close().await;

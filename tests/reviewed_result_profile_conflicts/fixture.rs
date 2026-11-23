@@ -100,8 +100,9 @@ pub async fn approve_alias(database: &Database, test: &Scenario) -> Result<()> {
     std::fs::create_dir_all(&root)?;
     let artifact = stage(&root, "approved-identity.json", &bytes)?;
     let spec = OperationSpec::ReviewedIdentity { manifest: artifact };
+    let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
     let workspace = Workspace::open(&root, "approved-identity", &spec)?;
-    let report = operations::execute_import(&workspace, &spec, &test.url).await?;
+    let report = operations::execute_import(&workspace, &spec, &test.url, &blocking).await?;
     assert_eq!(report["canonical_athlete_id"], *canonical);
     assert_eq!(report["profile_count"], 2);
     Ok(())
@@ -178,8 +179,9 @@ impl ResultFixture {
         let document = self.manifest(&root, test).await?;
         let artifact = stage(&root, "result-link.json", &serde_json::to_vec(&document)?)?;
         let spec = OperationSpec::ReviewedResultLinks { manifest: artifact };
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let workspace = Workspace::open(&root, operation_id, &spec)?;
-        operations::execute_import(&workspace, &spec, &test.url).await
+        operations::execute_import(&workspace, &spec, &test.url, &blocking).await
     }
 
     async fn manifest(&self, root: &Path, test: &Scenario) -> Result<Value> {

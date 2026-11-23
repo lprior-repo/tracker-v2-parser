@@ -154,7 +154,7 @@ impl AthleticOperations {
                 .await?;
         let reference: page::ParsedRef = serde_json::from_value(parsed)?;
         let bytes = page::artifacts::read(
-            &self.runtime.artifact_root,
+            page::PageFiles::new(&self.runtime.artifact_root, &self.runtime.blocking),
             &reference.body,
             page::artifacts::MAX_PARSED_BYTES,
         )

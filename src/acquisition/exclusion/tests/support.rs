@@ -101,9 +101,17 @@ pub(super) async fn preserved_stop(
         body: "must remain unused",
     })
     .await?;
+    let blocking = crate::durable::blocking::BlockingStages::new();
     let mut transport = transport(root, &fixture, database)?;
     assert!(matches!(
-        page::fetch(database, root, &reservation, &mut transport, now).await?,
+        page::fetch(
+            database,
+            crate::durable::page::PageFiles::new(root, &blocking),
+            &reservation,
+            &mut transport,
+            now
+        )
+        .await?,
         page::FetchDecision::Settled {
             outcome: PageOutcome::Blocked { .. }
         }

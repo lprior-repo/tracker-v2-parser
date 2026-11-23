@@ -19,15 +19,16 @@ async fn public_reference_commit_and_receipt_survive_missing_filesystem_ack_with
             std::fs::write(&source, CSV)?;
             let csv = stage_input(&root, &source)?;
             let spec = OperationSpec::PublicSchools { csv, origin: None };
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let workspace = Workspace::open(&root, "reference-a", &spec)?;
-            let first = execute_import(&workspace, &spec, &test.url).await?;
+            let first = execute_import(&workspace, &spec, &test.url, &blocking).await?;
             assert_eq!(first["inserted"], 1);
             let before: serde_json::Value =
                 sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM schools s")
                     .fetch_one(database.pool())
                     .await?;
             std::fs::remove_file(workspace.path("import-receipt.json")?)?;
-            let replay = execute_import(&workspace, &spec, &test.url).await?;
+            let replay = execute_import(&workspace, &spec, &test.url, &blocking).await?;
             assert_eq!(replay, first);
             let after: serde_json::Value =
                 sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM schools s")
@@ -65,9 +66,10 @@ async fn tampered_import_input_fails_hash_validation_before_database_connection(
         csv: csv.clone(),
         origin: None,
     };
+    let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
     let workspace = Workspace::open(root.path(), "reference-a", &spec)?;
     std::fs::write(&csv.path, b"tampered")?;
-    let error = execute_import(&workspace, &spec, "not a database URL")
+    let error = execute_import(&workspace, &spec, "not a database URL", &blocking)
         .await
         .err()
         .expect("input must fail");

@@ -19,6 +19,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
             let database = Database::durable_test_database(pool.clone());
             let config = config()?;
             let now = chrono::Utc::now().timestamp_millis();
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let api = api()?;
             let mut token = Target::get(
@@ -79,7 +80,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                 assert!(matches!(
                     page::fetch_configured(
                         &database,
-                        root.path(),
+                        crate::durable::page::PageFiles::new(root.path(), &blocking),
                         &reservation,
                         &mut transport,
                         now,
@@ -94,16 +95,20 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                     checkpoint(&database, request.binding.page_id).await?,
                     before
                 );
-                let (retained_capture, retained_parse, outcome) =
-                    database.durable_stages(&reservation).await?;
-                assert_eq!(retained_capture, None);
-                assert_eq!(retained_parse, None);
-                assert!(matches!(outcome, Some(PageOutcome::Rejected { .. })));
+                use crate::database::durable::{SavedStages, StageEvidence};
+                let SavedStages::Settled(saved) = database.durable_stages(&reservation).await?
+                else {
+                    anyhow::bail!("excluded attempt must be settled");
+                };
+                assert!(matches!(
+                    saved.into_parts(),
+                    (StageEvidence::None, PageOutcome::Rejected { .. })
+                ));
                 let settled = snapshot(&database).await?;
                 assert!(matches!(
                     page::fetch_configured(
                         &database,
-                        root.path(),
+                        crate::durable::page::PageFiles::new(root.path(), &blocking),
                         &reservation,
                         &mut transport,
                         now,
@@ -156,6 +161,7 @@ async fn public_scope_exclusion_never_supersedes_completed_capture_receipt() -> 
             let database = Database::durable_test_database(pool.clone());
             let config = config()?;
             let now = chrono::Utc::now().timestamp_millis();
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let target = Target::get(
                 Source::MileSplit,
@@ -171,7 +177,7 @@ async fn public_scope_exclusion_never_supersedes_completed_capture_receipt() -> 
             let scope = scope(&config, "prior-completed-excluded-scope", now)?;
             let completed = page::offline_replay(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &scope,
                 target.clone(),
                 Capture {

@@ -816,10 +816,14 @@ native qualification sends `offline_replay` operations through Restate twice,
 verifies stable identities/results/checkpoints, then exports and reopens the
 workbook and checks every manifest part's byte length and SHA-256.
 
-Export workers retain at most eight owned blocking tasks. A full registry or a
-worker closing its intake returns a typed transient error, so Restate retries
-the unfinished recorded step with backoff. Completed blocking work remains
-owned until its task handle is reaped; cancellation does not free a slot early.
+Each worker retains at most eight owned blocking tasks, shared by retained page
+artifacts and access stops, export chunks and workbook publication, and operation
+file preparation. Retained capture publication waits for a slot so saturation
+does not discard a live response. Other stages can return a typed transient
+error on saturation, and closed intake rejects new work. Restate retries
+transient errors with backoff. Cancelling an awaiter does not free its slot;
+worker shutdown drains admitted work. Shutdown also reports task failures the
+caller never received, plus panics and cancelled blocking tasks.
 Runtime timeouts, temporary database capacity failures and disk-full errors also
 retry. Invalid inputs, artifact mismatches and source access stops remain
 terminal. Configured crawl deadlines and finite retry budgets still apply;

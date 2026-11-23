@@ -12,7 +12,7 @@ use sqlx::{Connection, PgConnection, postgres::PgConnectOptions};
 use tokio::process::Command;
 use track_scrapper_v2::{
     database::{Database, operation_receipts},
-    durable::page,
+    durable::{blocking::BlockingStages, page},
 };
 
 #[tokio::test]
@@ -121,14 +121,16 @@ async fn exercise(test: &support::Scenario, source: &str, restored: &str) -> Res
         "states=['OH']\ngraduation_years=[2027]\nseason=2026\n",
     )?;
     let scope = page_support::scope(&page_support::config()?)?;
+    let blocking = BlockingStages::new();
     page::offline_replay(
         &database,
-        &artifacts,
+        page::PageFiles::new(&artifacts, &blocking),
         &scope,
         page_support::profile(),
         page_support::capture()?,
     )
     .await?;
+    blocking.drain().await?;
     seed_ledgers(&database).await?;
     let expected = fingerprint(&database).await?;
     assert_eq!(expected.len(), 15);

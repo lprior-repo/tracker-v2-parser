@@ -18,6 +18,7 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
             let database = Database::durable_test_database(pool.clone());
             let config = config(3)?;
             let now = chrono::Utc::now().timestamp_millis();
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             for (resume_reservation, retained_response) in [(true, false), (false, false), (true, true)] {
                 let mut target = target(u32::from(resume_reservation));
@@ -27,17 +28,15 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
                 let ReservationDecision::Reserved { reservation } = page::reserve(&database, &request, now).await? else {
                     anyhow::bail!("original reservation missing")
                 };
-                let failure = Failure {
-                    stopped_origin: Some("https://wi.milesplit.com".into()),
-                    capture: Some(Capture { url: request.target.url.clone(), status: 403, content_type: "text/html".into(), body: b"<main>Access denied: CAPTCHA</main>".to_vec() }),
-                    blocked: true,
-                    retryable: false,
-                    detail: "HTTP 403 access denied".into(),
-                };
+                let failure = Failure::blocked(
+                    "HTTP 403 access denied",
+                    Some("https://wi.milesplit.com".into()),
+                    Some(Capture { url: request.target.url.clone(), status: 403, content_type: "text/html".into(), body: b"<main>Access denied: CAPTCHA</main>".to_vec() }),
+                );
                 if retained_response {
-                    super::super::execution::retain(&database, root.path(), &reservation, failure.capture.context("stop capture")?, now).await?;
+                    super::super::execution::retain(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, failure.into_capture().context("stop capture")?, now).await?;
                 } else {
-                    super::super::stopped::save(root.path(), &reservation, &failure, now).await?;
+                    super::super::stopped::save(crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &failure, now).await?;
                 }
                 let before = snapshot(&database).await?;
                 if resume_reservation {
@@ -56,7 +55,7 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
                 let mut transport = Transport::new(Options { mode: Mode::Http, driver_url: None, profile: root.path().join("unused"), headless: true, rps: 3.0 })?
                     .with_persistent_pacing(pool.clone())
                     .with_http_fixture("https://wi.milesplit.com", fixture.url.clone())?;
-                let FetchDecision::Settled { outcome } = page::fetch_configured(&database, root.path(), &reservation, &mut transport, now, &config).await? else {
+                let FetchDecision::Settled { outcome } = page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await? else {
                     anyhow::bail!("retained stop did not settle")
                 };
                 assert!(matches!(outcome, PageOutcome::Blocked { .. }));
@@ -65,7 +64,7 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
                     anyhow::bail!("blocked reservation replay missing")
                 };
                 assert_eq!(replay, outcome);
-                assert!(matches!(page::fetch_configured(&database, root.path(), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
+                assert!(matches!(page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
                 assert_eq!(snapshot(&database).await?, blocked);
                 assert!(crate::runner::durable::bootstrap(&database, &config).await.is_err());
                 assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?, 1);
@@ -86,6 +85,7 @@ async fn configured_exclusion_resumes_valid_retained_capture_and_parse_without_w
         let database = Database::durable_test_database(pool.clone());
         let config = config(3)?;
         let now = chrono::Utc::now().timestamp_millis();
+        let blocking = crate::durable::blocking::BlockingStages::new();
         let root = tempfile::tempdir()?;
         let mut target = target(77);
         target.kind = PageKind::Contacts;
@@ -96,8 +96,8 @@ async fn configured_exclusion_resumes_valid_retained_capture_and_parse_without_w
         let ReservationDecision::Reserved { reservation } = page::reserve(&database, &request, now).await? else {
             anyhow::bail!("original retained reservation missing")
         };
-        let reference = super::super::execution::retain(&database, root.path(), &reservation, Capture { url: request.target.url.clone(), status: 200, content_type: "text/html".into(), body: b"<main></main>".to_vec() }, now).await?;
-        let ParseDecision::Parsed { parsed } = page::parse(&database, root.path(), &reservation, &reference, now).await? else {
+        let reference = super::super::execution::retain(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, Capture { url: request.target.url.clone(), status: 200, content_type: "text/html".into(), body: b"<main></main>".to_vec() }, now).await?;
+        let ParseDecision::Parsed { parsed } = page::parse(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &reference, now).await? else {
             anyhow::bail!("retained parse missing")
         };
         let before = snapshot(&database).await?;
@@ -105,12 +105,12 @@ async fn configured_exclusion_resumes_valid_retained_capture_and_parse_without_w
         assert_eq!(snapshot(&database).await?, before);
         let fixture = WireFixture::start(FixtureKind::Page { status: 403, body: "must remain unused" }).await?;
         let mut transport = Transport::new(Options { mode: Mode::Http, driver_url: None, profile: root.path().join("unused"), headless: true, rps: 3.0 })?.with_persistent_pacing(pool.clone());
-        assert!(matches!(page::fetch_configured(&database, root.path(), &reservation, &mut transport, now, &config).await?, FetchDecision::Captured { capture } if capture == reference));
-        assert!(matches!(page::parse(&database, root.path(), &reservation, &reference, now).await?, ParseDecision::Parsed { parsed: saved } if saved == parsed));
-        let outcome = page::persist(&database, root.path(), &reservation, &reference, &parsed).await?;
+        assert!(matches!(page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await?, FetchDecision::Captured { capture } if capture == reference));
+        assert!(matches!(page::parse(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &reference, now).await?, ParseDecision::Parsed { parsed: saved } if saved == parsed));
+        let outcome = page::persist(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &reference, &parsed).await?;
         assert!(matches!(outcome, PageOutcome::Completed { .. }));
         let completed = snapshot(&database).await?;
-        assert!(matches!(page::fetch_configured(&database, root.path(), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
+        assert!(matches!(page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
         assert!(matches!(page::reserve_configured(&database, &config, &request, now).await?, ReservationDecision::Settled { outcome: saved } if saved == outcome));
         assert_eq!(snapshot(&database).await?, completed);
         assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?, 1);

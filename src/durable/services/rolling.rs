@@ -10,9 +10,12 @@ use super::{
     AthleticCrawl,
     pipeline::{DispatchStep, SelectionStop, advance_turn},
 };
-use crate::durable::{
-    model::{BatchProgress, CrawlRequest, QueueState},
-    page::{PageOutcome, PageScope},
+use crate::{
+    config::Limits,
+    durable::{
+        model::{BatchProgress, CrawlRequest, QueueState},
+        page::{PageOutcome, PageScope},
+    },
 };
 use slots::ActivePages;
 
@@ -23,6 +26,11 @@ struct RollingWindow<F> {
     turns: usize,
     stopped: SelectionStop,
     error: Option<HandlerError>,
+}
+
+struct PageSelection<'a> {
+    request: &'a CrawlRequest,
+    scope: &'a PageScope,
 }
 
 impl<F> Default for RollingWindow<F> {
@@ -42,6 +50,70 @@ impl<F> RollingWindow<F> {
     fn failed(&mut self, error: HandlerError) {
         if self.error.is_none() {
             self.error = Some(error);
+        }
+    }
+
+    fn refill_width(&mut self, limits: &Limits) -> Option<usize> {
+        if self.error.is_some()
+            || self.progress.queue == QueueState::NoEligiblePage
+            || self.stopped == SelectionStop::DeadlineReached
+        {
+            return None;
+        }
+        match slots::available(
+            limits.concurrency,
+            self.pending.len(),
+            self.turns,
+            limits.max_pages,
+        ) {
+            Ok(width) => Some(width),
+            Err(error) => {
+                self.failed(error.into());
+                None
+            }
+        }
+    }
+
+    fn apply_dispatch(
+        &mut self,
+        result: HandlerResult<DispatchStep>,
+        limits: &Limits,
+        attach: impl FnOnce(InvocationHandle) -> F,
+    ) -> bool {
+        match result {
+            Ok(DispatchStep::Page(page, handle)) => {
+                self.track_page(limits, page, attach(handle));
+                return false;
+            }
+            Ok(DispatchStep::PolicyAdvanced) => {
+                self.advance(limits.max_pages);
+                return false;
+            }
+            Ok(DispatchStep::Empty) => self.record_empty_selection(),
+            Ok(DispatchStep::DeadlineReached) => self.stopped = SelectionStop::DeadlineReached,
+            Err(error) => self.failed(error),
+        }
+        true
+    }
+
+    fn track_page(&mut self, limits: &Limits, page: i64, future: F) {
+        let index = self.pending.push(future);
+        match self.active.insert(index, page, limits.concurrency) {
+            Ok(()) => self.advance(limits.max_pages),
+            Err(error) => self.failed(error.into()),
+        }
+    }
+
+    fn advance(&mut self, max_pages: usize) {
+        match advance_turn(self.turns, max_pages) {
+            Ok(turns) => self.turns = turns,
+            Err(error) => self.failed(error.into()),
+        }
+    }
+
+    fn record_empty_selection(&mut self) {
+        if self.pending.is_empty() {
+            self.progress.queue = QueueState::NoEligiblePage;
         }
     }
 
@@ -85,102 +157,88 @@ impl AthleticCrawl {
         request: &CrawlRequest,
     ) -> HandlerResult<BatchProgress> {
         let scope = request.page_scope().terminal()?;
+        let selection = &PageSelection {
+            request,
+            scope: &scope,
+        };
         let attach = |handle: InvocationHandle| handle.attach::<Json<PageOutcome>>();
         let window = stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
-            .try_fold(RollingWindow::default(), |window, _| {
-                let scope = &scope;
-                let attach = &attach;
-                async move {
-                    self.refill(ctx, request, scope, window, attach)
-                        .await
-                        .settle()
-                        .await
-                }
+            .try_fold(RollingWindow::default(), |window, _| async move {
+                self.refill(ctx, selection, window, &attach)
+                    .await
+                    .settle()
+                    .await
             })
             .await?;
         window.finish()
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn refill<F, A>(
+    async fn refill<F: Send>(
         &self,
         ctx: &WorkflowContext<'_>,
-        request: &CrawlRequest,
-        scope: &PageScope,
+        selection: &PageSelection<'_>,
         mut window: RollingWindow<F>,
-        attach: &A,
-    ) -> RollingWindow<F>
-    where
-        A: Fn(InvocationHandle) -> F + Sync,
-        F: Send,
-    {
-        if window.error.is_some()
-            || window.progress.queue == QueueState::NoEligiblePage
-            || window.stopped == SelectionStop::DeadlineReached
-        {
+        attach: &(impl Fn(InvocationHandle) -> F + Sync),
+    ) -> RollingWindow<F> {
+        let Some(width) = window.refill_width(&selection.request.config.limits) else {
             return window;
-        }
-        let width = match slots::available(
-            request.config.limits.concurrency,
-            window.pending.len(),
-            window.turns,
-            request.config.limits.max_pages,
-        ) {
-            Ok(width) => width,
-            Err(error) => {
-                window.failed(error.into());
-                return window;
-            }
         };
         stream::iter(0..width)
             .fold((window, false), |(mut window, stopped), _| async move {
                 if stopped || window.error.is_some() {
                     return (window, true);
                 }
-                let owned = window.active.ids();
-                match self
-                    .dispatch(ctx, request, scope, window.turns, 0, &owned)
-                    .await
-                {
-                    Ok(DispatchStep::Page(page, handle)) => {
-                        let index = window.pending.push(attach(handle));
-                        let result = window
-                            .active
-                            .insert(index, page, request.config.limits.concurrency)
-                            .and_then(|()| {
-                                window.turns =
-                                    advance_turn(window.turns, request.config.limits.max_pages)?;
-                                Ok(())
-                            });
-                        if let Err(error) = result {
-                            window.failed(error.into());
-                        }
-                        (window, false)
-                    }
-                    Ok(DispatchStep::PolicyAdvanced) => {
-                        match advance_turn(window.turns, request.config.limits.max_pages) {
-                            Ok(turns) => window.turns = turns,
-                            Err(error) => window.failed(error.into()),
-                        }
-                        (window, false)
-                    }
-                    Ok(DispatchStep::Empty) => {
-                        if window.pending.is_empty() {
-                            window.progress.queue = QueueState::NoEligiblePage;
-                        }
-                        (window, true)
-                    }
-                    Ok(DispatchStep::DeadlineReached) => {
-                        window.stopped = SelectionStop::DeadlineReached;
-                        (window, true)
-                    }
-                    Err(error) => {
-                        window.failed(error);
-                        (window, true)
-                    }
-                }
+                let stopped = self.refill_slot(ctx, selection, &mut window, attach).await;
+                (window, stopped)
             })
             .await
             .0
+    }
+
+    async fn refill_slot<F: Send>(
+        &self,
+        ctx: &WorkflowContext<'_>,
+        selection: &PageSelection<'_>,
+        window: &mut RollingWindow<F>,
+        attach: &(impl Fn(InvocationHandle) -> F + Sync),
+    ) -> bool {
+        let owned = window.active.ids();
+        let result = self
+            .dispatch(
+                ctx,
+                selection.request,
+                selection.scope,
+                window.turns,
+                0,
+                &owned,
+            )
+            .await;
+        window.apply_dispatch(result, &selection.request.config.limits, attach)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DispatchStep, Limits, QueueState, RollingWindow};
+
+    #[test]
+    fn empty_selection_closes_refill_only_when_no_pages_are_pending() {
+        let limits = Limits {
+            concurrency: 2,
+            max_pages: 3,
+            ..Limits::default()
+        };
+        let mut busy = RollingWindow::default();
+        busy.track_page(&limits, 7, ());
+        let mut idle = RollingWindow::default();
+
+        assert!(busy.apply_dispatch(Ok(DispatchStep::Empty), &limits, |_| ()));
+        assert!(idle.apply_dispatch(Ok(DispatchStep::Empty), &limits, |_| ()));
+
+        assert_eq!(busy.progress.queue, QueueState::Processing);
+        assert_eq!(busy.refill_width(&limits), Some(1));
+        assert_eq!(idle.progress.queue, QueueState::NoEligiblePage);
+        assert_eq!(idle.refill_width(&limits), None);
     }
 }

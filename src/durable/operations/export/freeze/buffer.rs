@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 
 use super::{Batch, FrozenPlan, Workspace, append};
-use crate::database::{EXPORT_BATCH_BYTES, EXPORT_BATCH_ROWS};
+use crate::{
+    database::{EXPORT_BATCH_BYTES, EXPORT_BATCH_ROWS},
+    durable::blocking::BlockingStages,
+};
 
 pub(super) struct Buffer {
     plan: FrozenPlan,
@@ -30,23 +33,28 @@ impl Buffer {
                 .is_some_and(|total| total <= EXPORT_BATCH_ROWS)
     }
 
-    async fn flush(mut self, workspace: &Workspace) -> Result<Self> {
+    async fn flush(mut self, workspace: &Workspace, blocking: &BlockingStages) -> Result<Self> {
         if let Some(batch) = self.pending.take() {
-            self.plan = store(workspace.clone(), self.plan, batch).await?;
+            self.plan = store(workspace.clone(), self.plan, batch, blocking).await?;
             self.bytes = 0;
         }
         Ok(self)
     }
 
-    pub(super) async fn push(mut self, workspace: &Workspace, batch: Batch) -> Result<Self> {
+    pub(super) async fn push(
+        mut self,
+        workspace: &Workspace,
+        batch: Batch,
+        blocking: &BlockingStages,
+    ) -> Result<Self> {
         let records =
             !batch.records.is_empty() && batch.issues.is_empty() && batch.review.is_empty();
         let bytes = serde_json::to_vec(&batch)?.len();
         if !records || !self.fits(bytes, batch.records.len()) {
-            self = self.flush(workspace).await?;
+            self = self.flush(workspace, blocking).await?;
         }
         if !records || bytes > EXPORT_BATCH_BYTES || batch.records.len() > EXPORT_BATCH_ROWS {
-            self.plan = store(workspace.clone(), self.plan, batch).await?;
+            self.plan = store(workspace.clone(), self.plan, batch, blocking).await?;
             return Ok(self);
         }
         if let Some(pending) = &mut self.pending {
@@ -62,13 +70,23 @@ impl Buffer {
         Ok(self)
     }
 
-    pub(super) async fn finish(self, workspace: &Workspace) -> Result<FrozenPlan> {
-        Ok(self.flush(workspace).await?.plan)
+    pub(super) async fn finish(
+        self,
+        workspace: &Workspace,
+        blocking: &BlockingStages,
+    ) -> Result<FrozenPlan> {
+        Ok(self.flush(workspace, blocking).await?.plan)
     }
 }
 
-async fn store(workspace: Workspace, plan: FrozenPlan, batch: Batch) -> Result<FrozenPlan> {
-    tokio::task::spawn_blocking(move || append(&workspace, plan, &batch))
+async fn store(
+    workspace: Workspace,
+    plan: FrozenPlan,
+    batch: Batch,
+    blocking: &BlockingStages,
+) -> Result<FrozenPlan> {
+    blocking
+        .run(move || append(&workspace, plan, &batch))
         .await
-        .context("joining bounded frozen chunk writer")?
+        .context("writing bounded frozen chunk")
 }

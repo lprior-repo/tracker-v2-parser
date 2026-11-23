@@ -224,10 +224,12 @@ fn manifest(
 }
 
 async fn apply(fixture: &Fixture, workspace: &Workspace, spec: &OperationSpec) -> Result<Value> {
+    let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
     Ok(track_scrapper_v2::durable::operations::execute_import(
         workspace,
         spec,
         &fixture.database_url,
+        &blocking,
     )
     .await?)
 }
@@ -651,11 +653,13 @@ async fn given_mixed_manifest_with_conflicting_target_then_durable_transaction_r
                 manifest: manifest_artifact.clone(),
             };
             let conflict_workspace = Workspace::open(&root, "reviewed-result-conflict", &spec)?;
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             ensure!(
                 track_scrapper_v2::durable::operations::execute_import(
                     &conflict_workspace,
                     &spec,
                     &fixture.database_url,
+                    &blocking,
                 )
                 .await
                 .is_err(),

@@ -83,7 +83,13 @@ fn stage_capture(root: &std::path::Path, bytes: &[u8]) -> Result<Artifact> {
 }
 
 pub async fn apply(test: &Scenario, workspace: &Workspace, spec: &OperationSpec) -> Result<Value> {
-    Ok(execute_import(workspace, spec, &test.url).await?)
+    Ok(execute_import(
+        workspace,
+        spec,
+        &test.url,
+        &track_scrapper_v2::durable::blocking::BlockingStages::new(),
+    )
+    .await?)
 }
 
 pub async fn insert_school(test: &Scenario, source_id: &str) -> Result<i64> {

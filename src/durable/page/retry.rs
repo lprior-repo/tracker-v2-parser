@@ -1,8 +1,6 @@
-use std::path::Path;
-
 use anyhow::{Result, ensure};
 
-use super::{FetchDecision, PageOutcome, PageRequest, PageReservation};
+use super::{FetchDecision, PageFiles, PageOutcome, PageRequest, PageReservation};
 use crate::{config::Config, database::Database, transport::Transport};
 
 pub struct RetryPolicy {
@@ -65,7 +63,7 @@ impl RetryPolicy {
 
 pub async fn fetch_configured(
     database: &Database,
-    root: &Path,
+    files: PageFiles<'_>,
     reservation: &PageReservation,
     transport: &mut Transport,
     now_ms: i64,
@@ -75,7 +73,7 @@ pub async fn fetch_configured(
     let exclusion = crate::acquisition::ScopeExclusion::bind(config, &reservation.request)?;
     super::execution::fetch_with_policy(
         database,
-        root,
+        files,
         reservation,
         transport,
         now_ms,

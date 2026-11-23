@@ -45,12 +45,10 @@ async fn given_published_meet_when_generated_api_is_acquired_then_policy_stops_b
     let mut transport = guarded_transport()?;
     let failure = transport.fetch(&target).await.expect_err("robots denial");
     transport.close().await?;
-    assert!(failure.blocked);
-    assert_eq!(
-        failure.stopped_origin.as_deref(),
-        Some("https://oh.milesplit.com")
-    );
-    assert!(failure.capture.is_none());
+    assert!(failure.is_blocked());
+    assert!(!failure.is_retryable());
+    assert_eq!(failure.stopped_origin(), Some("https://oh.milesplit.com"));
+    assert!(failure.capture().is_none());
     assert!(failure.detail.contains("published robots restrictions"));
     Ok(())
 }
@@ -116,12 +114,9 @@ async fn given_encoded_or_ambiguous_disallowed_routes_when_acquired_then_no_poli
             .await
             .expect_err("policy denial before launch");
         transport.close().await?;
-        assert!(failure.blocked, "{path}: {}", failure.detail);
-        assert_eq!(
-            failure.stopped_origin.as_deref(),
-            Some("https://www.milesplit.com")
-        );
-        assert!(failure.capture.is_none());
+        assert!(failure.is_blocked(), "{path}: {}", failure.detail);
+        assert_eq!(failure.stopped_origin(), Some("https://www.milesplit.com"));
+        assert!(failure.capture().is_none());
     }
     Ok(())
 }
@@ -138,13 +133,10 @@ async fn given_disallowed_token_preflight_when_public_profile_is_requested_then_
         .await
         .expect_err("preflight policy stop");
     transport.close().await?;
-    assert!(failure.blocked);
-    assert_eq!(
-        failure.stopped_origin.as_deref(),
-        Some("https://oh.milesplit.com")
-    );
+    assert!(failure.is_blocked());
+    assert_eq!(failure.stopped_origin(), Some("https://oh.milesplit.com"));
     assert!(failure.detail.contains("published robots restrictions"));
-    assert!(failure.capture.is_none());
+    assert!(failure.capture().is_none());
     Ok(())
 }
 
@@ -163,12 +155,9 @@ async fn given_trailing_dot_contact_authority_when_acquired_then_equivalent_host
         .await
         .expect_err("trailing-dot policy stop");
     transport.close().await?;
-    assert!(failure.blocked);
-    assert_eq!(
-        failure.stopped_origin.as_deref(),
-        Some("https://www.milesplit.com")
-    );
-    assert!(failure.capture.is_none());
+    assert!(failure.is_blocked());
+    assert_eq!(failure.stopped_origin(), Some("https://www.milesplit.com"));
+    assert!(failure.capture().is_none());
     Ok(())
 }
 
@@ -204,9 +193,9 @@ async fn given_non_http_policy_preflight_when_persisted_then_original_http_autho
                     .await
                     .expect_err("opaque policy stop");
                 transport.close().await?;
-                assert!(failure.blocked);
+                assert!(failure.is_blocked());
                 let expected = format!("https://school-{index}.example.edu");
-                assert_eq!(failure.stopped_origin.as_deref(), Some(expected.as_str()));
+                assert_eq!(failure.stopped_origin(), Some(expected.as_str()));
                 database.fail_acquisition(&job, &failure).await?;
                 let state: (String, String) = sqlx::query_as(
                     "SELECT status,cursor->>'access_stop_url' FROM scrape_pages WHERE id=$1",

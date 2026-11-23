@@ -117,8 +117,9 @@ async fn reviewed_pair(test: &support::Scenario) -> Result<(Database, [Observati
     let artifact = operations::stage_input(&root, &path)?;
     assert_eq!(artifact.sha256, digest);
     let spec = OperationSpec::ReviewedIdentity { manifest: artifact };
+    let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
     let workspace = Workspace::open(&root, "unicode-identity-review", &spec)?;
-    let report = operations::execute_import(&workspace, &spec, &test.url).await?;
+    let report = operations::execute_import(&workspace, &spec, &test.url, &blocking).await?;
     assert_eq!(report["profile_count"], 2);
     assert_eq!(report["result_count"], 12);
     assert_eq!(report["already_applied"], false);
@@ -169,7 +170,13 @@ async fn assert_receipt_replay(
 ) -> Result<()> {
     let before = state(database).await?;
     assert_eq!(
-        operations::execute_import(&decision.workspace, &decision.spec, &test.url).await?,
+        operations::execute_import(
+            &decision.workspace,
+            &decision.spec,
+            &test.url,
+            &track_scrapper_v2::durable::blocking::BlockingStages::new()
+        )
+        .await?,
         decision.report
     );
     assert_eq!(state(database).await?, before);

@@ -6,6 +6,8 @@ mod reservation;
 mod selection;
 mod stages;
 
+pub use stages::{SavedStages, SettledStages, StageEvidence};
+
 use anyhow::{Context, Result, ensure};
 use sqlx::PgConnection;
 

@@ -5,9 +5,12 @@ use calamine::{Data, Range, Reader, open_workbook_auto};
 use clap::Parser;
 use track_scrapper_v2::{
     config::Config,
-    durable::operations::{
-        OperationSpec, Workspace, freeze_export, frozen_plan, prepare_export_chunk, publish_export,
-        render_export, verify_export,
+    durable::{
+        blocking::BlockingStages,
+        operations::{
+            OperationSpec, Workspace, freeze_export, frozen_plan, prepare_export_chunk,
+            publish_export, render_export, verify_export,
+        },
     },
     runner::Runner,
 };
@@ -57,32 +60,47 @@ async fn main() -> Result<()> {
             config: config.clone(),
         },
     )?;
-    let frozen = freeze_export(&workspace, &config, &database).await?;
-    let plan = frozen_plan(&workspace, &frozen)?;
-    let review_enabled = config.export.review_sheet;
-    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value> {
-        plan.chunks.iter().enumerate().try_for_each(|(index, _)| {
-            prepare_export_chunk(&workspace, &frozen, index).map(|_| ())
-        })?;
-        let workbook = render_export(&workspace, &frozen)?;
-        let verified = verify_export(&workspace, &frozen, &workbook)?;
-        ensure!(
-            sheets(&baseline, review_enabled)? == sheets(&workbook.path, review_enabled)?,
-            "projected durable export differs from unprojected native export"
-        );
-        let publication = publish_export(&workspace, &verified)?;
-        Ok(serde_json::json!({
-            "rows": verified.rows,
-            "columns": verified.columns,
-            "review_rows": verified.review_rows,
-            "chunks": plan.chunks.len(),
-            "frozen_bytes": plan.bytes,
-            "unprojected_cell_parity": "every cell matched",
-            "publication": publication
-        }))
-    })
-    .await
-    .context("joining owned export qualification")??;
+    let blocking = BlockingStages::new();
+    let result = qualify(&blocking, workspace, &config, &database, baseline).await;
+    let drain = blocking.drain().await;
+    let result = result?;
+    drain?;
     println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
+}
+
+async fn qualify(
+    blocking: &BlockingStages,
+    workspace: Workspace,
+    config: &Config,
+    database: &str,
+    baseline: PathBuf,
+) -> Result<serde_json::Value> {
+    let frozen = freeze_export(&workspace, config, database, blocking).await?;
+    let plan = frozen_plan(&workspace, &frozen)?;
+    let review_enabled = config.export.review_sheet;
+    blocking
+        .run(move || {
+            plan.chunks.iter().enumerate().try_for_each(|(index, _)| {
+                prepare_export_chunk(&workspace, &frozen, index).map(|_| ())
+            })?;
+            let workbook = render_export(&workspace, &frozen)?;
+            let verified = verify_export(&workspace, &frozen, &workbook)?;
+            ensure!(
+                sheets(&baseline, review_enabled)? == sheets(&workbook.path, review_enabled)?,
+                "projected durable export differs from unprojected native export"
+            );
+            let publication = publish_export(&workspace, &verified)?;
+            Ok(serde_json::json!({
+                "rows": verified.rows,
+                "columns": verified.columns,
+                "review_rows": verified.review_rows,
+                "chunks": plan.chunks.len(),
+                "frozen_bytes": plan.bytes,
+                "unprojected_cell_parity": "every cell matched",
+                "publication": publication
+            }))
+        })
+        .await
+        .context("running owned export qualification")
 }

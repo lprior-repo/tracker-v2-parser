@@ -105,6 +105,7 @@ async fn review_freezes_scoped_failures_and_retry_state_and_matches_legacy_expor
             );
             let legacy = test.directory().join("legacy.xlsx");
             Runner::new().export(&config, &legacy, &test.url).await?;
+            let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
             let workspace = Workspace::open(
                 &test.directory().join("artifacts"),
                 "review-export",
@@ -112,7 +113,7 @@ async fn review_freezes_scoped_failures_and_retry_state_and_matches_legacy_expor
                     config: config.clone(),
                 },
             )?;
-            let frozen = freeze_export(&workspace, &config, &test.url).await?;
+            let frozen = freeze_export(&workspace, &config, &test.url, &blocking).await?;
             assert_eq!(frozen_plan(&workspace, &frozen)?.review_rows, Some(5));
             sqlx::query(
                 "UPDATE scrape_pages SET last_error='Changed after freeze',status='succeeded'",
@@ -122,7 +123,7 @@ async fn review_freezes_scoped_failures_and_retry_state_and_matches_legacy_expor
             sqlx::query("UPDATE durable_page_operations SET state='exhausted',retry_at_ms=NULL")
                 .execute(database.pool())
                 .await?;
-            let resumed = freeze_export(&workspace, &config, &test.url).await?;
+            let resumed = freeze_export(&workspace, &config, &test.url, &blocking).await?;
             assert_eq!(resumed.manifest, frozen.manifest);
             let workbook = render_export(&workspace, &frozen)?;
             let verified = verify_export(&workspace, &frozen, &workbook)?;
@@ -186,6 +187,7 @@ async fn enabled_review_is_header_only_when_empty_and_default_export_stays_one_s
                 config.export.review_sheet = enabled;
                 let serialized = serde_json::to_value(&config)?;
                 assert_eq!(serialized["export"].get("review_sheet").is_some(), enabled);
+                let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
                 let workspace = Workspace::open(
                     &test.directory().join("artifacts"),
                     name,
@@ -193,7 +195,7 @@ async fn enabled_review_is_header_only_when_empty_and_default_export_stays_one_s
                         config: config.clone(),
                     },
                 )?;
-                let frozen = freeze_export(&workspace, &config, &test.url).await?;
+                let frozen = freeze_export(&workspace, &config, &test.url, &blocking).await?;
                 let workbook = render_export(&workspace, &frozen)?;
                 assert_eq!(
                     verify_export(&workspace, &frozen, &workbook)?.review_rows,
@@ -241,8 +243,9 @@ async fn review_removes_credentials_and_raw_payloads_and_rejects_oversized_rows_
         assert!(snapshot.review_records(0,1000).await?[0].error.contains("Response payload omitted"));
         snapshot.finish().await?;
         sqlx::query("UPDATE scrape_pages SET last_error=repeat('x',70000) WHERE id=$1").bind(id).execute(database.pool()).await?;
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let workspace=Workspace::open(&test.directory().join("artifacts"),"oversized-review",&OperationSpec::Export{config:config.clone()})?;
-        let error=freeze_export(&workspace,&config,&test.url).await.err().context("oversized review must fail")?;
+        let error=freeze_export(&workspace,&config,&test.url, &blocking).await.err().context("oversized review must fail")?;
         assert!(format!("{error:#}").contains("64 KiB"));
         assert!(!workspace.path("frozen-export.json")?.exists());
         assert!(!workspace.path("publication-receipt.json")?.exists());

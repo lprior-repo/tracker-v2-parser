@@ -83,9 +83,10 @@ async fn imported(root: &Path, url: &str, operation: &OfflineOperation) -> Resul
         _ => anyhow::bail!("offline import operation required"),
     };
     let id = format!("offline-test-{}", SEQUENCE.fetch_add(1, Ordering::Relaxed));
+    let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
     let workspace = Workspace::open(root, &id, &spec)?;
     Ok(serde_json::to_string(
-        &operations::execute_import(&workspace, &spec, url).await?,
+        &operations::execute_import(&workspace, &spec, url, &blocking).await?,
     )?)
 }
 

@@ -74,12 +74,13 @@ async fn all_twenty_seven_wiaa_requests_retain_separate_receipts_and_replay_with
 -> Result<()> {
     support::with_schema(|test|Box::pin(async move {
         let database=Database::connect(&test.url).await?;
+        let blocking = track_scrapper_v2::durable::blocking::BlockingStages::new();
         let root=test.directory().join("wiaa-captures");
         let scope=PageScope {
             inherited_retry_campaigns: Vec::new(),run_generation:"wiaa-directory-test".into(),config_sha256:"a".repeat(64),deadline_ms:chrono::Utc::now().timestamp_millis().checked_add(3_600_000).context("deadline")?,cooldown_ms:15_000};
         let target=root_target();
         let body=root_body();
-        assert!(matches!(page::offline_replay(&database,&root,&scope,target.clone(),Capture {url:target.url.clone(),status:200,content_type:"text/html".into(),body:body.as_bytes().to_vec()}).await?,PageOutcome::Completed {..}));
+        assert!(matches!(page::offline_replay(&database,track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),&scope,target.clone(),Capture {url:target.url.clone(),status:200,content_type:"text/html".into(),body:body.as_bytes().to_vec()}).await?,PageOutcome::Completed {..}));
         let request=page::bind_target(&database,target.clone(),&scope).await?;
         let root_page=parsed(&database,&root,&request).await?;
         assert_eq!(root_page.next.len(),26);
@@ -89,7 +90,7 @@ async fn all_twenty_seven_wiaa_requests_retain_separate_receipts_and_replay_with
             assert!(target.body.is_none());
             let letter=target.url.chars().last().context("letter")?;
             let body=letter_body(letter);
-            assert!(matches!(page::offline_replay(&database,&root,&scope,target.clone(),Capture {url:target.url.clone(),status:200,content_type:"text/html".into(),body:body.as_bytes().to_vec()}).await?,PageOutcome::Completed {..}));
+            assert!(matches!(page::offline_replay(&database,track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),&scope,target.clone(),Capture {url:target.url.clone(),status:200,content_type:"text/html".into(),body:body.as_bytes().to_vec()}).await?,PageOutcome::Completed {..}));
             let request=page::bind_target(&database,target.clone(),&scope).await?;
             let parsed=parsed(&database,&root,&request).await?;
             for note in parsed.notes {
@@ -98,7 +99,7 @@ async fn all_twenty_seven_wiaa_requests_retain_separate_receipts_and_replay_with
                 }
             }
             let before:serde_json::Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM scrape_pages p").fetch_one(&test.pool).await?;
-            page::offline_replay(&database,&root,&scope,target.clone(),Capture {url:target.url,status:200,content_type:"text/html".into(),body:body.into_bytes()}).await?;
+            page::offline_replay(&database,track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),&scope,target.clone(),Capture {url:target.url,status:200,content_type:"text/html".into(),body:body.into_bytes()}).await?;
             assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM scrape_pages p").fetch_one(&test.pool).await?,before);
         }
         assert_eq!(entries.len(),1);

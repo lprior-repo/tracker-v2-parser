@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 use crate::{
     database::{Database, operation_receipts},
+    durable::blocking::BlockingStages,
     school_directory::{self, Directory, pss::PrivateDirectory, published::PublishedDirectory},
 };
 
@@ -190,10 +191,11 @@ pub async fn execute_import(
     workspace: &Workspace,
     spec: &OperationSpec,
     database_url: &str,
+    blocking: &BlockingStages,
 ) -> Result<Value> {
     let owned = workspace.clone();
     let spec = spec.clone();
-    let input = tokio::task::spawn_blocking(move || prepare(&owned, &spec)).await??;
+    let input = blocking.run(move || prepare(&owned, &spec)).await?;
     let database = Database::connect(database_url).await?;
     let result = operation_receipts::with_receipt(
         database.pool(),
@@ -213,6 +215,7 @@ pub async fn download_reference(
     workspace: &Workspace,
     expected: &str,
     pool: sqlx::PgPool,
+    blocking: &BlockingStages,
 ) -> Result<Artifact> {
     workspace.validate_spec(&OperationSpec::DownloadPublicSchools {
         expected_sha256: expected.to_owned(),
@@ -228,19 +231,21 @@ pub async fn download_reference(
             &path,
             pool,
             workspace.binding(),
+            blocking,
         )
         .await?;
     }
     let owned = workspace.clone();
     let expected = expected.to_ascii_lowercase();
-    tokio::task::spawn_blocking(move || {
-        let artifact = Artifact {
-            bytes: std::fs::metadata(&path)?.len(),
-            path,
-            sha256: expected,
-        };
-        let bytes = owned.read(&artifact)?;
-        owned.store("downloaded-public-schools.csv", &bytes)
-    })
-    .await?
+    blocking
+        .run(move || {
+            let artifact = Artifact {
+                bytes: std::fs::metadata(&path)?.len(),
+                path,
+                sha256: expected,
+            };
+            let bytes = owned.read(&artifact)?;
+            owned.store("downloaded-public-schools.csv", &bytes)
+        })
+        .await
 }

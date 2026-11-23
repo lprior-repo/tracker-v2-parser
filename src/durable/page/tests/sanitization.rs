@@ -48,6 +48,7 @@ async fn successful_http_capture_persists_single_redaction_output_and_replays_ma
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page {
                 status: 200,
@@ -73,7 +74,7 @@ async fn successful_http_capture_persists_single_redaction_output_and_replays_ma
             .with_http_fixture("https://oh.milesplit.com", fixture.url.clone())?;
 
             let FetchDecision::Captured { capture: reference } =
-                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?
+                page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now).await?
             else {
                 anyhow::bail!("successful fixture capture")
             };
@@ -106,7 +107,7 @@ async fn successful_http_capture_persists_single_redaction_output_and_replays_ma
             .execute(pool)
             .await?;
             let FetchDecision::Captured { capture: replayed } =
-                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?
+                page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now).await?
             else {
                 anyhow::bail!("manifest capture replay")
             };
@@ -123,6 +124,7 @@ async fn verify_http_rejection(body: &'static str, blocked: bool) -> Result<()> 
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let fixture = WireFixture::start(FixtureKind::Page { status: 200, body }).await?;
             let request = page::bind_target(&database, contact(), &scope()?).await?;
@@ -141,8 +143,14 @@ async fn verify_http_rejection(body: &'static str, blocked: bool) -> Result<()> 
             })?
             .with_persistent_pacing(pool.clone())
             .with_http_fixture("https://schools.wiaawi.org", fixture.url.clone())?;
-            let first =
-                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?;
+            let first = page::fetch(
+                &database,
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
+                &reservation,
+                &mut transport,
+                now,
+            )
+            .await?;
             let FetchDecision::Settled { ref outcome } = first else {
                 anyhow::bail!("unsafe body must not be retained")
             };
@@ -153,10 +161,16 @@ async fn verify_http_rejection(body: &'static str, blocked: bool) -> Result<()> 
             });
             assert!(!format!("{outcome:?}").contains("private-canary"));
             let stages = database.durable_stages(&reservation).await?;
-            assert!(stages.0.is_none());
-            assert_eq!(stages.2, Some(outcome.clone()));
-            let replay =
-                page::fetch(&database, root.path(), &reservation, &mut transport, now).await?;
+            assert!(stages.capture().is_none());
+            assert_eq!(stages.outcome(), Some(outcome));
+            let replay = page::fetch(
+                &database,
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
+                &reservation,
+                &mut transport,
+                now,
+            )
+            .await?;
             transport.close().await?;
             let FetchDecision::Settled { outcome: replayed } = replay else {
                 anyhow::bail!("settled replay")
@@ -192,11 +206,12 @@ async fn rejected_offline_contact_does_not_prevent_the_next_athlete_from_committ
     with_database(|pool| {
         Box::pin(async move {
             let database = Database::durable_test_database(pool.clone());
+            let blocking = crate::durable::blocking::BlockingStages::new();
             let root = tempfile::tempdir()?;
             let scope = scope()?;
             let rejected = page::offline_replay(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &scope,
                 contact(),
                 Capture {
@@ -211,7 +226,7 @@ async fn rejected_offline_contact_does_not_prevent_the_next_athlete_from_committ
             let athlete = target();
             let completed = page::offline_replay(
                 &database,
-                root.path(),
+                crate::durable::page::PageFiles::new(root.path(), &blocking),
                 &scope,
                 athlete.clone(),
                 Capture {

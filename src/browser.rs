@@ -192,12 +192,27 @@ impl Browser {
         headers: &BTreeMap<String, String>,
         interval: Duration,
     ) -> Result<Capture> {
+        let acquisition = self.acquisition(target, headers, interval)?;
+        let received = self.start_acquisition(acquisition).await?;
+        let result = received
+            .await
+            .context("browser acquisition supervisor stopped")?;
+        let cleanup = lifecycle::drain(&mut *self.fetches.lock().await).await;
+        finish_page_fetch(result, cleanup)
+    }
+
+    fn acquisition(
+        &self,
+        target: &Target,
+        headers: &BTreeMap<String, String>,
+        interval: Duration,
+    ) -> Result<lifecycle::Acquisition> {
         let deadline = interval
             .checked_add(COMMAND_TIMEOUT.saturating_mul(2))
             .context("browser deadline overflow")?;
         #[cfg(test)]
         let deadline = self.page_deadline.map_or(deadline, |value| value);
-        let acquisition = lifecycle::Acquisition {
+        Ok(lifecycle::Acquisition {
             chromium: Arc::clone(&self.chromium),
             context: self
                 .context
@@ -210,33 +225,28 @@ impl Browser {
             deadline,
             native_status: self.native_sink.status(),
             #[cfg(test)]
-            local_origin: self.local_origin.clone(),
-            #[cfg(test)]
-            additional_origin: self.additional_origin.clone(),
-            #[cfg(test)]
-            fail_page_close: self.fail_page_close,
-            #[cfg(test)]
-            capture_ready: self.capture_ready.clone(),
-        };
+            test_controls: self.into(),
+        })
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn start_acquisition(
+        &self,
+        acquisition: lifecycle::Acquisition,
+    ) -> Result<oneshot::Receiver<Result<Capture>>> {
         let (reply, received) = oneshot::channel();
-        {
-            let mut tasks = self.fetches.lock().await;
-            if let Some(previous) = tasks.try_join_next() {
-                previous.context("joining prior browser acquisition")??;
-            }
-            ensure!(tasks.is_empty(), "browser acquisition capacity exceeded");
-            tasks.spawn(
-                acquisition
-                    .run(reply)
-                    .instrument(tracing::info_span!("owned_browser_acquisition")),
-            );
-            drop(tasks);
+        let mut tasks = self.fetches.lock().await;
+        if let Some(previous) = tasks.try_join_next() {
+            previous.context("joining prior browser acquisition")??;
         }
-        let result = received
-            .await
-            .context("browser acquisition supervisor stopped")?;
-        let cleanup = lifecycle::drain(&mut *self.fetches.lock().await).await;
-        finish_page_fetch(result, cleanup)
+        ensure!(tasks.is_empty(), "browser acquisition capacity exceeded");
+        tasks.spawn(
+            acquisition
+                .run(reply)
+                .instrument(tracing::info_span!("owned_browser_acquisition")),
+        );
+        drop(tasks);
+        Ok(received)
     }
 
     async fn fetch_page(
@@ -644,7 +654,7 @@ mod tests {
                 Err(anyhow::anyhow!("page closed unexpectedly")),
             )?;
             let failure = check_response(preserved).expect_err("challenge must remain blocked");
-            assert!(failure.blocked);
+            assert!(failure.is_blocked());
             let original = anyhow::Error::new(crate::transport::AccessStopCaptureError::new(
                 403,
                 anyhow::anyhow!("capture failed"),
@@ -655,7 +665,10 @@ mod tests {
                     .expect_err("capture failure must survive cleanup failure");
             assert!(combined.is::<crate::transport::AccessStopCaptureError>());
             assert!(format!("{combined:#}").contains("page close failed"));
-            assert_eq!(failure.capture.expect("challenge capture").status, 403);
+            assert_eq!(
+                failure.into_capture().expect("challenge capture").status,
+                403
+            );
             let before = api_requests.load(Ordering::SeqCst);
             target.browser_origin = Some(format!("{origin}/redirect-subscribe"));
             let redirected = browser
@@ -663,8 +676,8 @@ mod tests {
                 .await
                 .expect_err("subscription must stop before capture");
             let failure = crate::transport::failure(&redirected);
-            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
-            assert!(failure.blocked);
+            assert_eq!(failure.stopped_origin(), Some(origin.as_str()));
+            assert!(failure.is_blocked());
             assert_eq!(api_requests.load(Ordering::SeqCst), before);
             target.method = None;
             target.body = None;
@@ -675,8 +688,8 @@ mod tests {
                 .await
                 .expect_err("login must stop before capture");
             let failure = crate::transport::failure(&redirected);
-            assert!(failure.blocked);
-            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
+            assert!(failure.is_blocked());
+            assert_eq!(failure.stopped_origin(), Some(origin.as_str()));
             target.browser_origin = Some(origin.clone());
             target.url = format!("{origin}/api-redirect");
             let redirected = browser
@@ -684,8 +697,8 @@ mod tests {
                 .await
                 .expect_err("signin must stop before capture");
             let failure = crate::transport::failure(&redirected);
-            assert!(failure.blocked);
-            assert_eq!(failure.stopped_origin.as_deref(), Some(origin.as_str()));
+            assert!(failure.is_blocked());
+            assert_eq!(failure.stopped_origin(), Some(origin.as_str()));
             Ok::<(), anyhow::Error>(())
         }
         .await;
