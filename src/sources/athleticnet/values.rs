@@ -1,8 +1,60 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, Result, ensure};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::model::{Athlete, Performance, Sport, UnassignedResult};
+
+#[derive(Default)]
+pub(super) struct ResultIdentities {
+    native_ids: BTreeMap<u64, bool>,
+    row_codes: BTreeMap<String, bool>,
+}
+
+impl ResultIdentities {
+    pub(super) fn from_rows<'a>(rows: impl Iterator<Item = &'a Value>) -> Self {
+        rows.fold(Self::default(), |mut identities, row| {
+            if let Some(id) = native_id(row, "IDResult") {
+                identities
+                    .native_ids
+                    .entry(id)
+                    .and_modify(|repeated| *repeated = true)
+                    .or_insert(false);
+            }
+            if let Some(code) = row_code(row) {
+                identities
+                    .row_codes
+                    .entry(code)
+                    .and_modify(|repeated| *repeated = true)
+                    .or_insert(false);
+            }
+            identities
+        })
+    }
+
+    pub(super) fn repeated_native_id(&self, row: &Value) -> bool {
+        native_id(row, "IDResult")
+            .and_then(|id| self.native_ids.get(&id))
+            .copied()
+            == Some(true)
+    }
+
+    pub(super) fn source_row(&self, row: &Value, coordinate: &str) -> String {
+        if self.repeated_native_id(row) {
+            return positional_source_row(row, coordinate);
+        }
+        row_code(row)
+            .filter(|code| {
+                native_id(row, "IDResult").is_some()
+                    || self.row_codes.get(code).copied() != Some(true)
+            })
+            .map_or_else(
+                || positional_source_row(row, coordinate),
+                |code| format!("shortCode:{code}"),
+            )
+    }
+}
 
 pub(super) fn text(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(scalar)
@@ -116,13 +168,8 @@ pub(super) fn athlete(
     })
 }
 
-pub(super) fn source_row(row: &Value, coordinate: &str) -> String {
-    text(row, "shortCode")
-        .or_else(|| text(row, "ShortCode"))
-        .map_or_else(
-            || positional_source_row(row, coordinate),
-            |id| format!("shortCode:{id}"),
-        )
+fn row_code(row: &Value) -> Option<String> {
+    text(row, "shortCode").or_else(|| text(row, "ShortCode"))
 }
 
 pub(super) fn positional_source_row(row: &Value, coordinate: &str) -> String {

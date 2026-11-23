@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use restate_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +14,9 @@ use crate::{
     config::{Config, TransportMode},
     transport::{Mode, Options, Transport},
 };
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -204,6 +207,8 @@ fn finish<T>(result: Result<T>, cleanup: Result<()>) -> Result<T> {
     match (result, cleanup) {
         (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-        (Err(error), Err(cleanup)) => Err(anyhow!("{error:#}; cleanup also failed: {cleanup:#}")),
+        (Err(error), Err(cleanup)) => {
+            Err(error.context(format!("cleanup also failed: {cleanup:#}")))
+        }
     }
 }

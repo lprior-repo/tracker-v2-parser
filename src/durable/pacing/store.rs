@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use sqlx::{Postgres, Row, Transaction};
+use tokio::time::Instant;
 
 use super::{Admission, PersistentPacing, Spacing, WireScope};
 
@@ -69,7 +70,12 @@ impl PersistentPacing {
         Ok(Admission::Reserved(token))
     }
 
-    pub(super) async fn complete(&self, scope: &WireScope, token: &str) -> Result<()> {
+    pub(super) async fn complete(
+        &self,
+        scope: &WireScope,
+        token: &str,
+        started: Option<Instant>,
+    ) -> Result<()> {
         let mut transaction = self
             .pool
             .begin()
@@ -79,10 +85,19 @@ impl PersistentPacing {
             .execute(&mut *transaction)
             .await?;
         lock_scope(&mut transaction, scope).await?;
+        let remaining_micros = match (scope.spacing, started) {
+            (Spacing::RequestStarts, Some(started)) => {
+                let elapsed_micros = i64::try_from(started.elapsed().as_micros())
+                    .context("wire operation elapsed time exceeds database range")?;
+                Some(scope.interval_micros.saturating_sub(elapsed_micros).max(0))
+            }
+            _ => None,
+        };
         let changed = sqlx::query(
             "WITH clock AS (SELECT clock_timestamp() AS now) \
              UPDATE durable_wire_pacing SET \
-             next_allowed_at = CASE WHEN $4 THEN GREATEST(clock.now, updated_at + $2::bigint * INTERVAL '1 microsecond') \
+             next_allowed_at = CASE WHEN $5::bigint IS NOT NULL THEN clock.now + $5::bigint * INTERVAL '1 microsecond' \
+               WHEN $4 THEN GREATEST(clock.now, updated_at + $2::bigint * INTERVAL '1 microsecond') \
                ELSE clock.now + $2::bigint * INTERVAL '1 microsecond' END, \
              lease_token = NULL, updated_at = clock.now FROM clock \
              WHERE pacing_key = ANY($1) AND lease_token = $3",
@@ -91,6 +106,7 @@ impl PersistentPacing {
         .bind(scope.interval_micros)
         .bind(token)
         .bind(matches!(scope.spacing, Spacing::RequestStarts))
+        .bind(remaining_micros)
         .execute(&mut *transaction)
         .await
         .context("persisting completed wire request cooldown")?;

@@ -23,7 +23,7 @@ async fn completion_waiting_for_origin_does_not_lock_provider_out_of_order() -> 
         sqlx::query("SELECT pacing_key FROM durable_wire_pacing WHERE pacing_key=$1 FOR UPDATE")
             .bind(&scope.keys[1]).fetch_one(&mut *blocker).await?;
         let gate = PersistentPacing::new(completion_pool.clone());
-        let (completed, observed) = tokio::join!(tokio::time::timeout(Duration::from_secs(6), gate.complete(&scope, &token)), async {
+        let (completed, observed) = tokio::join!(tokio::time::timeout(Duration::from_secs(6), gate.complete(&scope, &token, None)), async {
             let observed = wait_for_blocker(pool, completion_pid, blocker_pid).await;
             let probe = match observed {
                 Ok(()) => sqlx::query("SELECT pacing_key FROM durable_wire_pacing WHERE pacing_key=$1 FOR UPDATE NOWAIT")
@@ -89,7 +89,7 @@ async fn mismatched_completion_token_rolls_back_every_pacing_row() -> Result<()>
             .fetch_one(pool)
             .await?;
             let error = PersistentPacing::new(pool.clone())
-                .complete(&scope, &token)
+                .complete(&scope, &token, None)
                 .await
                 .expect_err("mismatched lease must fail");
             assert!(

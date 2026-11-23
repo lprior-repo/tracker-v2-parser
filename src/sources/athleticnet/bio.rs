@@ -18,6 +18,7 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
         .context
         .sport
         .context("athlete target has no sport")?;
+    let identities = rows::identities(body);
     let mut page = ParsedPage::default();
     let Some(mut athlete) = v::athlete(
         person,
@@ -30,7 +31,7 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
         page.notes.push(
             "Athlete identity is private, masked, or incomplete; no person manufactured".to_owned(),
         );
-        rows::retain_unidentified(body, sport, &mut page);
+        rows::retain_unidentified(body, sport, &identities, &mut page);
         return Ok(page);
     };
     retain_grade(body, &mut athlete);
@@ -38,8 +39,8 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
         page.notes.push("Athlete gender or current grade evidence is incomplete; missing facts were not inferred".to_owned());
     }
     schools(target, body, &mut page)?;
-    rows::retain(body, "resultsTF", &athlete, sport, &mut page);
-    rows::retain(body, "resultsXC", &athlete, sport, &mut page);
+    rows::retain(body, "resultsTF", &athlete, sport, &identities, &mut page);
+    rows::retain(body, "resultsXC", &athlete, sport, &identities, &mut page);
     let discovered = discover_meets(body, &page, target)?;
     page.next.extend(discovered);
     if sport != Sport::CrossCountry {

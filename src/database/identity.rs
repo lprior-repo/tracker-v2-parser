@@ -475,7 +475,7 @@ pub(super) async fn find(
     source_id: &str,
 ) -> Result<i64> {
     sqlx::query_scalar(
-        "SELECT id FROM athlete_sources WHERE source=$1 AND source_id=$2 AND name IS NOT NULL",
+        "SELECT id FROM athlete_sources WHERE source=$1 AND source_id=$2 AND name IS NOT NULL FOR SHARE",
     )
     .bind(source.as_str())
     .bind(source_id)

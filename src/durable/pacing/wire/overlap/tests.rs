@@ -174,7 +174,7 @@ async fn old_exclusive_lease_and_saved_stop_remain_authoritative_for_overlap_mod
         let receipt = overlap.wire_context.as_ref().context("context")?.next(&request)?;
         assert!(overlap.reserve_start(&request, &receipt, Duration::from_millis(333_334)).await?.is_some());
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(pool).await?, 0);
-        old.complete(&scope, &token).await?;
+        old.complete(&scope, &token, None).await?;
         sqlx::query("INSERT INTO scrape_pages(source,page_key,url,cursor,status,attempts,last_error) VALUES('milesplit',repeat('c',64),'https://school.example.org/',jsonb_build_object('kind','contacts','access_stop_url','https://wi.milesplit.com'),'blocked',1,'retained public access stop')").execute(pool).await?;
         assert!(overlap.reserve_start(&request, &receipt, Duration::from_millis(333_334)).await.expect_err("saved stop prevents intent").is::<crate::transport::AccessStop>());
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(pool).await?, 0);

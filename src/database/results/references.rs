@@ -61,7 +61,7 @@ impl References {
             .into_iter()
             .collect::<Vec<_>>();
         let profiles = sqlx::query_as::<_, (String, i64)>(
-            "SELECT source_id,id FROM athlete_sources WHERE source=$1 AND source_id=ANY($2) AND name IS NOT NULL",
+            "SELECT source_id,id FROM athlete_sources WHERE source=$1 AND source_id=ANY($2) AND name IS NOT NULL ORDER BY id FOR SHARE",
         ).bind(source.as_str()).bind(profiles).fetch_all(&mut *connection).await?
             .into_iter().collect();
         let schools = if schools.is_empty() {

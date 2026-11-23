@@ -5,10 +5,11 @@ mod store;
 #[cfg(test)]
 mod tests;
 
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::OnceLock, time::Duration};
 
 use anyhow::Result;
 use reqwest::Response;
+use tokio::time::Instant;
 
 use super::PersistentPacing;
 
@@ -71,12 +72,14 @@ impl PersistentPacing {
                 )
                 .await;
         }
+        let started = OnceLock::new();
         self.execute_guarded(
             request.source,
             &request.address,
             interval,
-            self.send_recorded(&request, receipt.as_ref(), operation),
+            self.send_recorded(&request, receipt.as_ref(), operation, &started),
             |response| Some(response.status().as_u16()),
+            &started,
         )
         .await
     }
@@ -86,6 +89,7 @@ impl PersistentPacing {
         request: &WireRequest,
         receipt: Option<&WireReceipt>,
         operation: F,
+        started: &OnceLock<Instant>,
     ) -> Result<Response>
     where
         F: Future<Output = Result<Response>>,
@@ -95,6 +99,9 @@ impl PersistentPacing {
         if let Some(receipt) = receipt {
             self.begin_wire(receipt, request).await?;
         }
+        started
+            .set(Instant::now())
+            .map_err(|_| anyhow::anyhow!("wire operation start was already recorded"))?;
         let result = operation.await;
         let status = result
             .as_ref()

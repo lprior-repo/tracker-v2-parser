@@ -2,6 +2,7 @@ use std::time::Duration;
 
 mod admission;
 mod cadence;
+mod delayed_intent;
 
 use anyhow::{Context, Result};
 

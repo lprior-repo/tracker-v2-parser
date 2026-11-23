@@ -5,11 +5,21 @@ use crate::model::{Athlete, ParsedPage, Performance, Sport, UnassignedResult};
 use super::super::values as v;
 use super::{season_number, season_sport};
 
+pub(super) fn identities(body: &Value) -> v::ResultIdentities {
+    v::ResultIdentities::from_rows(
+        ["resultsTF", "resultsXC"]
+            .into_iter()
+            .filter_map(|key| body.get(key).and_then(Value::as_array))
+            .flatten(),
+    )
+}
+
 pub(super) fn retain(
     body: &Value,
     key: &str,
     athlete: &Athlete,
     requested: Sport,
+    identities: &v::ResultIdentities,
     page: &mut ParsedPage,
 ) {
     let Some(rows) = body.get(key).and_then(Value::as_array) else {
@@ -19,7 +29,12 @@ pub(super) fn retain(
         return;
     };
     for (ordinal, row) in rows.iter().enumerate() {
-        let source_row = v::source_row(row, &format!("{key}:{ordinal}"));
+        let source_row = identities.source_row(row, &format!("{key}:{ordinal}"));
+        if identities.repeated_native_id(row) {
+            page.unassigned_results
+                .push(quarantined(body, key, row, requested, source_row));
+            continue;
+        }
         match project(body, key, row, athlete) {
             Some(performance) if performance.is_relay => {
                 let mut result = unassigned(body, key, row, requested);
@@ -57,7 +72,12 @@ pub(super) fn retain(
     }
 }
 
-pub(super) fn retain_unidentified(body: &Value, requested: Sport, page: &mut ParsedPage) {
+pub(super) fn retain_unidentified(
+    body: &Value,
+    requested: Sport,
+    identities: &v::ResultIdentities,
+    page: &mut ParsedPage,
+) {
     for key in ["resultsTF", "resultsXC"] {
         body.get(key)
             .and_then(Value::as_array)
@@ -66,13 +86,32 @@ pub(super) fn retain_unidentified(body: &Value, requested: Sport, page: &mut Par
             .enumerate()
             .for_each(|(ordinal, row)| {
                 let mut result = unassigned(body, key, row, requested);
-                result.source_row = Some(v::source_row(row, &format!("{key}:{ordinal}")));
+                if identities.repeated_native_id(row) {
+                    result.result_id = None;
+                }
+                result.source_row = Some(identities.source_row(row, &format!("{key}:{ordinal}")));
                 if result.is_relay {
                     retain_members(body, row, &mut result);
                 }
                 page.unassigned_results.push(result);
             });
     }
+}
+
+fn quarantined(
+    body: &Value,
+    key: &str,
+    row: &Value,
+    requested: Sport,
+    source_row: String,
+) -> UnassignedResult {
+    let mut result = unassigned(body, key, row, requested);
+    result.result_id = None;
+    result.source_row = Some(source_row);
+    if result.is_relay {
+        retain_members(body, row, &mut result);
+    }
+    result
 }
 
 fn project(body: &Value, key: &str, row: &Value, athlete: &Athlete) -> Option<Performance> {

@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use futures::{TryStreamExt, stream};
-use reqwest::{Client, Method, Response, header};
+use reqwest::{Client, Method, Request, Response, header};
 use url::Url;
 
 use crate::model::{Capture, Target};
@@ -12,6 +12,11 @@ use super::{AccessStopCaptureError, MAX_BODY_BYTES, Transport, access_stop_statu
 enum Hop {
     Next(Url),
     Complete(Capture),
+}
+
+struct PreparedRequest {
+    client: Client,
+    request: Request,
 }
 
 impl Transport {
@@ -60,13 +65,25 @@ impl Transport {
             "source only supports GET and POST requests"
         );
         ensure!(!remaining.is_zero(), "source HTTP request timed out");
+        let preparing = tokio::time::Instant::now();
+        let preparation_deadline = preparing
+            .checked_add(*remaining)
+            .context("HTTP preparation deadline overflow")?;
+        let prepared = tokio::time::timeout_at(
+            preparation_deadline,
+            self.prepare_request(target, headers, url, &method),
+        )
+        .await
+        .context("source HTTP request preparation timed out")??;
+        *remaining = remaining.saturating_sub(preparing.elapsed());
+        ensure!(!remaining.is_zero(), "source HTTP request timed out");
         self.pace(target).await?;
         let start = tokio::time::Instant::now();
         let deadline = start
             .checked_add(*remaining)
             .context("HTTP network deadline overflow")?;
         let result = self
-            .network_hop(target, headers, url, &method, deadline)
+            .network_hop(target, headers, url, &method, prepared, deadline)
             .await;
         *remaining = remaining.saturating_sub(start.elapsed());
         result
@@ -74,17 +91,20 @@ impl Transport {
 
     #[tracing::instrument(skip_all)]
     async fn network_hop(
-        &mut self,
+        &self,
         target: &Target,
         headers: &BTreeMap<String, String>,
         url: &Url,
         method: &Method,
+        prepared: PreparedRequest,
         deadline: tokio::time::Instant,
     ) -> Result<Hop> {
-        let response =
-            tokio::time::timeout_at(deadline, self.send_request(target, headers, url, method))
-                .await
-                .context("source HTTP request timed out")??;
+        let response = tokio::time::timeout_at(
+            deadline,
+            self.send_wire(target, url.as_str(), prepared.client, prepared.request),
+        )
+        .await
+        .context("source HTTP request timed out")??;
         if response.status().is_redirection() {
             return redirect(target, url, &response, method, headers);
         }
@@ -109,14 +129,19 @@ impl Transport {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn send_request(
+    async fn prepare_request(
         &mut self,
         target: &Target,
         headers: &BTreeMap<String, String>,
         url: &Url,
         method: &Method,
-    ) -> Result<Response> {
+    ) -> Result<PreparedRequest> {
         super::robots::check(url.as_str(), &target.url)?;
+        #[cfg(test)]
+        if let Some(gate) = self.http_preparation_gate.take() {
+            gate.0.notify_one();
+            gate.1.notified().await;
+        }
         let client = self.client_for(url).await?;
         let request_url = url.clone();
         #[cfg(test)]
@@ -134,7 +159,7 @@ impl Transport {
             request = request.header(header::CONTENT_LENGTH, "0");
         }
         let request = request.build().context("building source HTTP request")?;
-        self.send_wire(target, url.as_str(), client, request).await
+        Ok(PreparedRequest { client, request })
     }
 
     #[tracing::instrument(skip_all)]

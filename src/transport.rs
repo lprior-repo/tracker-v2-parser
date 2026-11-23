@@ -62,6 +62,8 @@ pub struct Transport {
     http_test_budget: Option<Duration>,
     #[cfg(test)]
     http_test_url: Option<url::Url>,
+    #[cfg(test)]
+    http_preparation_gate: Option<std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
 }
 
 impl Transport {
@@ -84,6 +86,8 @@ impl Transport {
             http_test_budget: None,
             #[cfg(test)]
             http_test_url: None,
+            #[cfg(test)]
+            http_preparation_gate: None,
         })
     }
 

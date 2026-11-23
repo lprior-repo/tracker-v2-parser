@@ -10,11 +10,16 @@ pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
 
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, TryStreamExt, stream};
 use sqlx::PgPool;
+use tokio::time::Instant;
 use url::Url;
 
 use crate::model::Source;
@@ -97,8 +102,21 @@ impl PersistentPacing {
     where
         F: Future<Output = Result<T>>,
     {
-        self.execute_guarded(source, address, interval, operation, |_| None)
-            .await
+        let started = OnceLock::new();
+        self.execute_guarded(
+            source,
+            address,
+            interval,
+            async {
+                started
+                    .set(Instant::now())
+                    .map_err(|_| anyhow::anyhow!("wire operation start was already recorded"))?;
+                operation.await
+            },
+            |_| None,
+            &started,
+        )
+        .await
     }
 
     async fn execute_guarded<T, F, S>(
@@ -108,6 +126,7 @@ impl PersistentPacing {
         interval: Duration,
         operation: F,
         status: S,
+        started: &OnceLock<Instant>,
     ) -> Result<T>
     where
         F: Future<Output = Result<T>>,
@@ -119,7 +138,7 @@ impl PersistentPacing {
             .await
             .context("persistent paced wire request timed out")
             .and_then(std::convert::identity);
-        let completed = self.complete(&scope, &token).await;
+        let completed = self.complete(&scope, &token, started.get().copied()).await;
         match (result, completed) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), Ok(())) => Err(error),

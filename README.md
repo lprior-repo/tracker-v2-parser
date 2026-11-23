@@ -511,16 +511,29 @@ school-evidence replay and oversized chunks retain ordered single-row handling.
 The batch uses the existing conflict-update rules and checks returned source keys
 against every input; a cross-athlete conflict rolls back the enclosing page
 transaction. Canonical athlete ownership is still resolved from its current
-provider profile in PostgreSQL. No acquisition, retry or durability limit changes.
+provider profile in PostgreSQL. Result-only writes acquire shared row locks on
+referenced athlete profiles before the result statement starts, and retain them
+through commit. Identity splits and merges therefore cannot change the result's
+owner between its lookup and write. Cached reference lookups acquire profile locks
+in ID order; oversized references use the existing per-row fallback. Locks are
+retained until page commit, and unrelated profiles remain independently writable.
+No acquisition, retry or durability limit changes.
 
 Athletic.net results without a published result ID use its row code where
-available (including the meet API's `ShortCode`). Without a code, the key
-includes the original source-array coordinates and a digest of the entire
+available and unique across that response (including the meet API's `ShortCode`).
+Native result IDs retain precedence when their rows share a code. Without a unique
+code, the key includes the original
+source-array coordinates and a digest of the entire
 published row, not the mark alone. Reordering or changing such a row can create
 duplicates, but cannot overwrite a different row merely because it occupied the
 same coordinates. Existing keys are not rewritten or deleted; refreshing older
 records can also create duplicates requiring manual reconciliation. No automatic
 match is safe when the provider supplies insufficient identity evidence.
+Repeated native result IDs in a bio or meet response are retained as separate
+unassigned observations using those coordinates and full-row digests. Bio track
+and cross-country histories are checked together. These ambiguous occurrences
+cannot overwrite an existing trusted result; a later unique native ID can still
+correct that result. Relay rows retain their published legs and member evidence.
 Other rows without either an ID or source row use their page position and full
 parsed result content, with the same duplication risk after changes or reorder.
 MileSplit raw-result identifiers likewise include the full published line as
@@ -909,6 +922,13 @@ one request per five seconds, or one per thirty seconds for staff-directory URLs
 An explicit `contact_requests_per_second = 3.0` under `[limits]` overrides both
 contact defaults and remains capped by `requests_per_second`. Omitting this setting
 preserves existing pacing and acquisition hashes.
+Nonpersistent HTTP transport prepares its client and request before rate
+admission. DNS, request preparation and response handling share a 45-second
+network budget; intentional local pacing waits are excluded from that budget.
+Slow preparation therefore cannot consume the interval reserved for dispatch.
+Legacy durable request-start spacing anchors its cooldown to entry into the HTTP
+operation, after preflight SQL and durable intent recording. Database waits before
+that entry cannot consume the interval between operations.
 The configured page budget and access-stop guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish
 statewide completeness.

@@ -14,7 +14,7 @@ struct ResultsContext<'a> {
     target: &'a Target,
     body: &'a Value,
     sport: Sport,
-    repeated_ids: BTreeMap<u64, bool>,
+    identities: v::ResultIdentities,
     legs: BTreeMap<u64, Vec<&'a Value>>,
     competition: Option<&'a CompetitionEvidence>,
 }
@@ -76,7 +76,7 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
         target,
         body,
         sport,
-        repeated_ids: repeated_result_ids(blocks),
+        identities: result_identities(blocks),
         legs: relay_index(body),
         competition: competition::validated(target),
     };
@@ -118,18 +118,13 @@ pub(super) fn results(target: &Target, body: &Value) -> Result<ParsedPage> {
     Ok(page)
 }
 
-fn repeated_result_ids(blocks: &[Value]) -> BTreeMap<u64, bool> {
-    blocks
-        .iter()
-        .filter_map(|block| block.get("results").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|row| v::native_id(row, "IDResult"))
-        .fold(BTreeMap::new(), |mut ids, id| {
-            ids.entry(id)
-                .and_modify(|repeated| *repeated = true)
-                .or_insert(false);
-            ids
-        })
+fn result_identities(blocks: &[Value]) -> v::ResultIdentities {
+    v::ResultIdentities::from_rows(
+        blocks
+            .iter()
+            .filter_map(|block| block.get("results").and_then(Value::as_array))
+            .flatten(),
+    )
 }
 
 fn relay_index(body: &Value) -> BTreeMap<u64, Vec<&Value>> {
@@ -165,7 +160,7 @@ fn retain_block(
         target,
         body,
         sport,
-        repeated_ids,
+        identities,
         legs,
         competition,
     } = context;
@@ -184,11 +179,7 @@ fn retain_block(
                 || block.get("isPersonal").and_then(Value::as_bool) == Some(false)
                 || row.get("PersonalEvent").and_then(Value::as_bool) == Some(false);
             let coordinate = format!("flatEvents:{block_ordinal}:results:{ordinal}");
-            if v::native_id(row, "IDResult")
-                .and_then(|id| repeated_ids.get(&id))
-                .copied()
-                == Some(true)
-            {
+            if identities.repeated_native_id(row) {
                 let mut result = v::unassigned_with_id(row, event, *sport, relay, None);
                 contextualize_unassigned(target, &mut result);
                 result.source_row = Some(v::positional_source_row(row, &coordinate));
@@ -211,7 +202,7 @@ fn retain_block(
             } else {
                 retain_individual(target, block, row, &event, &mut entities.athletes, page);
             }
-            let source_row = v::source_row(row, &coordinate);
+            let source_row = identities.source_row(row, &coordinate);
             if page.performances.len() > performances {
                 if let Some(result) = page.performances.last_mut() {
                     result.source_row = Some(source_row);
