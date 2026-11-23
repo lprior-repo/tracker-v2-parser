@@ -85,6 +85,16 @@ impl PersistentPacing {
             .execute(&mut *transaction)
             .await?;
         lock_scope(&mut transaction, scope).await?;
+        Self::complete_locked(transaction, scope, token, started).await
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(super) async fn complete_locked(
+        mut transaction: Transaction<'_, Postgres>,
+        scope: &WireScope,
+        token: &str,
+        started: Option<Instant>,
+    ) -> Result<()> {
         let remaining_micros = match (scope.spacing, started) {
             (Spacing::RequestStarts, Some(started)) => {
                 let elapsed_micros = i64::try_from(started.elapsed().as_micros())

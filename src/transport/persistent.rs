@@ -97,11 +97,12 @@ impl Transport {
         address: &str,
         client: reqwest::Client,
         request: reqwest::Request,
+        deadline: tokio::time::Instant,
     ) -> Result<reqwest::Response> {
         let Some(pacing) = &self.persistent_pacing else {
-            return client
-                .execute(request)
+            return tokio::time::timeout_at(deadline, client.execute(request))
                 .await
+                .context("source HTTP request timed out")?
                 .context("fetching source response");
         };
         let body = request.body().map_or(Ok(&[][..]), |body| {
@@ -110,12 +111,17 @@ impl Transport {
         })?;
         let identity = WireRequest::new(target.source, address, request.method().as_str(), body)?;
         pacing
-            .send(identity, self.request_interval(target)?, async {
-                client
-                    .execute(request)
-                    .await
-                    .context("fetching source response")
-            })
+            .send_with_deadline(
+                identity,
+                self.request_interval(target)?,
+                async {
+                    client
+                        .execute(request)
+                        .await
+                        .context("fetching source response")
+                },
+                Some(deadline),
+            )
             .await
     }
 

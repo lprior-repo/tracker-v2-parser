@@ -43,11 +43,11 @@ pub(super) async fn persist_locked(
     let mut timings = Timings::new(job_id, "page_domain");
     timings
         .measure(
-            Stage::PrepareReplay,
-            results::prepare_replay(connection, target, response, page),
+            Stage::ReplayFiles,
+            results::lock_replay_files(connection, target.source, page),
         )
         .await?;
-    let revision_notes = save_domain(connection, target, page, &response.url, &mut timings).await?;
+    let revision_notes = save_domain(connection, target, response, page, &mut timings).await?;
     timings
         .measure(
             Stage::Enqueue,
@@ -74,16 +74,22 @@ pub(super) async fn persist_locked(
     Ok(id)
 }
 
-#[tracing::instrument(skip(connection, target, page, url, timings))]
+#[tracing::instrument(skip(connection, target, response, page, timings))]
 async fn save_domain(
     connection: &mut PgConnection,
     target: &Target,
+    response: &Capture,
     page: &ParsedPage,
-    url: &str,
     timings: &mut Timings,
 ) -> Result<Vec<String>> {
-    save_profiles(connection, target, page, url, timings).await?;
-    save_results(connection, target, page, url, timings).await?;
+    save_profiles(connection, target, page, &response.url, timings).await?;
+    timings
+        .measure(
+            Stage::PrepareReplay,
+            results::prepare_replay(connection, target, response, page),
+        )
+        .await?;
+    save_results(connection, target, page, &response.url, timings).await?;
     timings
         .measure(
             Stage::RevisionReview,

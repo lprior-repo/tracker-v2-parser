@@ -9,23 +9,33 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use futures::{TryStreamExt, stream};
+use futures::{FutureExt, TryStreamExt, stream};
 use reqwest::Response;
+use sqlx::{Postgres, Transaction};
 use tokio::time::Instant;
 
-use super::{PersistentPacing, WireReceipt, WireRequest, preserve_status};
+use super::{PersistentPacing, WireReceipt, WireRequest, before, preserve_status};
 use crate::durable::pacing::{
     MAX_ADMISSION_POLLS, MAX_ADMISSION_WAIT, Spacing, WIRE_TIMEOUT, WireScope, admission_delay,
 };
+
+const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct OverlappedWire<'a> {
+    request: &'a WireRequest,
+    receipt: &'a WireReceipt,
+}
 
 struct StartLease<'a> {
     scope: WireScope,
     token: &'a str,
     deadline: Instant,
-    started: Option<Instant>,
-    executed_at: Option<chrono::DateTime<chrono::Utc>>,
-    observed_status: Option<u16>,
-    completion_attempted: bool,
+}
+
+struct StartedWire {
+    instant: Instant,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    transaction: Transaction<'static, Postgres>,
 }
 
 impl PersistentPacing {
@@ -36,6 +46,7 @@ impl PersistentPacing {
         receipt: &WireReceipt,
         interval: Duration,
         operation: F,
+        deadline: Option<Instant>,
     ) -> Result<Response>
     where
         F: Future<Output = Result<Response>> + Send,
@@ -46,110 +57,127 @@ impl PersistentPacing {
             interval,
             Spacing::RequestStarts,
         )?;
-        let token = store::start_token(receipt)?;
-        let deadline = self.admit_overlapped(request, receipt, interval).await?;
-        let mut lease = StartLease {
+        let owned_until =
+            before(deadline, self.admit_overlapped(request, receipt, interval)).await?;
+        let lease = StartLease {
             scope,
-            token,
-            deadline,
-            started: None,
-            executed_at: None,
-            observed_status: None,
-            completion_attempted: false,
+            token: store::start_token(receipt)?,
+            deadline: deadline.map_or(owned_until, |deadline| deadline.min(owned_until)),
         };
-        let result = tokio::time::timeout_at(
-            deadline,
-            self.execute_overlapped(request, interval, operation, &mut lease),
-        )
-        .await
-        .context("durable overlapped HTTP ownership deadline reached")
-        .and_then(std::convert::identity);
-        let result = if lease.completion_attempted {
-            result
-        } else {
-            finish(
-                result,
-                self.release_start(&mut lease).await,
-                &request.address,
-                "wire start pacing completion failed",
-            )
-        };
-        let status = result
-            .as_ref()
-            .ok()
-            .map(|response| response.status().as_u16())
-            .or(lease.observed_status);
-        let recorded = self
-            .complete_wire_executed(receipt, status, lease.executed_at)
-            .await;
-        finish_observed(result, recorded, status, &request.address)
+        let wire = OverlappedWire { request, receipt };
+        self.execute_overlapped(wire, interval, operation, lease)
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
     async fn execute_overlapped<F>(
         &self,
-        request: &WireRequest,
+        wire: OverlappedWire<'_>,
         interval: Duration,
         operation: F,
-        lease: &mut StartLease<'_>,
+        lease: StartLease<'_>,
     ) -> Result<Response>
     where
         F: Future<Output = Result<Response>> + Send,
     {
-        let mut start = self.starts.admit(request.source, interval).await?;
-        self.check_wire_origin(request).await?;
-        self.check_contact_origin(request).await?;
-        if Instant::now() >= lease.deadline {
-            return Err(
-                anyhow::Error::from(crate::durable::AcquisitionBusy).context(
-                    "durable start admission exhausted its HTTP ownership deadline before wire",
-                ),
-            );
-        }
-        *start = Some(
-            Instant::now()
-                .checked_add(interval)
-                .context("client start fence overflow")?,
-        );
+        let deadline = lease.deadline;
         let mut operation = std::pin::pin!(operation);
-        lease.started = Some(Instant::now());
-        lease.executed_at = Some(chrono::Utc::now());
-        let immediate = poll_fn(|cx| {
-            Poll::Ready(match operation.as_mut().poll(cx) {
-                Poll::Ready(result) => Some(result),
-                Poll::Pending => None,
-            })
+        let start = before(Some(deadline), async {
+            let mut fence = self.starts.admit(wire.request.source, interval).await?;
+            let transaction = self.lock_start(wire.request, &lease).await?;
+            let instant = Instant::now();
+            anyhow::ensure!(instant < deadline, crate::durable::AcquisitionBusy);
+            *fence = Some(
+                instant
+                    .checked_add(interval)
+                    .context("client start fence overflow")?,
+            );
+            let timestamp = chrono::Utc::now();
+            let immediate = poll_fn(|cx| Poll::Ready(operation.as_mut().poll(cx))).await;
+            drop(fence);
+            Ok((
+                StartedWire {
+                    instant,
+                    timestamp,
+                    transaction,
+                },
+                immediate,
+            ))
         })
         .await;
-        lease.observed_status = immediate
-            .as_ref()
-            .and_then(|result| result.as_ref().ok())
-            .map(|response| response.status().as_u16());
-        *start = Some(
-            Instant::now()
-                .checked_add(interval)
-                .context("client start fence overflow")?,
-        );
-        drop(start);
-        let completed = self.release_start(lease).await;
-        if let Some(result) = immediate {
-            finish(
-                result,
-                completed,
-                &request.address,
-                "wire start pacing completion failed",
-            )
+        let (started, immediate) = match start {
+            Ok(start) => start,
+            Err(error) => return self.settle_unstarted(wire, &lease, error).await,
+        };
+        let denial = matches!(&immediate, Poll::Ready(Ok(response)) if crate::transport::access_stop_status(response.status().as_u16()));
+        let response = async {
+            match immediate {
+                Poll::Ready(result) => result,
+                Poll::Pending => before(Some(deadline), operation).await,
+            }
+        };
+        let address = wire.request.address.as_str();
+        let record = self.settle_response(wire, response, Some(started.timestamp));
+        let release = || {
+            settle(Self::complete_locked(
+                started.transaction,
+                &lease.scope,
+                lease.token,
+                Some(started.instant),
+            ))
+        };
+        let (result, completed) = if denial {
+            (record.await, release().await)
         } else {
-            completed.context("wire start pacing completion failed")?;
-            operation.await
-        }
+            tokio::join!(record, release())
+        };
+        finish(
+            result,
+            completed,
+            address,
+            "wire start pacing completion failed",
+        )
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
-    async fn release_start(&self, lease: &mut StartLease<'_>) -> Result<()> {
-        lease.completion_attempted = true;
-        self.complete(&lease.scope, lease.token, lease.started)
-            .await
+    async fn settle_unstarted(
+        &self,
+        wire: OverlappedWire<'_>,
+        lease: &StartLease<'_>,
+        error: anyhow::Error,
+    ) -> Result<Response> {
+        let address = wire.request.address.as_str();
+        let (result, completed) = tokio::join!(
+            self.settle_response(wire, async { Err(error) }, None),
+            settle(self.complete(&lease.scope, lease.token, None)),
+        );
+        finish(
+            result,
+            completed,
+            address,
+            "wire start pacing completion failed",
+        )
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn settle_response(
+        &self,
+        wire: OverlappedWire<'_>,
+        response: impl Future<Output = Result<Response>>,
+        executed_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Response> {
+        let result = response.await;
+        let status = result
+            .as_ref()
+            .ok()
+            .map(|response| response.status().as_u16());
+        let recorded = settle(self.complete_wire_executed(wire.receipt, status, executed_at)).await;
+        finish(
+            result,
+            recorded,
+            &wire.request.address,
+            "wire result recording failed",
+        )
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -184,21 +212,9 @@ impl PersistentPacing {
     }
 }
 
-fn finish_observed(
-    result: Result<Response>,
-    recorded: Result<()>,
-    status: Option<u16>,
-    address: &str,
-) -> Result<Response> {
-    finish(result, recorded, address, "wire result recording failed").map_err(|error| {
-        if error.is::<crate::transport::AccessStop>()
-            || error.is::<crate::transport::AccessStopCaptureError>()
-        {
-            error
-        } else {
-            preserve_status(status, error, address)
-        }
-    })
+fn settle(action: impl Future<Output = Result<()>>) -> impl Future<Output = Result<()>> {
+    tokio::time::timeout(SETTLEMENT_TIMEOUT, action)
+        .map(|result| result.context("durable wire settlement timed out")?)
 }
 
 fn finish(

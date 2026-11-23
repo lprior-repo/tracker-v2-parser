@@ -2,11 +2,12 @@ use std::{collections::BTreeMap, future::Future, time::Instant};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Stage {
-    PrepareReplay,
+    ReplayFiles,
     ContactReview,
     Schools,
     SchoolConflicts,
     Profiles,
+    PrepareReplay,
     Results,
     Unassigned,
     Contacts,

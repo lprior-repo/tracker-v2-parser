@@ -7,7 +7,8 @@ mod tests;
 
 use std::{future::Future, sync::OnceLock, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use futures::{FutureExt, future::Either};
 use reqwest::Response;
 use tokio::time::Instant;
 
@@ -51,37 +52,61 @@ impl PersistentPacing {
     where
         F: Future<Output = Result<Response>> + Send,
     {
+        self.send_with_deadline(request, interval, operation, None)
+            .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub(crate) async fn send_with_deadline<F>(
+        &self,
+        request: WireRequest,
+        interval: Duration,
+        operation: F,
+        deadline: Option<Instant>,
+    ) -> Result<Response>
+    where
+        F: Future<Output = Result<Response>> + Send,
+    {
+        let receipt = before(deadline, self.prepare_wire(&request)).await?;
+        if self.overlapped {
+            let response = self.send_overlapped(
+                &request,
+                receipt
+                    .as_ref()
+                    .context("overlapped admission requires durable wire identity")?,
+                interval,
+                operation,
+                deadline,
+            );
+            return response.await;
+        }
+        let started = OnceLock::new();
+        before(
+            deadline,
+            self.execute_guarded(
+                request.source,
+                &request.address,
+                interval,
+                self.send_recorded(&request, receipt.as_ref(), operation, &started),
+                |response| Some(response.status().as_u16()),
+                &started,
+            ),
+        )
+        .await
+    }
+
+    #[tracing::instrument(skip_all)]
+    async fn prepare_wire(&self, request: &WireRequest) -> Result<Option<WireReceipt>> {
         let receipt = self
             .wire_context
             .as_ref()
-            .map(|context| context.next(&request))
+            .map(|context| context.next(request))
             .transpose()?;
         if let Some(receipt) = &receipt {
-            self.check_wire_origin(&request).await?;
-            self.check_wire(receipt, &request).await?;
+            self.check_wire_origin(request).await?;
+            self.check_wire(receipt, request).await?;
         }
-        if self.overlapped {
-            return self
-                .send_overlapped(
-                    &request,
-                    receipt.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!("overlapped admission requires durable wire identity")
-                    })?,
-                    interval,
-                    operation,
-                )
-                .await;
-        }
-        let started = OnceLock::new();
-        self.execute_guarded(
-            request.source,
-            &request.address,
-            interval,
-            self.send_recorded(&request, receipt.as_ref(), operation, &started),
-            |response| Some(response.status().as_u16()),
-            &started,
-        )
-        .await
+        Ok(receipt)
     }
 
     async fn send_recorded<F>(
@@ -119,6 +144,19 @@ impl PersistentPacing {
                 Err(error.context(format!("wire result recording failed: {recording:#}")))
             }
         }
+    }
+}
+
+pub(super) fn before<T>(
+    deadline: Option<Instant>,
+    operation: impl Future<Output = Result<T>>,
+) -> impl Future<Output = Result<T>> {
+    match deadline {
+        Some(deadline) => Either::Left(
+            tokio::time::timeout_at(deadline, operation)
+                .map(|result| result.context("source HTTP request timed out")?),
+        ),
+        None => Either::Right(operation),
     }
 }
 

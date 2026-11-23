@@ -229,10 +229,7 @@ async fn given_masked_bio_identity_when_identical_native_ids_repeat_then_each_ra
         Box::pin(async move {
             let database = Database::connect(&test.url).await?;
             let target = athleticnet::athlete_target("382", Some("MI"), Sport::Outdoor)?;
-            let mut row = individual("11.20a");
-            row.as_object_mut()
-                .context("result object")?
-                .remove("SchoolID");
+            let row = individual("11.20a");
             let mut duplicate = capture(&[row.clone(), row.clone(), row.clone()], &[], &[]);
             duplicate["athlete"]["FirstName"] = json!("Hidden *");
             replay(&database, &target, &duplicate).await?;
@@ -254,6 +251,13 @@ async fn given_masked_bio_identity_when_identical_native_ids_repeat_then_each_ra
                 .fetch_one(database.pool())
                 .await?;
             assert_eq!(total, 3);
+            let schools: Vec<String> = sqlx::query_scalar(
+                "SELECT s.source_id FROM results r JOIN schools s ON s.id=r.represented_school_id \
+                 ORDER BY r.id",
+            )
+            .fetch_all(database.pool())
+            .await?;
+            assert_eq!(schools, ["3204", "3204", "3204"]);
             replay(&database, &target, &duplicate).await?;
             assert_eq!(quarantined(&database).await?, retained);
             database.close().await;

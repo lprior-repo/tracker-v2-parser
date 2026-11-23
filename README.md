@@ -948,16 +948,16 @@ Slow preparation therefore cannot consume the interval reserved for dispatch.
 Legacy durable request-start spacing anchors its cooldown to entry into the HTTP
 operation, after preflight SQL and durable intent recording. Database waits before
 that entry cannot consume the interval between operations.
-Rolling requests commit provider and origin ownership with their wire intent,
-retain that lease until the first poll of the HTTP operation, and release it with
-a cooldown anchored to that start. Independent workers therefore share the start
-fence while response headers remain concurrent. Pacing transactions finish before
-waiting for the HTTP response; acquisition admission retains its existing
-transaction-scoped guards. Interrupted ownership retains the existing bounded crash debt;
-expired or replaced lease tokens cannot release another request's ownership.
-Persisted intervals round up to microseconds. Update or drain every active worker
-before relying on this repair; an older rolling worker still has its older
-admission behavior.
+Rolling requests commit provider and origin ownership with their wire intent.
+They recheck both lease tokens and their database expiry under lock before
+polling the HTTP operation, then release ownership with a cooldown anchored to
+that start. Independent workers share the start fence without serializing
+response headers. The network deadline stops waiting for I/O; bounded ledger
+settlement can extend past it so observed access stops are still recorded.
+Interrupted ownership retains bounded crash debt, and an expired or replaced
+token cannot release another request's lease. Persisted intervals round up to
+microseconds. Update or drain every active worker before relying on the new
+start fence; older rolling workers still use their previous admission behavior.
 
 Three RPS is a provider and origin request-start ceiling. It counts retries,
 redirects and preflight requests as requests, and does not mean three successfully

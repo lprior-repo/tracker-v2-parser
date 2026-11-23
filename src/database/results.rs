@@ -15,8 +15,9 @@ mod raw_revisions;
 mod references;
 mod school_evidence;
 
-pub(super) use raw_revisions::prepare as prepare_replay;
-pub(super) use raw_revisions::review as review_revisions;
+pub(super) use raw_revisions::{
+    lock_files as lock_replay_files, prepare as prepare_replay, review as review_revisions,
+};
 pub(super) struct Normalized {
     pub value: Option<i64>,
     pub unit: Option<&'static str>,

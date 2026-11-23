@@ -99,12 +99,15 @@ impl Transport {
         prepared: PreparedRequest,
         deadline: tokio::time::Instant,
     ) -> Result<Hop> {
-        let response = tokio::time::timeout_at(
-            deadline,
-            self.send_wire(target, url.as_str(), prepared.client, prepared.request),
-        )
-        .await
-        .context("source HTTP request timed out")??;
+        let response = self
+            .send_wire(
+                target,
+                url.as_str(),
+                prepared.client,
+                prepared.request,
+                deadline,
+            )
+            .await?;
         if response.status().is_redirection() {
             return redirect(target, url, &response, method, headers);
         }

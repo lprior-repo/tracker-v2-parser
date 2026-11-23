@@ -126,6 +126,7 @@ impl WireFixture {
                     | FixtureKind::DelayedPage { status, body, .. } => (
                         match status {
                             403 => "403 Forbidden",
+                            429 => "429 Too Many Requests",
                             503 => "503 Service Unavailable",
                             _ => "200 OK",
                         },

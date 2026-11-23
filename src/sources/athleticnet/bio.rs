@@ -28,6 +28,9 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
             .and_then(|state| super::directory::state_code(&state).map(str::to_owned)),
         sport,
     ) else {
+        if body.get("allTeams").is_some_and(Value::is_object) {
+            schools(None, body, &mut page)?;
+        }
         page.notes.push(
             "Athlete identity is private, masked, or incomplete; no person manufactured".to_owned(),
         );
@@ -38,7 +41,7 @@ pub(super) fn parse(target: &Target, body: &Value) -> Result<ParsedPage> {
     if athlete.gender.is_none() || athlete.grade.is_none() {
         page.notes.push("Athlete gender or current grade evidence is incomplete; missing facts were not inferred".to_owned());
     }
-    schools(target, body, &mut page)?;
+    schools(Some(target), body, &mut page)?;
     rows::retain(body, "resultsTF", &athlete, sport, &identities, &mut page);
     rows::retain(body, "resultsXC", &athlete, sport, &identities, &mut page);
     let discovered = discover_meets(body, &page, target)?;
@@ -82,7 +85,7 @@ fn retain_grade(body: &Value, athlete: &mut Athlete) {
     }
 }
 
-fn schools(target: &Target, body: &Value, page: &mut ParsedPage) -> Result<()> {
+fn schools(target: Option<&Target>, body: &Value, page: &mut ParsedPage) -> Result<()> {
     v::object(body, "allTeams")?
         .iter()
         .try_for_each(|(key, team)| {
@@ -106,6 +109,9 @@ fn schools(target: &Target, body: &Value, page: &mut ParsedPage) -> Result<()> {
                 state: state.clone(),
                 ..School::default()
             });
+            let Some(target) = target else {
+                return Ok(());
+            };
             let seasons = body
                 .get("allSeasons")
                 .and_then(Value::as_array)

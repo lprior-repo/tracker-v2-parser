@@ -18,15 +18,42 @@ pub(in crate::database) async fn prepare(
     page: &ParsedPage,
 ) -> Result<()> {
     if target.source == Source::MileSplit {
-        lock_files(connection, page).await?;
+        lock_profiles(connection, page).await?;
         super::legacy_history::review_masked(connection, target, capture).await?;
         adoption::reconcile(connection, page).await?;
     }
     Ok(())
 }
 
+async fn lock_profiles(connection: &mut PgConnection, page: &ParsedPage) -> Result<()> {
+    if page.performances.is_empty() {
+        return Ok(());
+    }
+    let ids = page
+        .performances
+        .iter()
+        .map(|row| row.athlete_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let ids = ids.into_iter().collect::<Vec<_>>();
+    sqlx::query(
+        "SELECT id FROM athlete_sources WHERE source='milesplit' AND source_id=ANY($1) \
+         ORDER BY id FOR SHARE",
+    )
+    .bind(ids)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 #[tracing::instrument(skip_all)]
-async fn lock_files(connection: &mut PgConnection, page: &ParsedPage) -> Result<()> {
+pub(in crate::database) async fn lock_files(
+    connection: &mut PgConnection,
+    source: Source,
+    page: &ParsedPage,
+) -> Result<()> {
+    if source != Source::MileSplit {
+        return Ok(());
+    }
     let files = page
         .performances
         .iter()

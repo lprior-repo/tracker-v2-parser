@@ -298,6 +298,69 @@ async fn seed_old_masked_career(
 }
 
 #[tokio::test]
+async fn profile_replay_waiting_on_a_result_writer_does_not_lock_its_result() -> Result<()> {
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = career_target();
+            let body = career_body(&[career_row("2:00.00", "900")]);
+            let refresh = sources::parse(&target, &body)?;
+            persist(&database, &target, &body, &refresh).await?;
+            let mut writer = test.pool.begin().await?;
+            let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *writer)
+                .await?;
+            sqlx::query("SELECT id FROM athlete_sources WHERE source='milesplit' FOR SHARE")
+                .fetch_one(&mut *writer)
+                .await?;
+            let meet = Target::get(
+                Source::MileSplit,
+                PageKind::Meet,
+                "https://oh.milesplit.com/meets/900-fixture".into(),
+                PageContext::default(),
+            );
+            let capture = Capture {
+                url: meet.url.clone(),
+                status: 200,
+                content_type: "text/html".into(),
+                body: Vec::new(),
+            };
+            let results = ParsedPage {
+                performances: refresh.performances.clone(),
+                ..ParsedPage::default()
+            };
+            let write = async {
+                loop {
+                    let blocked: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+                    )
+                    .bind(pid)
+                    .fetch_one(&test.pool)
+                    .await?;
+                    if blocked {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Database::persist_transaction(&mut writer, None, &meet, &capture, &results).await?;
+                writer.commit().await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (refresh, write) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(persist(&database, &target, &body, &refresh), write)
+            })
+            .await?;
+            refresh?;
+            write?;
+            assert_eq!(career_observations(&test.pool).await?, [("2:00.00".into(), None)]);
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn given_retained_self_masked_career_when_replayed_then_quarantine_clears_only_on_public_reconfirmation()
 -> Result<()> {
     for indexed in [false, true] {

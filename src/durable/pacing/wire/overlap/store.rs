@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use sqlx::{Postgres, Row, Transaction};
 
-use super::{PersistentPacing, WireReceipt, WireRequest};
+use super::{PersistentPacing, StartLease, WireReceipt, WireRequest};
 use crate::durable::pacing::{Spacing, WireScope};
 
 impl PersistentPacing {
@@ -64,6 +64,50 @@ impl PersistentPacing {
             .await
             .context("committing durable start admission and wire intent")?;
         Ok(None)
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    pub(super) async fn lock_start(
+        &self,
+        request: &WireRequest,
+        lease: &StartLease<'_>,
+    ) -> Result<Transaction<'static, Postgres>> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("opening durable wire start")?;
+        self.validate_start(&mut transaction, lease).await?;
+        check_stops(&mut transaction, request).await?;
+        Ok(transaction)
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn validate_start(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        lease: &StartLease<'_>,
+    ) -> Result<()> {
+        sqlx::query("SET LOCAL lock_timeout='5s'")
+            .execute(&mut **transaction)
+            .await?;
+        let owned: i64 = sqlx::query_scalar(
+            "WITH locked AS MATERIALIZED ( \
+               SELECT lease_token,next_allowed_at FROM durable_wire_pacing \
+               WHERE pacing_key=ANY($1) ORDER BY pacing_key FOR UPDATE \
+             ) SELECT count(*) FROM locked WHERE lease_token=$2 AND next_allowed_at>clock_timestamp()",
+        )
+        .bind(lease.scope.keys.as_slice())
+        .bind(lease.token)
+        .fetch_one(&mut **transaction)
+        .await
+        .context("verifying durable wire start ownership")?;
+        ensure!(
+            owned == 2,
+            anyhow::Error::from(crate::durable::AcquisitionBusy)
+                .context("durable pacing lease expired or changed before wire start")
+        );
+        Ok(())
     }
 }
 
