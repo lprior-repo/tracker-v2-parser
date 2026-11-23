@@ -29,20 +29,20 @@ impl AthleticCrawl {
     ) -> HandlerResult<BatchProgress> {
         let scope = request.page_scope().terminal()?;
         let (progress, _, _) =
-            stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
+            stream::iter((0..request.config().limits.max_pages).map(Ok::<_, HandlerError>))
                 .try_fold(
                     (BatchProgress::default(), 0_usize, SelectionStop::Open),
                     |(progress, turns, stopped), _| {
                         let scope = &scope;
                         async move {
                             if progress.queue == QueueState::NoEligiblePage
-                                || turns >= request.config.limits.max_pages
+                                || turns >= request.config().limits.max_pages
                                 || stopped == SelectionStop::DeadlineReached
                             {
                                 return Ok((progress, turns, stopped));
                             }
-                            let remaining = request.config.limits.max_pages.saturating_sub(turns);
-                            let width = remaining.min(request.config.limits.concurrency);
+                            let remaining = request.config().limits.max_pages.saturating_sub(turns);
+                            let width = remaining.min(request.config().limits.concurrency);
                             let window = self.fill(ctx, request, scope, turns, width).await;
                             let used = window.turns;
                             let stopped = window.stopped;
@@ -111,23 +111,23 @@ impl AthleticCrawl {
             .context("pipeline index overflow")
             .terminal()?;
         let now = effects::now!(ctx)?;
-        let scheduling =
-            page::Scheduling::for_batch_turn(&request.config, request.batch, index).terminal()?;
+        let scheduling = page::Scheduling::for_batch_turn(request.config(), request.batch(), index)
+            .terminal()?;
         let selected = effects::record!(ctx, &format!("select-page-{index:06}"), || async {
             let selected = page::select_step_with_extension(
                 &self.runtime.database,
-                &request.config,
+                request.config(),
                 scope,
                 now,
                 owned,
                 scheduling,
-                request.deadline_extension.as_ref(),
+                request.deadline_extension(),
             )
             .await?;
             Ok(match selected {
                 SelectionStep::Page(page)
-                    if request.scheduler_version.is_some()
-                        && owned.contains(&page.binding.page_id) =>
+                    if request.scheduler_version().is_some()
+                        && owned.contains(&page.binding.page_id()) =>
                 {
                     SelectionStep::Empty
                 }
@@ -141,15 +141,15 @@ impl AthleticCrawl {
             SelectionStep::DeadlineReached => return Ok(DispatchStep::DeadlineReached),
         };
         effects::record!(ctx, &format!("reserve-page-{index:06}"), || {
-            page::reserve_configured(&self.runtime.database, &request.config, &page, now)
+            page::reserve_configured(&self.runtime.database, request.config(), &page, now)
         })?;
-        let id = page.binding.page_id;
+        let id = page.binding.page_id();
         let handle = ctx
             .service_client::<AthleticPageClient>()
             .handle(Json(PageExecution {
                 request: page,
-                config: request.config.clone(),
-                scheduler_version: request.scheduler_version,
+                config: request.config().clone(),
+                scheduler_version: request.scheduler_version(),
             }))
             .idempotency_key(format!("{}-page-{index:06}", request.workflow_key()))
             .send()

@@ -57,26 +57,26 @@ pub(super) fn crawl_request(
     };
     run.validate()?;
     config.run = Some(run);
-    let value = CrawlRequest {
+    let deadline_ms = now_ms
+        .checked_add(
+            i64::from(run.hours)
+                .checked_mul(3_600_000)
+                .context("crawl duration overflow")?,
+        )
+        .context("crawl deadline overflow")?;
+    let cooldown_ms = i64::from(run.cooldown_seconds)
+        .checked_mul(1_000)
+        .context("crawl cooldown overflow")?;
+    let value = CrawlRequest::new(
         generation,
         config,
-        deadline_ms: now_ms
-            .checked_add(
-                i64::from(run.hours)
-                    .checked_mul(3_600_000)
-                    .context("crawl duration overflow")?,
-            )
-            .context("crawl deadline overflow")?,
-        cooldown_ms: i64::from(run.cooldown_seconds)
-            .checked_mul(1_000)
-            .context("crawl cooldown overflow")?,
-        batch: 0,
-        max_batches: run.max_batches,
-        phase: CrawlPhase::SchoolChains,
-        inherited_retry_campaigns: overrides.inherited_retry_campaigns,
-        scheduler_version: Some(crate::durable::model::SchedulerVersion::RollingV2),
-        deadline_extension: None,
-    };
+        deadline_ms,
+        cooldown_ms,
+        run.max_batches,
+        CrawlPhase::SchoolChains,
+        overrides.inherited_retry_campaigns,
+    )?
+    .upgraded_scheduler();
     value.validate(now_ms)?;
     Ok(value)
 }

@@ -26,13 +26,13 @@ impl FixturePage {
     ) -> HandlerResult<Json<page::PageOutcome>> {
         page::validate_request(&input.request).terminal()?;
         if super::model::page_config_digest(&input.config).terminal()?
-            != input.request.binding.scope.config_sha256
+            != input.request.binding.scope().config_sha256
         {
             return Err(
                 TerminalError::new("scheduler proof configuration binding mismatch").into(),
             );
         }
-        if input.request.binding.page_id == self.slow_page {
+        if input.request.binding.page_id() == self.slow_page {
             ctx.sleep(Duration::from_secs(45)).await?;
         }
         let now = effects::now!(&ctx)?;

@@ -6,23 +6,11 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CrawlRequest {
-    pub generation: String,
-    pub config: Config,
-    pub deadline_ms: i64,
-    pub cooldown_ms: i64,
-    pub batch: u32,
-    pub max_batches: u32,
-    pub phase: CrawlPhase,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inherited_retry_campaigns: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scheduler_version: Option<SchedulerVersion>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deadline_extension: Option<DeadlineExtensionAuthorization>,
-}
+mod crawl_request;
+pub use crawl_request::CrawlRequest;
+
+pub(crate) const BATCH_LIMIT_REACHED: &str =
+    "bounded batch count reached; retained checkpoints are resumable";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,91 +69,7 @@ pub struct CrawlReport {
     pub stopped_reason: Option<String>,
 }
 
-use super::{
-    operations,
-    page::{PageOutcome, PageScope},
-};
-
-impl CrawlRequest {
-    pub fn validate(&self, now_ms: i64) -> Result<()> {
-        identifier(&self.generation)?;
-        super::retry_lineage::validate(&self.generation, &self.inherited_retry_campaigns)?;
-        super::retry_lineage::validate_config(&self.config, &self.inherited_retry_campaigns)?;
-        ensure!(
-            self.generation.len() <= 100,
-            "crawl generation exceeds 100 bytes"
-        );
-        let mut config = self.config.clone();
-        config.validate()?;
-        ensure!(
-            digest(&config)? == digest(&self.config)?,
-            "crawl configuration must be canonical"
-        );
-        ensure!(
-            self.batch < self.max_batches && self.max_batches <= 10_000,
-            "invalid bounded batch range"
-        );
-        ensure!(
-            (15_000..=3_600_000).contains(&self.cooldown_ms),
-            "cooldown must be 15 seconds to one hour"
-        );
-        let remaining = self
-            .deadline_ms
-            .checked_sub(now_ms)
-            .context("invalid crawl deadline")?;
-        ensure!(
-            (0..=86_400_000).contains(&remaining),
-            "crawl deadline must be within 24 hours"
-        );
-        if let Some(extension) = &self.deadline_extension {
-            super::deadline_authority::DeadlineAuthority::parse(extension)?;
-            ensure!(
-                extension.previous_deadline_ms > 0
-                    && extension.previous_deadline_ms < self.deadline_ms
-                    && extension.effective_deadline_ms == self.deadline_ms,
-                "crawl deadline extension must explicitly authorize the request deadline"
-            );
-        }
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn workflow_key(&self) -> String {
-        format!("{}-{:06}", self.generation, self.batch)
-    }
-
-    pub fn page_scope(&self) -> Result<PageScope> {
-        super::retry_lineage::validate(&self.generation, &self.inherited_retry_campaigns)?;
-        super::retry_lineage::validate_config(&self.config, &self.inherited_retry_campaigns)?;
-        Ok(PageScope {
-            run_generation: format!("{}-{}", self.generation, self.phase.scope_name()),
-            config_sha256: page_config_digest(&self.config)?,
-            deadline_ms: self.deadline_ms,
-            cooldown_ms: self.cooldown_ms,
-            inherited_retry_campaigns: self.inherited_retry_campaigns.clone(),
-        })
-    }
-
-    pub fn next(&self, phase: CrawlPhase) -> Result<Self> {
-        let batch = self
-            .batch
-            .checked_add(1)
-            .context("crawl batch counter overflow")?;
-        let mut next = self.clone();
-        next.batch = batch;
-        next.phase = phase;
-        if phase == CrawlPhase::PublicResults {
-            next.config.acquisition.set_profile_coverage_only(false)?;
-        }
-        Ok(next)
-    }
-
-    #[must_use]
-    pub const fn upgraded_scheduler(mut self) -> Self {
-        self.scheduler_version = Some(SchedulerVersion::RollingV2);
-        self
-    }
-}
+use super::{operations, page::PageOutcome};
 
 impl CrawlPhase {
     #[must_use]
@@ -245,22 +149,19 @@ mod tests {
 
     #[test]
     fn crawl_request_without_extension_decodes_as_legacy_input() -> Result<()> {
-        let legacy = CrawlRequest {
-            generation: "legacy-generation".into(),
-            config: Config::default(),
-            deadline_ms: 100_000,
-            cooldown_ms: 60_000,
-            batch: 0,
-            max_batches: 1,
-            phase: CrawlPhase::SchoolChains,
-            inherited_retry_campaigns: Vec::new(),
-            scheduler_version: None,
-            deadline_extension: None,
-        };
+        let legacy = CrawlRequest::new(
+            "legacy-generation".into(),
+            Config::default(),
+            100_000,
+            60_000,
+            1,
+            CrawlPhase::SchoolChains,
+            Vec::new(),
+        )?;
         let value = serde_json::to_value(&legacy)?;
         assert!(value.get("deadline_extension").is_none());
         let decoded: CrawlRequest = serde_json::from_value(value)?;
-        assert!(decoded.deadline_extension.is_none());
+        assert!(decoded.deadline_extension().is_none());
         Ok(())
     }
 }

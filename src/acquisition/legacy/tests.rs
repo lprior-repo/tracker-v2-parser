@@ -106,8 +106,25 @@ fn reviewed_legacy_permit_is_confined_to_official_contacts_and_exact_technical_f
     ));
     request.target.kind = PageKind::Athlete;
     assert!(!permit.permits(&request, FAILURE));
-    request.binding.scope.config_sha256 = "0".repeat(64);
-    assert!(!permit.permits(&request, FAILURE));
-    assert!(LegacyFailurePermit::bind(&config, &request).is_err());
+    let other_scope = PageScope {
+        config_sha256: "0".repeat(64),
+        ..scope
+    };
+    request.target.kind = PageKind::Contacts;
+    let wrong_config = page::request(
+        Job {
+            id: request.binding.page_id(),
+            target: request.target,
+        },
+        &other_scope,
+    )?;
+    assert!(!permit.permits(&wrong_config, FAILURE));
+    assert_eq!(
+        LegacyFailurePermit::bind(&config, &wrong_config)
+            .err()
+            .expect("wrong configuration must be rejected")
+            .to_string(),
+        "durable configuration binding mismatch"
+    );
     Ok(())
 }

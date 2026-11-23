@@ -79,7 +79,7 @@ async fn retained_capture_manifest_recovers_before_any_second_get_after_database
         let outcome=page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?;
         assert!(matches!(outcome,PageOutcome::Completed {..}));
         assert_eq!(page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?,outcome);
-        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,1);
+        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?,1);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_receipts").fetch_one(pool).await?,1);
         assert_eq!(fixture.finish().await?.len(),1);
         Ok(())

@@ -41,7 +41,7 @@ fn load_sync(root: &Path, reservation: &PageReservation) -> Result<Option<Captur
     let manifest: Manifest = serde_json::from_slice(&bytes)?;
     ensure!(
         manifest.attempt_id == reservation.attempt_id
-            && manifest.operation_id == reservation.request.binding.operation_id,
+            && manifest.operation_id == reservation.request.binding.operation_id(),
         "retained capture manifest belongs to another attempt"
     );
     Ok(Some(manifest.capture))
@@ -69,7 +69,7 @@ pub(super) async fn save(
     let reservation = reservation.clone();
     let manifest = Manifest {
         attempt_id: reservation.attempt_id.clone(),
-        operation_id: reservation.request.binding.operation_id.clone(),
+        operation_id: reservation.request.binding.operation_id().to_owned(),
         capture: capture.clone(),
     };
     files

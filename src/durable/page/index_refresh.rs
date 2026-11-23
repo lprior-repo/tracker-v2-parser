@@ -15,12 +15,12 @@ impl IndexRefreshPermit {
             && config.enabled_sources().contains(&request.target.source)
             && eligible(&request.target))
         .then(|| Self {
-            config_sha256: request.binding.scope.config_sha256.clone(),
+            config_sha256: request.binding.scope().config_sha256.clone(),
         }))
     }
 
     pub fn permits(&self, request: &PageRequest) -> bool {
-        self.config_sha256 == request.binding.scope.config_sha256 && eligible(&request.target)
+        self.config_sha256 == request.binding.scope().config_sha256 && eligible(&request.target)
     }
 }
 

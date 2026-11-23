@@ -46,7 +46,15 @@ pub(super) async fn prepare(runtime: &Runtime, identity: &str) -> Result<Seeded>
     let deadline_ms = now
         .checked_add(3_600_000)
         .context("extended deadline overflow")?;
-    let mut request = request(generation, config, deadline_ms);
+    let request = CrawlRequest::new(
+        generation,
+        config,
+        deadline_ms,
+        15_000,
+        1,
+        CrawlPhase::Complete,
+        Vec::new(),
+    )?;
     let (old_operation, old_attempt_id) = defer_old_operation(
         runtime,
         &database,
@@ -58,13 +66,13 @@ pub(super) async fn prepare(runtime: &Runtime, identity: &str) -> Result<Seeded>
     )
     .await?;
     wait_until_after(previous_deadline_ms).await?;
-    request.deadline_extension = Some(DeadlineExtensionAuthorization {
+    let request = request.with_deadline_extension(DeadlineExtensionAuthorization {
         previous_deadline_ms: previous_deadline_ms
             .checked_add(500)
             .context("intermediate deadline overflow")?,
-        effective_deadline_ms: request.deadline_ms,
+        effective_deadline_ms: deadline_ms,
         earlier_deadlines_ms: vec![previous_deadline_ms],
-    });
+    })?;
     request.validate(chrono::Utc::now().timestamp_millis())?;
     Ok(Seeded {
         page_id,
@@ -87,21 +95,6 @@ fn target() -> Target {
             ..Default::default()
         },
     )
-}
-
-const fn request(generation: String, config: Config, deadline_ms: i64) -> CrawlRequest {
-    CrawlRequest {
-        generation,
-        config,
-        deadline_ms,
-        cooldown_ms: 15_000,
-        batch: 0,
-        max_batches: 1,
-        phase: CrawlPhase::Complete,
-        inherited_retry_campaigns: Vec::new(),
-        scheduler_version: None,
-        deadline_extension: None,
-    }
 }
 
 async fn load_page(runtime: &Runtime, target: &Target) -> Result<(i64, Value)> {
@@ -133,11 +126,11 @@ async fn defer_old_operation(
         &old_scope,
     )?;
     let initial =
-        page::reserve_configured(database, &request.config, &original_request, now_ms).await?;
+        page::reserve_configured(database, request.config(), &original_request, now_ms).await?;
     let ReservationDecision::Reserved { reservation } = initial else {
         anyhow::bail!("initial deadline extension fixture reservation absent")
     };
-    let policy = RetryPolicy::configured(&request.config, &original_request)?;
+    let policy = RetryPolicy::configured(request.config(), &original_request)?;
     let PageOutcome::Deferred { retry_at_ms, .. } = database
         .durable_fail_with_policy(
             &reservation,
@@ -161,7 +154,7 @@ async fn defer_old_operation(
     let old_operation: Value = sqlx::query_scalar(
         "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
     )
-    .bind(&original_request.binding.operation_id)
+    .bind(original_request.binding.operation_id())
     .fetch_one(&runtime.pool)
     .await?;
     Ok((old_operation, reservation.attempt_id))

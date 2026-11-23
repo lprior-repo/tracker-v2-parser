@@ -35,12 +35,12 @@ async fn expected(database: &Database, request: &CrawlRequest, now: i64) -> Resu
         sqlx::query_as::<_, (i64, Value)>(include_str!("../src/database/profile_coverage.sql"))
             .bind(Some("milesplit"))
             .bind(3_i32)
-            .bind(&request.config.states)
-            .bind(&request.config.graduation_years)
+            .bind(&request.config().states)
+            .bind(&request.config().graduation_years)
             .bind(false)
             .bind(LOWER_48.as_slice())
             .bind(matches!(
-                request.config.acquisition,
+                request.config().acquisition,
                 track_scrapper_v2::acquisition::AcquisitionPolicy::Complete
                     | track_scrapper_v2::acquisition::AcquisitionPolicy::PublicResults {
                         collect_contacts: true,
@@ -65,7 +65,7 @@ async fn measured(
     let scope = request.page_scope()?;
     let start = Instant::now();
     let selected = database
-        .next_durable_page(&request.config, &scope, now)
+        .next_durable_page(request.config(), &scope, now)
         .await?
         .map(|job| job.id);
     Ok((selected, start.elapsed().as_secs_f64() * 1000.0))
@@ -94,7 +94,7 @@ async fn benchmark(
     arguments: &Arguments,
 ) -> Result<Value> {
     let now = request
-        .deadline_ms
+        .deadline_ms()
         .checked_sub(60000)
         .context("benchmark timestamp overflow")?;
     let start = Instant::now();
@@ -169,6 +169,23 @@ async fn changed(
         .await
 }
 
+fn read_request(arguments: &Arguments) -> Result<CrawlRequest> {
+    let request: CrawlRequest = serde_json::from_slice(&std::fs::read(&arguments.request)?)?;
+    match &arguments.state {
+        Some(state) => {
+            ensure!(
+                LOWER_48.contains(&state.as_str()),
+                "qualification state must be in LOWER_48"
+            );
+            Ok(request.map_config(|mut config| {
+                config.states = vec![state.clone()];
+                config
+            }))
+        }
+        None => Ok(request),
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let arguments = Arguments::parse();
@@ -222,14 +239,7 @@ async fn main() -> Result<()> {
             "qualification requires the isolated trial_restore database on port55434"
         );
     }
-    let mut request: CrawlRequest = serde_json::from_slice(&std::fs::read(&arguments.request)?)?;
-    if let Some(state) = &arguments.state {
-        ensure!(
-            LOWER_48.contains(&state.as_str()),
-            "qualification state must be in LOWER_48"
-        );
-        request.config.states = vec![state.clone()];
-    }
+    let request = read_request(&arguments)?;
     let database = if arguments.production_read_only {
         Database::connect_for_export(&database_url).await?
     } else {

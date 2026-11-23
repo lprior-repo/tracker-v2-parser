@@ -285,15 +285,15 @@ async fn given_exhausted_transient_checkpoint_when_durable_scope_starts_then_ori
             let replay=page_support::reserve(&database,&request,now+1).await?;
             assert_eq!(serde_json::to_value(&replay)?,serde_json::to_value(&first)?);
             let original:i32=sqlx::query_scalar("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1")
-                .bind(&request.binding.operation_id).fetch_one(&test.pool).await?;
+                .bind(request.binding.operation_id()).fetch_one(&test.pool).await?;
             assert_eq!(original,3);
             let state: (String, i32, Option<String>) = sqlx::query_as(
                 "SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1",
             )
-            .bind(request.binding.page_id).fetch_one(&test.pool).await?;
+            .bind(request.binding.page_id()).fetch_one(&test.pool).await?;
             assert_eq!(state,("pending".to_owned(),4,Some("network failure".to_owned())));
             assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts WHERE operation_id=$1")
-                .bind(&request.binding.operation_id).fetch_one(&test.pool).await?,1);
+                .bind(request.binding.operation_id()).fetch_one(&test.pool).await?,1);
             assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(&test.pool).await?,0);
             database.close().await;
             Ok(())

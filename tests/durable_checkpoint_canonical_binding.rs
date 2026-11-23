@@ -38,7 +38,7 @@ async fn given_a_committed_implicit_get_capture_when_explicit_get_replays_then_t
             else {
                 bail!("initial fixture replay did not complete: {before:?}");
             };
-            assert_eq!(*page_id, request.binding.page_id);
+            assert_eq!(*page_id, request.binding.page_id());
             let receipts = receipts(&database).await?;
             let [(stored_digest, _)] = receipts.as_slice() else {
                 bail!("expected one committed receipt, got {receipts:?}");
@@ -143,7 +143,7 @@ async fn given_a_contact_checkpoint_when_discovery_context_changes_then_the_reta
             let rows: Vec<(i64, Value)> = sqlx::query_as("SELECT id,cursor FROM scrape_pages")
                 .fetch_all(&test.pool)
                 .await?;
-            assert_eq!(rows, [(actual.binding.page_id, to_value(&contact)?)]);
+            assert_eq!(rows, [(actual.binding.page_id(), to_value(&contact)?)]);
             assert_eq!(to_value(actual.target)?, to_value(contact)?);
             Ok(())
         })
@@ -170,7 +170,7 @@ async fn given_a_retained_safe_checkpoint_when_incoming_transport_metadata_is_in
             let rows: Vec<(i64, Value)> = sqlx::query_as("SELECT id,cursor FROM scrape_pages")
                 .fetch_all(&test.pool)
                 .await?;
-            assert_eq!(rows, [(retained.binding.page_id, to_value(target)?)]);
+            assert_eq!(rows, [(retained.binding.page_id(), to_value(target)?)]);
             Ok(())
         })
     })
@@ -194,7 +194,7 @@ async fn given_distinct_method_body_or_context_when_bound_then_each_request_keep
             let mut ids = BTreeSet::new();
             for target in [get, post, post_body, distinct_context] {
                 let request = page::bind_target(&database, target.clone(), &scope).await?;
-                assert!(ids.insert(request.binding.page_id));
+                assert!(ids.insert(request.binding.page_id()));
                 assert_eq!(to_value(request.target)?, to_value(target)?);
             }
             let actual: Vec<i64> = sqlx::query_scalar("SELECT id FROM scrape_pages ORDER BY id")

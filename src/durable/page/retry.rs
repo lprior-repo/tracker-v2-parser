@@ -21,14 +21,14 @@ impl RetryPolicy {
     pub fn configured(config: &Config, request: &PageRequest) -> Result<Self> {
         crate::durable::retry_lineage::validate_config(
             config,
-            &request.binding.scope.inherited_retry_campaigns,
+            &request.binding.scope().inherited_retry_campaigns,
         )?;
         let mut canonical = config.clone();
         canonical.validate()?;
         let digest = crate::durable::model::page_config_digest(config)?;
         ensure!(
             crate::durable::model::page_config_digest(&canonical)? == digest
-                && digest == request.binding.scope.config_sha256,
+                && digest == request.binding.scope().config_sha256,
             "durable configuration binding mismatch"
         );
         Ok(Self {
@@ -41,7 +41,7 @@ impl RetryPolicy {
         ensure!(
             self.config_sha256
                 .as_ref()
-                .is_none_or(|digest| digest == &request.binding.scope.config_sha256),
+                .is_none_or(|digest| digest == &request.binding.scope().config_sha256),
             "durable retry policy binding mismatch"
         );
         Ok(())

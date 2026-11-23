@@ -65,17 +65,17 @@ async fn old_reservation(database: &Database, now: i64) -> Result<PageReservatio
         total_attempts: 45,
     };
     sqlx::query("UPDATE durable_page_attempts SET attempt_id=$2,cycle=15,ordinal=3,total_attempts=45 WHERE attempt_id=$1").bind(&reservation.attempt_id).bind(&old.attempt_id).execute(database.pool()).await?;
-    sqlx::query("INSERT INTO durable_page_attempts(attempt_id,operation_id,cycle,ordinal,total_attempts,state,outcome) SELECT repeat(md5($1||':'||n::text),2),$1,((n-1)/3)+1,((n-1)%3)+1,n,'failed',jsonb_build_object('state','deferred','retry_at_ms',$2::bigint,'cycle',((n-1)/3)+1) FROM generate_series(1,44) n").bind(&request.binding.operation_id).bind(now).execute(database.pool()).await?;
+    sqlx::query("INSERT INTO durable_page_attempts(attempt_id,operation_id,cycle,ordinal,total_attempts,state,outcome) SELECT repeat(md5($1||':'||n::text),2),$1,((n-1)/3)+1,((n-1)%3)+1,n,'failed',jsonb_build_object('state','deferred','retry_at_ms',$2::bigint,'cycle',((n-1)/3)+1) FROM generate_series(1,44) n").bind(request.binding.operation_id()).bind(now).execute(database.pool()).await?;
     sqlx::query(
         "UPDATE durable_page_operations SET cycle=15,cycle_attempts=3 WHERE operation_id=$1",
     )
-    .bind(&request.binding.operation_id)
+    .bind(request.binding.operation_id())
     .execute(database.pool())
     .await?;
     sqlx::query(
         "UPDATE scrape_pages SET attempts=45,last_error='original DNS failure' WHERE id=$1",
     )
-    .bind(request.binding.page_id)
+    .bind(request.binding.page_id())
     .execute(database.pool())
     .await?;
     Ok(old)

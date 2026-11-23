@@ -44,8 +44,8 @@ async fn simultaneous_first_identity_discovery_keeps_both_pages_and_receipt_repl
             let first = prepare(&database, &scope, "101", "first-result", "11.11").await?;
             let second = prepare(&database, &scope, "102", "second-result", "11.12").await?;
             assert_ne!(
-                first.reservation.request.binding.page_id,
-                second.reservation.request.binding.page_id
+                first.reservation.request.binding.page_id(),
+                second.reservation.request.binding.page_id()
             );
             assert_ne!(first.reservation.attempt_id, second.reservation.attempt_id);
             sqlx::raw_sql(

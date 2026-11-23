@@ -149,7 +149,7 @@ impl AthleticOperations {
     async fn wiaa_page(&self, request: &PageRequest) -> Result<ParsedPage> {
         let parsed: serde_json::Value =
             sqlx::query_scalar("SELECT parsed FROM durable_page_receipts WHERE operation_id=$1")
-                .bind(&request.binding.operation_id)
+                .bind(request.binding.operation_id())
                 .fetch_one(self.runtime.database.pool())
                 .await?;
         let reference: page::ParsedRef = serde_json::from_value(parsed)?;

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use super::blocking::BlockingStages;
 use crate::model::Target;
 
-pub use binding::{request, validate_request};
+pub use binding::{PageBinding, request, validate_request};
 pub use execution::{fetch, parse, persist};
 pub use failures::classify;
 pub(crate) use index_refresh::IndexRefreshPermit;
@@ -66,15 +66,6 @@ pub struct PageScope {
     pub inherited_retry_campaigns: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PageBinding {
-    pub operation_id: String,
-    pub page_id: i64,
-    pub target_sha256: String,
-    pub scope: PageScope,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageRequest {
@@ -94,12 +85,11 @@ pub struct PageDeadlineExtension {
 
 impl PageRequest {
     #[must_use]
-    pub fn effective_deadline_ms(&self) -> i64 {
-        self.deadline_extension
-            .as_ref()
-            .map_or(self.binding.scope.deadline_ms, |extension| {
-                extension.effective_deadline_ms
-            })
+    pub const fn effective_deadline_ms(&self) -> i64 {
+        match &self.deadline_extension {
+            Some(extension) => extension.effective_deadline_ms,
+            None => self.binding.scope().deadline_ms,
+        }
     }
 }
 

@@ -228,7 +228,7 @@ impl Database {
             super::reservation::attempts_used(&mut transaction, &reservation.request).await?;
         let outcome = failure_outcome(reservation, class, detail, now_ms, policy, attempts)?;
         let job = Job {
-            id: reservation.request.binding.page_id,
+            id: reservation.request.binding.page_id(),
             target: reservation.request.target.clone(),
         };
         super::super::queue::fail_locked(
@@ -249,7 +249,7 @@ impl Database {
         .execute(&mut *transaction)
         .await?;
         sqlx::query("UPDATE durable_page_operations SET state=$2,retry_at_ms=$3,outcome=$4 WHERE operation_id=$1")
-            .bind(&reservation.request.binding.operation_id).bind(state).bind(due).bind(serde_json::to_value(&outcome)?).execute(&mut *transaction).await?;
+            .bind(reservation.request.binding.operation_id()).bind(state).bind(due).bind(serde_json::to_value(&outcome)?).execute(&mut *transaction).await?;
         super::super::finish(transaction, Ok(outcome)).await
     }
 }

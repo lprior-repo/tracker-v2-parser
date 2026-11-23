@@ -52,7 +52,7 @@ async fn reviewed_wiaa_repair_requires_new_bound_scope_preserves_settled_history
             let saved = sqlx::query_scalar::<_, Value>(
                 "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&original.binding.operation_id)
+            .bind(original.binding.operation_id())
             .fetch_one(pool)
             .await?;
             let reviewed = config(true)?;
@@ -112,7 +112,7 @@ async fn reviewed_wiaa_repair_requires_new_bound_scope_preserves_settled_history
                 sqlx::query_scalar::<_, i32>(
                     "SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1"
                 )
-                .bind(&next.binding.operation_id)
+                .bind(next.binding.operation_id())
                 .fetch_one(pool)
                 .await?,
                 3
@@ -121,7 +121,7 @@ async fn reviewed_wiaa_repair_requires_new_bound_scope_preserves_settled_history
                 sqlx::query_scalar::<_, Value>(
                     "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1"
                 )
-                .bind(&original.binding.operation_id)
+                .bind(original.binding.operation_id())
                 .fetch_one(pool)
                 .await?,
                 saved
@@ -269,7 +269,7 @@ async fn reviewed_wiaa_repair_never_bypasses_blocked_or_unrelated_legacy_failure
                     let page = sqlx::query_scalar::<_, Value>(
                         "SELECT to_jsonb(p) FROM scrape_pages p WHERE id=$1",
                     )
-                    .bind(request.binding.page_id)
+                    .bind(request.binding.page_id())
                     .fetch_one(pool)
                     .await?;
                     assert_eq!(page["attempts"], 3);

@@ -73,7 +73,7 @@ pub struct Prepared {
 
 impl Prepared {
     pub fn page_id(&self) -> i64 {
-        self.reservation.request.binding.page_id
+        self.reservation.request.binding.page_id()
     }
 
     pub fn has_navigation_to(&self, other: &Self) -> Result<bool> {

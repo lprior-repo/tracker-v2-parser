@@ -21,7 +21,7 @@ impl LegacyFailurePermit {
         let digest = crate::durable::model::page_config_digest(config)?;
         ensure!(
             crate::durable::model::page_config_digest(&canonical)? == digest
-                && digest == request.binding.scope.config_sha256,
+                && digest == request.binding.scope().config_sha256,
             "durable configuration binding mismatch"
         );
         Ok(matches!(&config.acquisition, AcquisitionPolicy::PublicResults { reviewed_legacy_failures, collect_contacts: true, .. }
@@ -31,7 +31,7 @@ impl LegacyFailurePermit {
 
     pub(crate) fn permits(&self, request: &PageRequest, detail: &str) -> bool {
         let lower = detail.to_ascii_lowercase();
-        self.config_sha256 == request.binding.scope.config_sha256
+        self.config_sha256 == request.binding.scope().config_sha256
             && request.target.kind == PageKind::Contacts
             && crate::sources::wiaa::is_public_directory_url(&request.target.url)
             && detail.starts_with("scanning source script boundaries: cannot safely classify computed script assignments")

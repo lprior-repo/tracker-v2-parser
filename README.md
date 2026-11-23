@@ -473,6 +473,10 @@ successful page/null journal payloads replay unchanged. Deadline stops drain
 admitted children and retain processing rather than claiming an empty queue.
 The workflow exports its verified snapshot and schedules a continuation while
 its original deadline and batch count permit.
+A durable crawl request rejects invalid generation IDs, batch bounds, cooldowns,
+and absolute deadlines when it is decoded, before any work is scheduled.
+Serialized page bindings reject a scope or digest that does not match their
+operation ID. Valid requests keep their existing JSON and identity digests.
 
 An explicitly authorized deadline extension uses a separately persisted crawl
 request with `deadline_extension.previous_deadline_ms` and
@@ -822,8 +826,9 @@ file preparation. Retained capture publication waits for a slot so saturation
 does not discard a live response. Other stages can return a typed transient
 error on saturation, and closed intake rejects new work. Restate retries
 transient errors with backoff. Cancelling an awaiter does not free its slot;
-worker shutdown drains admitted work. Shutdown also reports task failures the
-caller never received, plus panics and cancelled blocking tasks.
+worker shutdown drains admitted work. Shutdown distinguishes unreceived file
+failures from task panics and cancellations, and reports any tasks still owned
+when the 90-second drain budget expires. Running blocking work cannot be cancelled.
 Runtime timeouts, temporary database capacity failures and disk-full errors also
 retry. Invalid inputs, artifact mismatches and source access stops remain
 terminal. Configured crawl deadlines and finite retry budgets still apply;

@@ -63,7 +63,7 @@ pub(super) async fn legacy(
     detail: &str,
     status: &str,
 ) -> Result<()> {
-    sqlx::query("UPDATE scrape_pages SET status=$2,attempts=3,last_error=$3,notes=ARRAY['original evidence'] WHERE id=$1").bind(request.binding.page_id).bind(status).bind(detail).execute(database.pool()).await?;
+    sqlx::query("UPDATE scrape_pages SET status=$2,attempts=3,last_error=$3,notes=ARRAY['original evidence'] WHERE id=$1").bind(request.binding.page_id()).bind(status).bind(detail).execute(database.pool()).await?;
     Ok(())
 }
 

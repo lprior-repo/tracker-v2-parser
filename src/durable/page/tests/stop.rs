@@ -48,7 +48,7 @@ async fn known_denial_survives_wire_and_page_database_recording_failures_without
         let replayed = page::fetch(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut restarted, now).await?;
         restarted.close().await?;
         assert!(matches!(replayed, FetchDecision::Settled { outcome: PageOutcome::Blocked { .. } }));
-        let saved: (String, i32, serde_json::Value) = sqlx::query_as("SELECT status,attempts,cursor FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?;
+        let saved: (String, i32, serde_json::Value) = sqlx::query_as("SELECT status,attempts,cursor FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?;
         assert_eq!(saved.0, "blocked");
         assert_eq!(saved.1, 1);
         assert_eq!(saved.2["access_stop_url"], "https://oh.milesplit.com");

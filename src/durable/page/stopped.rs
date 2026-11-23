@@ -46,7 +46,7 @@ fn load_sync(root: &Path, reservation: &PageReservation) -> Result<Option<Stop>>
     let stop: Stop = serde_json::from_slice(&bytes)?;
     ensure!(
         stop.attempt_id == reservation.attempt_id
-            && stop.operation_id == reservation.request.binding.operation_id,
+            && stop.operation_id == reservation.request.binding.operation_id(),
         "retained access stop belongs to another attempt"
     );
     ensure!(
@@ -100,7 +100,7 @@ pub(super) async fn save(
     );
     let stop = Stop {
         attempt_id: reservation.attempt_id.clone(),
-        operation_id: reservation.request.binding.operation_id.clone(),
+        operation_id: reservation.request.binding.operation_id().to_owned(),
         origin: origin(address)?,
         status: failure.capture().map(|capture| capture.status),
         observed_at_ms,

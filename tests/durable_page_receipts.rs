@@ -173,29 +173,28 @@ async fn rejected_persistence_rolls_back_domain_changes_and_receipt_together() -
             )
             .await?;
             let (mut reservation, capture, parsed) = saved(&database, &scope).await?;
-            reservation.request.binding.target_sha256 = "f".repeat(64);
-            let before = page_support::snapshots(&database).await?;
-            assert!(
-                page::persist(
-                    &database,
-                    track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),
-                    &reservation,
-                    &capture,
-                    &parsed
-                )
-                .await
-                .is_err()
-            );
-            assert_eq!(page_support::snapshots(&database).await?, before);
             let mut changed = page_support::profile();
             changed.context.state = Some("WI".into());
             let reused = page::request(
                 track_scrapper_v2::database::Job {
-                    id: reservation.request.binding.page_id,
+                    id: reservation.request.binding.page_id(),
                     target: changed,
                 },
                 &scope,
             )?;
+            reservation.request.target.clone_from(&reused.target);
+            let before = page_support::snapshots(&database).await?;
+            let error = page::persist(
+                &database,
+                track_scrapper_v2::durable::page::PageFiles::new(&root, &blocking),
+                &reservation,
+                &capture,
+                &parsed,
+            )
+            .await
+            .expect_err("target no longer matches the immutable binding");
+            assert_eq!(error.to_string(), "durable page request binding mismatch");
+            assert_eq!(page_support::snapshots(&database).await?, before);
             assert!(
                 page::reserve(&database, &reused, chrono::Utc::now().timestamp_millis())
                     .await

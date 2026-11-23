@@ -41,7 +41,7 @@ async fn succeeded_wiaa_indexes_refresh_in_a_new_future_cohort_operation_and_rep
             let target=target(letter);
             assert!(matches!(page::offline_replay(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&old_scope,target.clone(),capture(&target,body(letter))).await?,PageOutcome::Completed {..}));
             let previous=page::bind_target(&database,target.clone(),&old_scope).await?;
-            let old_record=operation(&database,&previous.binding.operation_id).await?;
+            let old_record=operation(&database,previous.binding.operation_id()).await?;
             let request=page::bind_target(&database,target,&future_scope).await?;
             assert!(IndexRefreshPermit::bind(&future,&request)?.is_some());
             let before=snapshot(&database).await?;
@@ -64,9 +64,9 @@ async fn succeeded_wiaa_indexes_refresh_in_a_new_future_cohort_operation_and_rep
             assert!(matches!(page::fetch_configured(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&mut transport,now,&future).await?,FetchDecision::Settled {outcome:PageOutcome::Completed {..}}));
             assert_eq!(page::persist(&database,crate::durable::page::PageFiles::new(root.path(), &blocking),&reservation,&capture,&parsed).await?,outcome);
             assert_eq!(snapshot(&database).await?,before);
-            assert_eq!(operation(&database,&previous.binding.operation_id).await?,old_record);
-            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1").bind(&request.binding.operation_id).fetch_one(pool).await?,1);
-            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,2);
+            assert_eq!(operation(&database,previous.binding.operation_id()).await?,old_record);
+            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1").bind(request.binding.operation_id()).fetch_one(pool).await?,1);
+            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?,2);
             assert_eq!(sqlx::query_as::<_,(String,i32)>("SELECT method,status FROM durable_wire_requests WHERE attempt_id=$1").bind(&reservation.attempt_id).fetch_one(pool).await?,(if letter {"POST"} else {"GET"}.into(),200));
             transport.close().await?;
             let requests=fixture.finish().await?;

@@ -5,20 +5,17 @@ use crate::config::Config;
 use crate::durable::operations::OperationSpec;
 
 fn request(phase: CrawlPhase, focused: bool, contacts: bool) -> Result<CrawlRequest> {
-    Ok(CrawlRequest {
-        inherited_retry_campaigns: Vec::new(),
-        scheduler_version: None,
-        deadline_extension: None,
-        generation: "fair-phase-progression".into(),
-        config: Config::parse(&format!(
+    CrawlRequest::new(
+        "fair-phase-progression".into(),
+        Config::parse(&format!(
             "states=['WI']\n[acquisition]\nmode='public_results'\nprofile_coverage_only={focused}\ncollect_contacts={contacts}\n[sources.athleticnet]\nenabled=false\n"
         ))?,
-        deadline_ms: 120_000,
-        cooldown_ms: 15_000,
-        batch: 0,
-        max_batches: 100,
+        120_000,
+        15_000,
+        100,
         phase,
-    })
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -42,7 +39,7 @@ fn focused_school_sweep_advances_with_saved_deferrals_without_claiming_completio
         CrawlPhase::PublicResults
     );
     let results = first.next(CrawlPhase::PublicResults)?;
-    assert!(!results.config.acquisition.profile_coverage_only());
+    assert!(!results.config().acquisition.profile_coverage_only());
     assert_eq!(
         next_phase(&results, &idle, Some(60_000)),
         CrawlPhase::PublicResults
@@ -81,40 +78,54 @@ fn broad_school_runs_still_wait_for_deferrals_and_contact_refresh_advances_norma
 
 #[test]
 fn wiaa_contact_refresh_propagates_resolved_bounds_only_for_new_configured_runs() -> Result<()> {
-    let mut legacy = request(CrawlPhase::ContactRefresh, true, true)?;
+    let legacy = request(CrawlPhase::ContactRefresh, true, true)?;
     let original = super::wiaa_spec(&legacy);
     assert!(matches!(original, OperationSpec::WiaaDirectory { .. }));
     let encoded = serde_json::to_string(&original)?;
     let decoded: OperationSpec = serde_json::from_str(&encoded)?;
     assert_eq!(serde_json::to_string(&decoded)?, encoded);
-    legacy.config.run = Some(crate::config::RunSettings {
+    let mut configured = legacy.config().clone();
+    configured.run = Some(crate::config::RunSettings {
         hours: 1,
         max_batches: 10,
         cooldown_seconds: 120,
     });
-    legacy.deadline_ms = 3_601_000;
-    legacy.cooldown_ms = 120_000;
+    let bounded = CrawlRequest::new(
+        legacy.generation().to_owned(),
+        configured,
+        3_601_000,
+        120_000,
+        legacy.max_batches(),
+        legacy.phase(),
+        Vec::new(),
+    )?;
     let OperationSpec::WiaaDirectoryRun {
         config,
         deadline_ms,
         cooldown_ms,
-    } = super::wiaa_spec(&legacy)
+    } = super::wiaa_spec(&bounded)
     else {
         anyhow::bail!("bounded WIAA operation missing")
     };
     assert_eq!((deadline_ms, cooldown_ms), (3_601_000, 120_000));
-    assert_eq!(config.run, legacy.config.run);
+    assert_eq!(config.run, bounded.config().run);
     Ok(())
 }
 
 #[test]
 fn given_inherited_exhaustion_and_empty_selection_when_phases_advance_then_completion_is_reachable()
 -> Result<()> {
-    let mut first = request(CrawlPhase::SchoolChains, false, true)?;
-    first.config = Config::parse(
-        "states=['IA']\n[acquisition]\nmode='public_results'\ncollect_contacts=true",
+    let first = CrawlRequest::new(
+        "fair-phase-progression".into(),
+        Config::parse(
+            "states=['IA']\n[acquisition]\nmode='public_results'\ncollect_contacts=true",
+        )?,
+        120_000,
+        15_000,
+        100,
+        CrawlPhase::SchoolChains,
+        vec!["old-mixed".into()],
     )?;
-    first.inherited_retry_campaigns = vec!["old-mixed".into()];
     let empty = BatchProgress {
         exhausted: 1,
         queue: QueueState::NoEligiblePage,
@@ -124,8 +135,8 @@ fn given_inherited_exhaustion_and_empty_selection_when_phases_advance_then_compl
     assert_eq!(next, CrawlPhase::PublicResults);
     let results = first.next(next)?;
     assert_eq!(
-        results.inherited_retry_campaigns,
-        first.inherited_retry_campaigns
+        results.inherited_retry_campaigns(),
+        first.inherited_retry_campaigns()
     );
     assert_eq!(next_phase(&results, &empty, None), CrawlPhase::Complete);
     Ok(())

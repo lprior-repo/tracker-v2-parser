@@ -32,17 +32,17 @@ async fn wiaa_index_refresh_denies_unrelated_succeeded_pages_and_unreviewed_fail
         let mut wrong_kind=target(false);wrong_kind.kind=PageKind::Team;wrong_kind.url="https://wi.milesplit.com/teams/123-school".into();targets.push(wrong_kind);
         for target in targets {
             let request=page::bind_target(&database,target,&scope).await?;
-            sqlx::query("UPDATE scrape_pages SET status='succeeded',attempts=3 WHERE id=$1").bind(request.binding.page_id).execute(pool).await?;
+            sqlx::query("UPDATE scrape_pages SET status='succeeded',attempts=3 WHERE id=$1").bind(request.binding.page_id()).execute(pool).await?;
             assert!(IndexRefreshPermit::bind(&config,&request)?.is_none());
             let before=snapshot(&database).await?;
             assert!(page::reserve_configured(&database,&config,&request,now).await.is_err());
             assert_eq!(snapshot(&database).await?,before);
         }
         let request=page::bind_target(&database,target(true),&scope).await?;
-        sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error='invalid required identity' WHERE id=$1").bind(request.binding.page_id).execute(pool).await?;
+        sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error='invalid required identity' WHERE id=$1").bind(request.binding.page_id()).execute(pool).await?;
         assert!(IndexRefreshPermit::bind(&config,&request)?.is_some());
         assert!(matches!(page::reserve_configured(&database,&config,&request,now).await?,ReservationDecision::Settled {outcome:PageOutcome::Rejected {..}}));
-        assert_eq!(sqlx::query_as::<_,(String,i32,String)>("SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,("failed".into(),3,"invalid required identity".into()));
+        assert_eq!(sqlx::query_as::<_,(String,i32,String)>("SELECT status,attempts,last_error FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?,("failed".into(),3,"invalid required identity".into()));
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_page_attempts").fetch_one(pool).await?,0);
         let fixture=WireFixture::start(FixtureKind::Page {status:200,body:"unused"}).await?;
         assert_eq!(fixture.finish().await?.len(),0);
@@ -78,11 +78,11 @@ async fn wiaa_index_refresh_requires_bound_wisconsin_contact_scope_and_preserves
         assert!(IndexRefreshPermit::bind(&wrong,&request).is_err());
         assert!(page::reserve_configured(&database,&wrong,&request,now).await.is_err());
         assert_eq!(snapshot(&database).await?,before);
-        sqlx::query("UPDATE scrape_pages SET status='blocked' WHERE id=$1").bind(request.binding.page_id).execute(pool).await?;
+        sqlx::query("UPDATE scrape_pages SET status='blocked' WHERE id=$1").bind(request.binding.page_id()).execute(pool).await?;
         let before=snapshot(&database).await?;
         assert!(page::reserve_configured(&database,&configured,&request,now).await.err().context("blocked error")?.to_string().contains("checkpoint is blocked"));
         assert_eq!(snapshot(&database).await?,before);
-        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE id=$1").bind(request.binding.page_id).execute(pool).await?;
+        sqlx::query("UPDATE scrape_pages SET status='succeeded' WHERE id=$1").bind(request.binding.page_id()).execute(pool).await?;
         assert!(matches!(page::reserve_configured(&database,&configured,&request,now).await?,ReservationDecision::Reserved {..}));
         let scope=super::support::scope(root.path(),&configured,"foreign-index",now)?;
         let other=page::bind_target(&database,target,&scope).await?;

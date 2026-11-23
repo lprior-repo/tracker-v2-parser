@@ -44,7 +44,7 @@ async fn configured_retry_total_budget_honors_one_two_three_attempts_and_idempot
                     now=retry_at_ms;
                 }
             }
-            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,i32::try_from(max)?);
+            assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?,i32::try_from(max)?);
         }
         Ok(())
     })).await

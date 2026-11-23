@@ -178,7 +178,7 @@ async fn verify_http_rejection(body: &'static str, blocked: bool) -> Result<()> 
             assert_eq!(outcome, &replayed);
             let saved: (String, i32) =
                 sqlx::query_as("SELECT status,attempts FROM scrape_pages WHERE id=$1")
-                    .bind(request.binding.page_id)
+                    .bind(request.binding.page_id())
                     .fetch_one(pool)
                     .await?;
             assert_eq!(

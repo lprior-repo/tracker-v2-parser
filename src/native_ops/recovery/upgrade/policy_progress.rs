@@ -44,7 +44,7 @@ async fn exercise(runtime: &mut Runtime, seeded: &seed::Seeded) -> Result<Value>
     let path = runtime
         .args
         .evidence
-        .join(format!("{}-request.json", seeded.request.generation));
+        .join(format!("{}-request.json", seeded.request.generation()));
     io::save(&path, &serde_json::to_value(&seeded.request)?)?;
     let path = path.to_str().context("policy request path not UTF8")?;
     let (submission, restart) = submit_for_replay(runtime, seeded, path).await?;
@@ -59,7 +59,7 @@ async fn exercise(runtime: &mut Runtime, seeded: &seed::Seeded) -> Result<Value>
         &runtime
             .args
             .evidence
-            .join(format!("{}-reports.json", seeded.request.generation)),
+            .join(format!("{}-reports.json", seeded.request.generation())),
         &json!({"root":id,"first":first,"second":second,"request":seeded.request}),
     )?;
     let before = super::evidence::journal(runtime, id).await?;
@@ -100,7 +100,7 @@ async fn submit_for_replay(
     seeded: &seed::Seeded,
     path: &str,
 ) -> Result<(Value, Value)> {
-    let barrier = if seeded.request.scheduler_version.is_some() {
+    let barrier = if seeded.request.scheduler_version().is_some() {
         let mut transaction = runtime.pool.begin().await?;
         sqlx::query("LOCK TABLE reviewed_result_links IN ACCESS EXCLUSIVE MODE")
             .execute(&mut *transaction)

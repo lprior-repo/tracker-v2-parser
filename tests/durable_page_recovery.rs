@@ -68,7 +68,7 @@ async fn transient_failures_exhaust_three_total_attempts_and_allow_the_next_scho
             assert!(matches!(page::reserve(&database, &request, now + scope.cooldown_ms).await?, ReservationDecision::Settled { outcome: PageOutcome::Exhausted { .. } }));
             assert_eq!(page_support::snapshots(&database).await?, before);
             let attempts: i32 = sqlx::query_scalar("SELECT attempts FROM scrape_pages WHERE id=$1")
-                .bind(request.binding.page_id)
+                .bind(request.binding.page_id())
                 .fetch_one(&test.pool)
                 .await?;
             assert_eq!(attempts, 3);
@@ -95,10 +95,10 @@ async fn legacy_dns_failure_enters_an_audited_cycle_without_resetting_original_a
         let target = page_support::target("201");
         let request = page_support::request(&database,&target,&scope).await?;
         sqlx::query("UPDATE scrape_pages SET attempts=3,status='failed',last_error='resolving source host: failed to lookup address information: nodename nor servname provided',notes=ARRAY['original evidence'] WHERE id=$1")
-            .bind(request.binding.page_id).execute(&test.pool).await?;
+            .bind(request.binding.page_id()).execute(&test.pool).await?;
         assert!(database.next_profile_coverage_job(None,3,&config.states,&config.graduation_years,false).await?.is_none());
         database.check_profile_coverage_exhausted(track_scrapper_v2::model::Source::MileSplit,3,&config.states,&config.graduation_years,false).await.expect_err("legacy barrier preserved");
-        assert_eq!(page::select(&database,&config,&scope,chrono::Utc::now().timestamp_millis()).await?.context("durable legacy recovery")?.binding.page_id,request.binding.page_id);
+        assert_eq!(page::select(&database,&config,&scope,chrono::Utc::now().timestamp_millis()).await?.context("durable legacy recovery")?.binding.page_id(),request.binding.page_id());
         let reserved = page_support::reserve(&database,&request,chrono::Utc::now().timestamp_millis()).await?;
         assert_eq!(reserved.total_attempts,4);
         assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations").fetch_one(&test.pool).await?,3);
@@ -117,10 +117,10 @@ async fn malformed_legacy_page_and_expired_cycle_do_not_starve_other_school_work
         let request = page_support::request(&database,&page_support::target("301"),&scope).await?;
         database.enqueue(&[page_support::target("302")],false).await?;
         sqlx::query("UPDATE scrape_pages SET attempts=3,status='failed',last_error='invalid required athlete identity',notes=ARRAY['original'] WHERE id=$1")
-            .bind(request.binding.page_id).execute(&test.pool).await?;
-        let original: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p WHERE id=$1").bind(request.binding.page_id).fetch_one(&test.pool).await?;
+            .bind(request.binding.page_id()).execute(&test.pool).await?;
+        let original: serde_json::Value = sqlx::query_scalar("SELECT to_jsonb(p) FROM scrape_pages p WHERE id=$1").bind(request.binding.page_id()).fetch_one(&test.pool).await?;
         assert!(matches!(page::reserve(&database,&request,chrono::Utc::now().timestamp_millis()).await?,ReservationDecision::Settled {outcome:PageOutcome::Rejected {..}}));
-        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(p) FROM scrape_pages p WHERE id=$1").bind(request.binding.page_id).fetch_one(&test.pool).await?,original);
+        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(p) FROM scrape_pages p WHERE id=$1").bind(request.binding.page_id()).fetch_one(&test.pool).await?,original);
         let next=page::select(&database,&config,&scope,chrono::Utc::now().timestamp_millis()).await?.context("other school")?;
         let reservation=page_support::reserve(&database,&next,chrono::Utc::now().timestamp_millis()).await?;
         let outcome=database.durable_fail(&reservation,FailureRecord {class:FailureClass::Transient,detail:"connection timed out",capture:None,stopped_origin:None,observed_at_ms:scope.deadline_ms}).await?;
@@ -153,7 +153,7 @@ async fn another_generation_cannot_hijack_an_unfinished_page_even_after_the_old_
                 .context("next deadline")?;
             let next = page::request(
                 track_scrapper_v2::database::Job {
-                    id: original.binding.page_id,
+                    id: original.binding.page_id(),
                     target: original.target.clone(),
                 },
                 &next_scope,

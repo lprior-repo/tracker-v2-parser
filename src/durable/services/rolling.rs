@@ -162,14 +162,15 @@ impl AthleticCrawl {
             scope: &scope,
         };
         let attach = |handle: InvocationHandle| handle.attach::<Json<PageOutcome>>();
-        let window = stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
-            .try_fold(RollingWindow::default(), |window, _| async move {
-                self.refill(ctx, selection, window, &attach)
-                    .await
-                    .settle()
-                    .await
-            })
-            .await?;
+        let window =
+            stream::iter((0..request.config().limits.max_pages).map(Ok::<_, HandlerError>))
+                .try_fold(RollingWindow::default(), |window, _| async move {
+                    self.refill(ctx, selection, window, &attach)
+                        .await
+                        .settle()
+                        .await
+                })
+                .await?;
         window.finish()
     }
 
@@ -181,7 +182,7 @@ impl AthleticCrawl {
         mut window: RollingWindow<F>,
         attach: &(impl Fn(InvocationHandle) -> F + Sync),
     ) -> RollingWindow<F> {
-        let Some(width) = window.refill_width(&selection.request.config.limits) else {
+        let Some(width) = window.refill_width(&selection.request.config().limits) else {
             return window;
         };
         stream::iter(0..width)
@@ -214,7 +215,7 @@ impl AthleticCrawl {
                 &owned,
             )
             .await;
-        window.apply_dispatch(result, &selection.request.config.limits, attach)
+        window.apply_dispatch(result, &selection.request.config().limits, attach)
     }
 }
 

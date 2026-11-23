@@ -91,7 +91,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
             let original_row: serde_json::Value = sqlx::query_scalar(
                 "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&original.binding.operation_id)
+            .bind(original.binding.operation_id())
             .fetch_one(pool)
             .await?;
             let mut extended_scope = old_scope.clone();
@@ -177,7 +177,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
                     .deadline_extension
                     .as_ref()
                     .map(|value| value.owner_operation_id.as_str()),
-                Some(original.binding.operation_id.as_str())
+                Some(original.binding.operation_id())
             );
             assert_eq!(
                 continued.effective_deadline_ms(),
@@ -236,7 +236,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
             let retained_row: serde_json::Value = sqlx::query_scalar(
                 "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&original.binding.operation_id)
+            .bind(original.binding.operation_id())
             .fetch_one(pool)
             .await?;
             assert_eq!(retained_row["binding"], original_row["binding"]);
@@ -248,7 +248,7 @@ async fn authorized_deadline_extension_replays_immutable_owner_and_preserves_att
                 sqlx::query_scalar::<_, i64>(
                     "SELECT count(*) FROM durable_page_attempts WHERE operation_id=$1"
                 )
-                .bind(&original.binding.operation_id)
+                .bind(original.binding.operation_id())
                 .fetch_one(pool)
                 .await?,
                 3
@@ -310,7 +310,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let error = database
                 .durable_request_with_deadline_extension(
                     Job {
-                        id: original.binding.page_id,
+                        id: original.binding.page_id(),
                         target: target.clone(),
                     },
                     &changed,
@@ -327,7 +327,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let error = database
                 .durable_request_with_deadline_extension(
                     Job {
-                        id: original.binding.page_id,
+                        id: original.binding.page_id(),
                         target: target.clone(),
                     },
                     &wrong_cooldown,
@@ -348,7 +348,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let error = database
                 .durable_request_with_deadline_extension(
                     Job {
-                        id: original.binding.page_id,
+                        id: original.binding.page_id(),
                         target: target.clone(),
                     },
                     &wrong_lineage,
@@ -372,7 +372,7 @@ async fn deadline_extension_rejects_another_config_and_preserves_owner() -> Resu
             let error = database
                 .durable_request_with_deadline_extension(
                     Job {
-                        id: original.binding.page_id,
+                        id: original.binding.page_id(),
                         target: target.clone(),
                     },
                     &scope(&config, old_deadline)?,

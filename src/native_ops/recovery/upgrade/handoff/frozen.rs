@@ -97,21 +97,18 @@ async fn prepare(runtime: &Runtime, identity: &str) -> Result<(Vec<i64>, CrawlRe
     let path = cli::config(runtime, "IA", 3, 3, "historical-config.toml")?;
     Ok((
         pages,
-        CrawlRequest {
-            generation: format!("upgrade-{identity}"),
-            config: crate::config::Config::load(&path)?,
-            deadline_ms: chrono::Utc::now()
+        CrawlRequest::new(
+            format!("upgrade-{identity}"),
+            crate::config::Config::load(&path)?,
+            chrono::Utc::now()
                 .timestamp_millis()
                 .checked_add(3_600_000)
                 .context("upgrade deadline overflow")?,
-            cooldown_ms: 15_000,
-            batch: 0,
-            max_batches: 2,
-            phase: CrawlPhase::SchoolChains,
-            inherited_retry_campaigns: vec![format!("ancestor-{identity}")],
-            scheduler_version: None,
-            deadline_extension: None,
-        },
+            15_000,
+            2,
+            CrawlPhase::SchoolChains,
+            vec![format!("ancestor-{identity}")],
+        )?,
     ))
 }
 

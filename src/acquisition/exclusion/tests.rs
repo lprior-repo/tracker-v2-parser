@@ -40,7 +40,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                     &scope(&config, &format!("new-exclusion-{index}"), now)?,
                 )
                 .await?;
-                let before = checkpoint(&database, request.binding.page_id).await?;
+                let before = checkpoint(&database, request.binding.page_id()).await?;
                 assert!(matches!(
                     page::reserve_configured(&database, &config, &request, now).await?,
                     ReservationDecision::Settled {
@@ -48,7 +48,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                     }
                 ));
                 assert_eq!(
-                    checkpoint(&database, request.binding.page_id).await?,
+                    checkpoint(&database, request.binding.page_id()).await?,
                     before
                 );
                 let settled = snapshot(&database).await?;
@@ -70,7 +70,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                 else {
                     anyhow::bail!("prefetched reservation")
                 };
-                let before = checkpoint(&database, request.binding.page_id).await?;
+                let before = checkpoint(&database, request.binding.page_id()).await?;
                 let fixture = WireFixture::start(FixtureKind::Page {
                     status: 403,
                     body: "must remain unused",
@@ -92,7 +92,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                     }
                 ));
                 assert_eq!(
-                    checkpoint(&database, request.binding.page_id).await?,
+                    checkpoint(&database, request.binding.page_id()).await?,
                     before
                 );
                 use crate::database::durable::{SavedStages, StageEvidence};
@@ -124,7 +124,7 @@ async fn public_scope_excludes_generated_api_and_forbidden_token_before_attempt_
                 assert_eq!(fixture.finish().await?.len(), 0);
                 assert_eq!(
                     sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1")
-                        .bind(request.binding.page_id)
+                        .bind(request.binding.page_id())
                         .fetch_one(pool)
                         .await?,
                     1

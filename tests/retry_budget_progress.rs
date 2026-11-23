@@ -86,7 +86,7 @@ async fn exhausted_contact_stays_on_review_and_yields_to_independent_results_wit
             let before: serde_json::Value = sqlx::query_scalar(
                 "SELECT jsonb_build_object('operation',to_jsonb(d),'attempts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attempt_id) FROM durable_page_attempts a)) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&request.binding.operation_id)
+            .bind(request.binding.operation_id())
             .fetch_one(database.pool())
             .await?;
             for at in [now, now + scope.cooldown_ms, scope.deadline_ms] {
@@ -95,7 +95,7 @@ async fn exhausted_contact_stays_on_review_and_yields_to_independent_results_wit
             let after: serde_json::Value = sqlx::query_scalar(
                 "SELECT jsonb_build_object('operation',to_jsonb(d),'attempts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY attempt_id) FROM durable_page_attempts a)) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&request.binding.operation_id)
+            .bind(request.binding.operation_id())
             .fetch_one(database.pool())
             .await?;
             assert_eq!(after, before);
@@ -114,7 +114,7 @@ async fn exhausted_contact_stays_on_review_and_yields_to_independent_results_wit
             snapshot.finish().await?;
             assert_eq!(rows.len(), 1);
             let row = rows.first().context("exhausted contact Review row")?;
-            assert_eq!(row.checkpoint_id, request.binding.page_id);
+            assert_eq!(row.checkpoint_id, request.binding.page_id());
             assert_eq!(row.url, contact.url);
             assert_eq!(row.status, ReviewStatus::Failed);
             assert_eq!(row.attempts, 3);

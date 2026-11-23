@@ -42,7 +42,7 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
                 if resume_reservation {
                     if !retained_response {
                         let selected = page::select_scheduled(&database, &config, &scope(&config, now)?, now, &[], page::Scheduling::Resume).await?.context("unfinished exclusion selection missing")?;
-                        assert_eq!(selected.binding.operation_id, request.binding.operation_id);
+                        assert_eq!(selected.binding.operation_id(), request.binding.operation_id());
                         assert_eq!(snapshot(&database).await?, before);
                     }
                     let ReservationDecision::Reserved { reservation: resumed } = page::reserve_configured(&database, &config, &request, now).await? else {
@@ -67,7 +67,7 @@ async fn configured_exclusion_preserves_fsynced_real_stop_before_reservation_or_
                 assert!(matches!(page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
                 assert_eq!(snapshot(&database).await?, blocked);
                 assert!(crate::runner::durable::bootstrap(&database, &config).await.is_err());
-                assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?, 1);
+                assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?, 1);
                 transport.close().await?;
                 assert!(fixture.finish().await?.is_empty());
             }
@@ -113,7 +113,7 @@ async fn configured_exclusion_resumes_valid_retained_capture_and_parse_without_w
         assert!(matches!(page::fetch_configured(&database, crate::durable::page::PageFiles::new(root.path(), &blocking), &reservation, &mut transport, now, &config).await?, FetchDecision::Settled { outcome: saved } if saved == outcome));
         assert!(matches!(page::reserve_configured(&database, &config, &request, now).await?, ReservationDecision::Settled { outcome: saved } if saved == outcome));
         assert_eq!(snapshot(&database).await?, completed);
-        assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?, 1);
+        assert_eq!(sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?, 1);
         assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(pool).await?, 0);
         assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM durable_page_receipts").fetch_one(pool).await?, 1);
         transport.close().await?;

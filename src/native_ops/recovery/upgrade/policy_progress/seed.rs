@@ -45,20 +45,21 @@ pub(super) async fn prepare(
     database.close().await;
     let pages = result?;
     let checkpoints = super::super::handoff::checkpoints(runtime, &pages).await?;
-    let request = CrawlRequest {
-        generation: format!("policy-{}-{identity}", state.to_lowercase()),
+    let request = CrawlRequest::new(
+        format!("policy-{}-{identity}", state.to_lowercase()),
         config,
-        deadline_ms: chrono::Utc::now()
+        chrono::Utc::now()
             .timestamp_millis()
             .checked_add(3_600_000)
             .context("policy proof deadline overflow")?,
-        cooldown_ms: 15_000,
-        batch: 0,
-        max_batches: 2,
-        phase: CrawlPhase::SchoolChains,
-        inherited_retry_campaigns: Vec::new(),
-        scheduler_version: scheduler,
-        deadline_extension: None,
+        15_000,
+        2,
+        CrawlPhase::SchoolChains,
+        Vec::new(),
+    )?;
+    let request = match scheduler {
+        Some(SchedulerVersion::RollingV2) => request.upgraded_scheduler(),
+        None => request,
     };
     request.validate(chrono::Utc::now().timestamp_millis())?;
     Ok(Seeded {

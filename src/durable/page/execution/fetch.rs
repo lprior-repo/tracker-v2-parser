@@ -90,7 +90,7 @@ pub async fn fetch_with_policy(
         return Ok(outcome);
     }
     transport.set_wire_context(
-        &reservation.request.binding.operation_id,
+        reservation.request.binding.operation_id(),
         &reservation.attempt_id,
     )?;
     let fetched = transport.fetch(&reservation.request.target).await;

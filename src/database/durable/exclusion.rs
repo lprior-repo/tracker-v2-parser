@@ -54,7 +54,7 @@ async fn exclude(
         .await;
     }
     let status: String = sqlx::query_scalar("SELECT status FROM scrape_pages WHERE id=$1")
-        .bind(request.binding.page_id)
+        .bind(request.binding.page_id())
         .fetch_one(&mut *transaction)
         .await?;
     ensure!(
@@ -86,8 +86,8 @@ async fn exclude(
     };
     let value = serde_json::to_value(&outcome)?;
     sqlx::query("UPDATE durable_page_attempts SET state='failed',outcome=$2 WHERE operation_id=$1 AND outcome IS NULL AND state IN ('reserved','captured','parsed')")
-            .bind(&request.binding.operation_id).bind(&value).execute(&mut *transaction).await?;
+            .bind(request.binding.operation_id()).bind(&value).execute(&mut *transaction).await?;
     sqlx::query("UPDATE durable_page_operations SET state='rejected',outcome=$2,retry_at_ms=NULL WHERE operation_id=$1")
-            .bind(&request.binding.operation_id).bind(value).execute(&mut *transaction).await?;
+            .bind(request.binding.operation_id()).bind(value).execute(&mut *transaction).await?;
     super::super::finish(transaction, Ok(ReservationDecision::Settled { outcome })).await
 }

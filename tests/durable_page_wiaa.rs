@@ -56,7 +56,7 @@ async fn parsed(
 ) -> Result<ParsedPage> {
     let value: serde_json::Value =
         sqlx::query_scalar("SELECT parsed FROM durable_page_receipts WHERE operation_id=$1")
-            .bind(&request.binding.operation_id)
+            .bind(request.binding.operation_id())
             .fetch_one(database.pool())
             .await?;
     let reference: ParsedRef = serde_json::from_value(value)?;

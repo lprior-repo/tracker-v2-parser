@@ -5,25 +5,24 @@ use super::super::{
     super::{cli, io, journal, runtime::Runtime},
     evidence,
 };
-use crate::durable::model::{CrawlPhase, CrawlRequest, SchedulerVersion};
+use crate::durable::model::{CrawlPhase, CrawlRequest};
 
 pub(super) fn request(runtime: &Runtime, identity: &str) -> Result<Value> {
     let path = cli::config(runtime, "IL", 5, 3, "rolling-config.toml")?;
-    Ok(serde_json::to_value(CrawlRequest {
-        generation: format!("rolling-{identity}"),
-        config: crate::config::Config::load(&path)?,
-        deadline_ms: chrono::Utc::now()
+    let request = CrawlRequest::new(
+        format!("rolling-{identity}"),
+        crate::config::Config::load(&path)?,
+        chrono::Utc::now()
             .timestamp_millis()
             .checked_add(3_600_000)
             .context("rolling deadline overflow")?,
-        cooldown_ms: 15_000,
-        batch: 0,
-        max_batches: 1,
-        phase: CrawlPhase::SchoolChains,
-        inherited_retry_campaigns: vec![format!("ancestor-{identity}")],
-        scheduler_version: Some(SchedulerVersion::RollingV2),
-        deadline_extension: None,
-    })?)
+        15_000,
+        1,
+        CrawlPhase::SchoolChains,
+        vec![format!("ancestor-{identity}")],
+    )?
+    .upgraded_scheduler();
+    Ok(serde_json::to_value(request)?)
 }
 
 fn query(generation: &str) -> Result<String> {

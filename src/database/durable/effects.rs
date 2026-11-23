@@ -49,8 +49,10 @@ impl Database {
         capture: &Capture,
         parsed: &ParsedPage,
     ) -> Result<PageOutcome> {
-        let mut timings =
-            Timings::new(Some(reservation.request.binding.page_id), "durable_persist");
+        let mut timings = Timings::new(
+            Some(reservation.request.binding.page_id()),
+            "durable_persist",
+        );
         let capture_json = serde_json::to_value(capture_ref);
         let parsed_json = serde_json::to_value(parsed_ref);
         let capture_matches = capture_matches(capture, capture_ref);
@@ -72,7 +74,7 @@ impl Database {
             timings.measure(Stage::ReceiptLookup, sqlx::query_as(
                 "SELECT capture,parsed,outcome FROM durable_page_receipts WHERE operation_id=$1",
             )
-            .bind(&reservation.request.binding.operation_id)
+            .bind(reservation.request.binding.operation_id())
             .fetch_optional(&mut *transaction))
             .await?;
         if let Some((saved_capture, saved_parsed, outcome)) = existing {
@@ -110,7 +112,7 @@ impl Database {
                 Stage::Domain,
                 Box::pin(records::persist_locked(
                     &mut transaction,
-                    Some(request.binding.page_id),
+                    Some(request.binding.page_id()),
                     &request.target,
                     capture,
                     parsed,
@@ -125,7 +127,7 @@ impl Database {
         let value = serde_json::to_value(&outcome)?;
         timings.measure(Stage::ReceiptWrite, async {
         sqlx::query("INSERT INTO durable_page_receipts(operation_id,attempt_id,page_id,capture,parsed,receipt_sha256,outcome) VALUES($1,$2,$3,$4,$5,$6,$7)")
-            .bind(&request.binding.operation_id).bind(&reservation.attempt_id).bind(page_id).bind(capture_json).bind(parsed_json).bind(receipt_sha256).bind(&value).execute(&mut *transaction).await?;
+            .bind(request.binding.operation_id()).bind(&reservation.attempt_id).bind(page_id).bind(capture_json).bind(parsed_json).bind(receipt_sha256).bind(&value).execute(&mut *transaction).await?;
         sqlx::query(
             "UPDATE durable_page_attempts SET state='completed',outcome=$2 WHERE attempt_id=$1",
         )
@@ -134,7 +136,7 @@ impl Database {
         .execute(&mut *transaction)
         .await?;
         sqlx::query("UPDATE durable_page_operations SET state='completed',retry_at_ms=NULL,outcome=$2 WHERE operation_id=$1")
-            .bind(&request.binding.operation_id).bind(value).execute(&mut *transaction).await?;
+            .bind(request.binding.operation_id()).bind(value).execute(&mut *transaction).await?;
             Ok::<_, anyhow::Error>(())
         }).await?;
         timings

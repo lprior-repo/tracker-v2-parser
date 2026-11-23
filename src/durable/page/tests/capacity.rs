@@ -74,7 +74,7 @@ async fn given_saved_capacity_rejection_when_new_scope_runs_then_history_is_pres
             let before: serde_json::Value = sqlx::query_scalar(
                 "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&request.binding.operation_id)
+            .bind(request.binding.operation_id())
             .fetch_one(pool)
             .await?;
             assert!(matches!(
@@ -97,7 +97,7 @@ async fn given_saved_capacity_rejection_when_new_scope_runs_then_history_is_pres
             let after: serde_json::Value = sqlx::query_scalar(
                 "SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1",
             )
-            .bind(&request.binding.operation_id)
+            .bind(request.binding.operation_id())
             .fetch_one(pool)
             .await?;
             assert_eq!(before, after);

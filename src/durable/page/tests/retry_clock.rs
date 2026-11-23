@@ -110,7 +110,7 @@ async fn delayed_failure(ordinal: i32) -> Result<()> {
             ));
             assert_eq!(
                 sqlx::query_scalar::<_, i32>("SELECT attempts FROM scrape_pages WHERE id=$1")
-                    .bind(request.binding.page_id)
+                    .bind(request.binding.page_id())
                     .fetch_one(pool)
                     .await?,
                 ordinal
@@ -173,22 +173,22 @@ async fn explicit_new_generation_recovers_exact_saved_cdp_failure_without_rewrit
         let mut scope=scope()?;
         let request=page::bind_target(&database,target(),&scope).await?;
         let detail="browser interception failed: Error -32602: Invalid InterceptionId.: Error -32602: Invalid InterceptionId.";
-        sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error=$2 WHERE id=$1").bind(request.binding.page_id).bind(detail).execute(pool).await?;
+        sqlx::query("UPDATE scrape_pages SET status='failed',attempts=3,last_error=$2 WHERE id=$1").bind(request.binding.page_id()).bind(detail).execute(pool).await?;
         let now=chrono::Utc::now().timestamp_millis();
         let ReservationDecision::Reserved {reservation}=page::reserve(&database,&request,now).await? else {anyhow::bail!("legacy recovery")};
         assert_eq!(reservation.total_attempts,4);
         let old_outcome=database.durable_fail(&reservation,FailureRecord {class:FailureClass::Rejected,detail,capture:None,stopped_origin:None,observed_at_ms:now}).await?;
         assert!(matches!(old_outcome,PageOutcome::Rejected {..}));
-        let old_record:serde_json::Value=sqlx::query_scalar("SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1").bind(&request.binding.operation_id).fetch_one(pool).await?;
+        let old_record:serde_json::Value=sqlx::query_scalar("SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1").bind(request.binding.operation_id()).fetch_one(pool).await?;
         assert!(matches!(page::reserve(&database,&request,now).await?,ReservationDecision::Settled {outcome:PageOutcome::Rejected {..}}));
         scope.run_generation="explicit-reviewed-cdp-recovery".into();
         let next=page::bind_target(&database,target(),&scope).await?;
         let ReservationDecision::Reserved {reservation:recovery}=page::reserve(&database,&next,now).await? else {anyhow::bail!("explicit new generation recovery")};
         assert_eq!(recovery.total_attempts,5);
         assert_eq!((recovery.cycle,recovery.ordinal),(1,1));
-        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1").bind(&request.binding.operation_id).fetch_one(pool).await?,old_record);
-        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1").bind(&next.binding.operation_id).fetch_one(pool).await?,4);
-        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id).fetch_one(pool).await?,5);
+        assert_eq!(sqlx::query_scalar::<_,serde_json::Value>("SELECT to_jsonb(d) FROM durable_page_operations d WHERE operation_id=$1").bind(request.binding.operation_id()).fetch_one(pool).await?,old_record);
+        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT original_attempts FROM durable_page_operations WHERE operation_id=$1").bind(next.binding.operation_id()).fetch_one(pool).await?,4);
+        assert_eq!(sqlx::query_scalar::<_,i32>("SELECT attempts FROM scrape_pages WHERE id=$1").bind(request.binding.page_id()).fetch_one(pool).await?,5);
         Ok(())
     })).await
 }

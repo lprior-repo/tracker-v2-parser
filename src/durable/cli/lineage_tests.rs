@@ -25,7 +25,7 @@ fn given_repeatable_ancestor_flags_when_request_is_frozen_then_every_phase_retai
         1000,
     )?;
     assert_eq!(
-        request.inherited_retry_campaigns,
+        request.inherited_retry_campaigns(),
         ["old-mixed", "old-reviewed"]
     );
     let encoded = serde_json::to_vec(&request)?;
@@ -38,12 +38,12 @@ fn given_repeatable_ancestor_flags_when_request_is_frozen_then_every_phase_retai
     ] {
         let next = restored.next(phase)?;
         assert_eq!(
-            next.inherited_retry_campaigns,
-            request.inherited_retry_campaigns
+            next.inherited_retry_campaigns(),
+            request.inherited_retry_campaigns()
         );
         assert_eq!(
             next.page_scope()?.inherited_retry_campaigns,
-            request.inherited_retry_campaigns
+            request.inherited_retry_campaigns()
         );
     }
     Ok(())
@@ -52,22 +52,30 @@ fn given_repeatable_ancestor_flags_when_request_is_frozen_then_every_phase_retai
 #[test]
 fn given_empty_lineage_when_old_request_and_scope_are_loaded_then_serialized_bytes_stay_identical()
 -> Result<()> {
-    let mut request = commands::crawl_request(
+    let request = commands::crawl_request(
         Config::parse("states=['IA']")?,
         "unchanged".into(),
         overrides(&[])?,
         1000,
     )?;
     assert_eq!(
-        request.scheduler_version,
+        request.scheduler_version(),
         Some(crate::durable::model::SchedulerVersion::RollingV2)
     );
-    request.scheduler_version = None;
-    let config = serde_json::to_string(&request.config)?;
+    let legacy = CrawlRequest::new(
+        request.generation().to_owned(),
+        request.config().clone(),
+        request.deadline_ms(),
+        request.cooldown_ms(),
+        request.max_batches(),
+        request.phase(),
+        Vec::new(),
+    )?;
+    let config = serde_json::to_string(request.config())?;
     let expected = format!(
         "{{\"generation\":\"unchanged\",\"config\":{config},\"deadline_ms\":86401000,\"cooldown_ms\":60000,\"batch\":0,\"max_batches\":10000,\"phase\":\"school_chains\"}}"
     );
-    assert_eq!(serde_json::to_string(&request)?, expected);
+    assert_eq!(serde_json::to_string(&legacy)?, expected);
     assert_eq!(
         serde_json::to_string(&serde_json::from_str::<CrawlRequest>(&expected)?)?,
         expected
@@ -89,7 +97,7 @@ fn given_empty_lineage_when_old_request_and_scope_are_loaded_then_serialized_byt
     let request = crate::durable::page::request(crate::database::Job { id: 7, target }, &scope)?;
     let prior_binding_bytes = format!("[7,\"{target_digest}\",{encoded}]");
     assert_eq!(
-        request.binding.operation_id,
+        request.binding.operation_id(),
         crate::durable::page::body_digest(prior_binding_bytes.as_bytes())
     );
     Ok(())
@@ -97,6 +105,18 @@ fn given_empty_lineage_when_old_request_and_scope_are_loaded_then_serialized_byt
 
 #[test]
 fn given_invalid_ancestor_lists_when_crawl_is_bound_then_the_boundary_rejects_them() -> Result<()> {
+    let config = Config::parse("states=['IA']")?;
+    let request = |generation: &str, ancestors: Vec<String>| {
+        CrawlRequest::new(
+            generation.into(),
+            config.clone(),
+            120_000,
+            15_000,
+            1,
+            CrawlPhase::SchoolChains,
+            ancestors,
+        )
+    };
     for ancestors in [
         vec!["same"],
         vec!["old", "old"],
@@ -108,29 +128,20 @@ fn given_invalid_ancestor_lists_when_crawl_is_bound_then_the_boundary_rejects_th
         vec!["bad/name"],
         vec!["a"; 9],
     ] {
-        let mut request = commands::crawl_request(
-            Config::parse("states=['IA']")?,
-            "same".into(),
-            overrides(&[])?,
-            1000,
-        )?;
-        request.inherited_retry_campaigns = ancestors.into_iter().map(str::to_owned).collect();
+        let request = request("same", ancestors.into_iter().map(str::to_owned).collect())?;
         assert!(request.validate(1000).is_err());
         assert!(request.page_scope().is_err());
     }
-    let mut request = commands::crawl_request(
-        Config::parse("states=['IA']")?,
-        "same".into(),
-        overrides(&[])?,
-        1000,
-    )?;
-    request.inherited_retry_campaigns = vec!["a".repeat(101)];
-    assert!(request.validate(1000).is_err());
-    request.inherited_retry_campaigns = (0..8).map(|index| format!("ancestor-{index}")).collect();
-    request.validate(1000)?;
-    request.page_scope()?;
-    request.generation = "same-schools".into();
-    assert!(request.validate(1000).is_err());
+    assert!(
+        request("same", vec!["a".repeat(101)])?
+            .validate(1000)
+            .is_err()
+    );
+    let ancestors: Vec<_> = (0..8).map(|index| format!("ancestor-{index}")).collect();
+    let valid = request("same", ancestors.clone())?;
+    valid.validate(1000)?;
+    valid.page_scope()?;
+    assert!(request("same-schools", ancestors)?.validate(1000).is_err());
     Ok(())
 }
 
@@ -139,13 +150,15 @@ fn given_wisconsin_when_retry_lineage_is_requested_then_cli_scope_and_page_polic
 -> Result<()> {
     for states in ["['WI']", "['IA','WI']"] {
         let config = Config::parse(&format!("states={states}"))?;
-        let mut request =
+        let request =
             commands::crawl_request(config.clone(), "wisconsin".into(), overrides(&[])?, 1000)?;
         request.validate(1000)?;
         let mut scope = request.page_scope()?;
-        request.inherited_retry_campaigns = vec!["old-mixed".into()];
-        assert!(request.validate(1000).is_err());
-        assert!(request.page_scope().is_err());
+        let mut raw = serde_json::to_value(&request)?;
+        raw["inherited_retry_campaigns"] = serde_json::json!(["old-mixed"]);
+        let inherited: CrawlRequest = serde_json::from_value(raw)?;
+        assert!(inherited.validate(1000).is_err());
+        assert!(inherited.page_scope().is_err());
         assert!(
             commands::crawl_request(
                 config.clone(),

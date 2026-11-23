@@ -35,12 +35,13 @@ async fn given_three_owned_pages_when_selecting_again_then_no_page_is_selected_t
                     .await?
                     .context("independent page")?;
                 assert!(
-                    !reservations
-                        .iter()
-                        .any(|r: &page::PageReservation| r.request.binding.page_id
-                            == request.binding.page_id)
+                    !reservations.iter().any(|r: &page::PageReservation| r
+                        .request
+                        .binding
+                        .page_id()
+                        == request.binding.page_id())
                 );
-                owned.push(request.binding.page_id);
+                owned.push(request.binding.page_id());
                 reservations.push(page_support::reserve(&database, &request, now).await?);
             }
             assert!(
@@ -125,7 +126,7 @@ async fn given_an_owned_team_when_pipeline_selects_then_its_alias_and_roster_wai
             assert_eq!(first.target.url, team.url);
             page_support::reserve(&database, &first, now).await?;
             let next =
-                page::select_excluding(&database, &config, &scope, now, &[first.binding.page_id])
+                page::select_excluding(&database, &config, &scope, now, &[first.binding.page_id()])
                     .await?
                     .context("independent school")?;
             assert_eq!(next.target.url, other.url);
@@ -164,7 +165,7 @@ async fn given_an_owned_athlete_when_pipeline_selects_then_only_a_different_athl
         let first=page::select(&database,&config,&scope,now).await?.context("first athlete")?;
         assert_eq!(first.target.context.athlete_id,profiles[0].context.athlete_id);
         page_support::reserve(&database,&first,now).await?;
-        let next=page::select_excluding(&database,&config,&scope,now,&[first.binding.page_id]).await?.context("second athlete")?;
+        let next=page::select_excluding(&database,&config,&scope,now,&[first.binding.page_id()]).await?.context("second athlete")?;
         assert_eq!(next.target.context.athlete_id,profiles[1].context.athlete_id);
         assert!(matches!(page::reserve(&database,&first,now).await?,ReservationDecision::Reserved{..}));
         database.close().await; Ok(())
@@ -198,7 +199,7 @@ async fn given_null_school_context_when_stats_is_owned_then_same_athlete_progres
         assert_eq!(first.target.url,stats.url);
         assert!(first.target.context.school_id.is_none());
         let reserved=page_support::reserve(&database,&first,now).await?;
-        let next=page::select_excluding(&database,&config,&scope,now,&[first.binding.page_id]).await?.context("independent athlete")?;
+        let next=page::select_excluding(&database,&config,&scope,now,&[first.binding.page_id()]).await?.context("independent athlete")?;
         assert_eq!(next.target.url,profiles[1].url);
         assert_ne!(next.target.context.athlete_id,first.target.context.athlete_id);
         assert_eq!(page::select(&database,&config,&scope,now).await?.context("interrupted stats can resume")?.binding,first.binding);

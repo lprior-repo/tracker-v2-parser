@@ -60,7 +60,7 @@ async fn retained_request(
             && selected_request
                 .pointer("/deadline_extension/effective_deadline_ms")
                 .and_then(Value::as_i64)
-                == Some(seeded.request.deadline_ms),
+                == Some(seeded.request.deadline_ms()),
         "replayed child input did not retain the exact authorized immutable binding"
     );
     let root_rows = evidence::journal(runtime, root_id).await?;
@@ -95,7 +95,7 @@ async fn database_evidence(
             .get("retry_at_ms")
             .and_then(Value::as_i64)
             .is_some_and(
-                |due| due > seeded.previous_deadline_ms && due < seeded.request.deadline_ms
+                |due| due > seeded.previous_deadline_ms && due < seeded.request.deadline_ms()
             ),
         "extended retry deadline did not govern the retained operation"
     );

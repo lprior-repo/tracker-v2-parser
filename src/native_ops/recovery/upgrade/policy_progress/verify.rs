@@ -39,7 +39,7 @@ pub(super) async fn run(
         handoff::checkpoints(runtime, &seeded.pages).await? == seeded.checkpoints,
         "policy proof rewrote original checkpoints or attempt counters"
     );
-    let generation = &seeded.request.generation;
+    let generation = seeded.request.generation();
     ensure!(
         generation
             .bytes()

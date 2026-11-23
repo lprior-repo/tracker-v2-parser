@@ -51,7 +51,7 @@ async fn explicit_history_reuses_all_approved_owner_epochs_without_changing_ledg
                 let replay = database
                     .durable_request_with_deadline_extension(
                         Job {
-                            id: original.binding.page_id,
+                            id: original.binding.page_id(),
                             target: original.target.clone(),
                         },
                         &selected_scope,
@@ -64,9 +64,12 @@ async fn explicit_history_reuses_all_approved_owner_epochs_without_changing_ledg
                     .context("history extension absent")?;
                 assert_eq!(
                     extension.previous_deadline_ms,
-                    original.binding.scope.deadline_ms
+                    original.binding.scope().deadline_ms
                 );
-                assert_eq!(extension.owner_operation_id, original.binding.operation_id);
+                assert_eq!(
+                    extension.owner_operation_id,
+                    original.binding.operation_id()
+                );
             }
             assert_eq!(snapshot(&database).await?, before);
             Ok(())
@@ -88,7 +91,7 @@ async fn absent_or_unordered_history_cannot_authorize_an_older_owner() -> Result
                 let error = database
                     .durable_request_with_deadline_extension(
                         Job {
-                            id: original.binding.page_id,
+                            id: original.binding.page_id(),
                             target: original.target.clone(),
                         },
                         &selected_scope,

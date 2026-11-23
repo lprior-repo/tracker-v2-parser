@@ -98,7 +98,7 @@ async fn bounded_policy_scan_retries_after_one_hundred_exclusions_and_reaches_th
             .await?
             .context("allowed page after exclusion scan retry")?;
             assert_eq!(selected.target.url, public.url);
-            assert_eq!(selected.binding.scope, scope);
+            assert_eq!(selected.binding.scope(), &scope);
             assert_excluded(&database, 101).await?;
             assert_eq!(checkpoints(&database).await?, before);
             let duplicate = select_scheduled(

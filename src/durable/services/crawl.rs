@@ -36,15 +36,17 @@ impl AthleticCrawl {
         Json(request): Json<CrawlRequest>,
     ) -> HandlerResult<Json<CrawlReport>> {
         let now = effects::now!(&ctx)?;
-        request.validate(now.min(request.deadline_ms)).terminal()?;
+        request
+            .validate(now.min(request.deadline_ms()))
+            .terminal()?;
         if ctx.key() != request.workflow_key() {
             return Err(TerminalError::new("workflow key does not match crawl binding").into());
         }
-        if now >= request.deadline_ms {
+        if now >= request.deadline_ms() {
             let report = CrawlReport {
-                generation: request.generation.clone(),
-                batch: request.batch,
-                phase: request.phase,
+                generation: request.generation().to_owned(),
+                batch: request.batch(),
+                phase: request.phase(),
                 progress: BatchProgress::default(),
                 export: None,
                 continuation: None,
@@ -58,7 +60,7 @@ impl AthleticCrawl {
         effects::record!(&ctx, "bootstrap-discovery-and-contact-queue", || {
             preparation::run(&self.runtime.database, &request)
         })?;
-        let progress = if request.phase == CrawlPhase::ContactRefresh {
+        let progress = if request.phase() == CrawlPhase::ContactRefresh {
             let operation = OperationRequest {
                 operation_id: format!("{}-wiaa", request.workflow_key()),
                 spec: wiaa_spec(&request),
@@ -78,7 +80,7 @@ impl AthleticCrawl {
         let operation = OperationRequest {
             operation_id: format!("{}-export", request.workflow_key()),
             spec: OperationSpec::Export {
-                config: request.config.clone(),
+                config: request.config().clone(),
             },
         };
         let Json(export) = ctx
@@ -95,33 +97,32 @@ impl AthleticCrawl {
             .durable_due(&scope.run_generation))?;
         let phase = next_phase(&request, &progress, due);
         let mut report = CrawlReport {
-            generation: request.generation.clone(),
-            batch: request.batch,
+            generation: request.generation().to_owned(),
+            batch: request.batch(),
             phase,
             progress,
             export: Some(export),
             continuation: None,
             stopped_reason: None,
         };
-        let next = request.next(phase).terminal()?;
-        if now >= request.deadline_ms {
+        if now >= request.deadline_ms() {
             report.stopped_reason =
                 Some("durable crawl deadline reached; retained checkpoints are resumable".into());
-        } else if next.batch >= next.max_batches {
-            report.stopped_reason =
-                Some("bounded batch count reached; retained checkpoints are resumable".into());
+        } else if request.is_last_batch() {
+            report.stopped_reason = Some(model::BATCH_LIMIT_REACHED.into());
         } else if phase == CrawlPhase::Complete {
             report.stopped_reason =
                 Some("no eligible or deferred pages remain in configured scope".into());
         } else {
-            let next = next.upgraded_scheduler();
-            let delay =
-                if report.progress.queue == QueueState::NoEligiblePage && phase == request.phase {
-                    model::delay_until(now, due.unwrap_or_else(|| now.saturating_add(30_000)))
-                        .terminal()?
-                } else {
-                    Duration::ZERO
-                };
+            let next = request.next(phase).terminal()?.upgraded_scheduler();
+            let delay = if report.progress.queue == QueueState::NoEligiblePage
+                && phase == request.phase()
+            {
+                model::delay_until(now, due.unwrap_or_else(|| now.saturating_add(30_000)))
+                    .terminal()?
+            } else {
+                Duration::ZERO
+            };
             let key = next.workflow_key();
             ctx.workflow_client::<AthleticCrawlClient>(&key)
                 .run(Json(next))
@@ -150,8 +151,8 @@ impl AthleticCrawl {
         ctx: &WorkflowContext<'_>,
         request: &CrawlRequest,
     ) -> HandlerResult<BatchProgress> {
-        if request.config.limits.concurrency > 1 {
-            return if request.scheduler_version.is_some() {
+        if request.config().limits.concurrency > 1 {
+            return if request.scheduler_version().is_some() {
                 self.rolling_pipeline(ctx, request).await
             } else {
                 self.pipeline(ctx, request).await
@@ -159,7 +160,7 @@ impl AthleticCrawl {
         }
         let scope = request.page_scope().terminal()?;
         let (progress, _) =
-            stream::iter((0..request.config.limits.max_pages).map(Ok::<_, HandlerError>))
+            stream::iter((0..request.config().limits.max_pages).map(Ok::<_, HandlerError>))
                 .try_fold(
                     (BatchProgress::default(), SelectionStop::Open),
                     |(mut progress, stopped), index| {
@@ -170,8 +171,8 @@ impl AthleticCrawl {
                             }
                             let now = effects::now!(ctx)?;
                             let scheduling = page::Scheduling::for_batch_turn(
-                                &request.config,
-                                request.batch,
+                                request.config(),
+                                request.batch(),
                                 index,
                             )
                             .terminal()?;
@@ -179,12 +180,12 @@ impl AthleticCrawl {
                                 effects::record!(ctx, &format!("select-page-{index:06}"), || {
                                     page::select_step_with_extension(
                                         &self.runtime.database,
-                                        &request.config,
+                                        request.config(),
                                         scope,
                                         now,
                                         &[],
                                         scheduling,
-                                        request.deadline_extension.as_ref(),
+                                        request.deadline_extension(),
                                     )
                                 })?;
                             let page = match selected {
@@ -200,13 +201,13 @@ impl AthleticCrawl {
                                     return Ok((progress, SelectionStop::DeadlineReached));
                                 }
                             };
-                            let id = page.binding.page_id;
+                            let id = page.binding.page_id();
                             let Json(outcome) = ctx
                                 .service_client::<AthleticPageClient>()
                                 .handle(Json(PageExecution {
                                     request: page,
-                                    config: request.config.clone(),
-                                    scheduler_version: request.scheduler_version,
+                                    config: request.config().clone(),
+                                    scheduler_version: request.scheduler_version(),
                                 }))
                                 .idempotency_key(format!(
                                     "{}-page-{index:06}",
@@ -229,15 +230,15 @@ impl AthleticCrawl {
 fn next_phase(request: &CrawlRequest, progress: &BatchProgress, due: Option<i64>) -> CrawlPhase {
     if progress.queue == QueueState::Processing
         || (due.is_some()
-            && !(request.phase == CrawlPhase::SchoolChains
-                && request.config.acquisition.profile_coverage_only()))
+            && !(request.phase() == CrawlPhase::SchoolChains
+                && request.config().acquisition.profile_coverage_only()))
     {
-        return request.phase;
+        return request.phase();
     }
-    match request.phase {
+    match request.phase() {
         CrawlPhase::SchoolChains
-            if request.config.states.iter().any(|state| state == "WI")
-                && request.config.acquisition.includes_contacts() =>
+            if request.config().states.iter().any(|state| state == "WI")
+                && request.config().acquisition.includes_contacts() =>
         {
             CrawlPhase::ContactRefresh
         }
@@ -247,15 +248,15 @@ fn next_phase(request: &CrawlRequest, progress: &BatchProgress, due: Option<i64>
 }
 
 fn wiaa_spec(request: &CrawlRequest) -> OperationSpec {
-    if request.config.run.is_some() {
+    if request.config().run.is_some() {
         OperationSpec::WiaaDirectoryRun {
-            config: request.config.clone(),
-            deadline_ms: request.deadline_ms,
-            cooldown_ms: request.cooldown_ms,
+            config: request.config().clone(),
+            deadline_ms: request.deadline_ms(),
+            cooldown_ms: request.cooldown_ms(),
         }
     } else {
         OperationSpec::WiaaDirectory {
-            config: request.config.clone(),
+            config: request.config().clone(),
         }
     }
 }

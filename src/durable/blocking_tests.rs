@@ -7,7 +7,9 @@ use std::sync::{
 use anyhow::{Result, anyhow};
 use tokio::sync::oneshot;
 
-use super::{BlockingStageUnavailable, BlockingStages, MAX_TASKS};
+use super::{
+    BlockingDrainFailures, BlockingStageUnavailable, BlockingStages, DRAIN_BUDGET, MAX_TASKS,
+};
 
 #[tokio::test]
 async fn cancelled_awaiter_keeps_blocking_file_write_owned_until_drain_finishes() -> Result<()> {
@@ -267,18 +269,13 @@ async fn cancelled_drain_keeps_registry_ownership_until_a_later_drain() -> Resul
 #[tokio::test]
 async fn queued_but_unreceived_error_is_reported_after_awaiter_cancellation() -> Result<()> {
     let stages = BlockingStages::new();
-    let (started, ready) = oneshot::channel();
+    let (release, wait) = mpsc::channel();
     let mut operation = Box::pin(stages.run(move || -> Result<()> {
-        started
-            .send(())
-            .map_err(|_| anyhow!("start receiver dropped"))?;
+        wait.recv()?;
         Err(anyhow!("unreceived file error"))
     }));
-    tokio::select! {
-        biased;
-        result = ready => result?,
-        result = &mut operation => return Err(anyhow!("consumed result before test could cancel: {result:?}")),
-    }
+    assert!(futures::poll!(&mut operation).is_pending());
+    release.send(())?;
     stages.join_next(false).await?;
     drop(operation);
     let error = stages
@@ -327,7 +324,86 @@ async fn blocking_panic_is_distinct_from_an_artifact_error_at_shutdown() -> Resu
     let detail = error.to_string();
     assert!(detail.contains("owned blocking stage panicked"));
     assert!(detail.contains("injected blocking panic"));
+    let failures = error.downcast_ref::<BlockingDrainFailures>().unwrap();
+    assert_eq!(failures.outstanding(), 0);
+    let panic = failures.panicked().unwrap();
+    let cause = std::error::Error::source(panic)
+        .and_then(|source| source.downcast_ref::<tokio::task::JoinError>())
+        .unwrap();
+    assert!(cause.is_panic());
+    assert!(failures.cancelled().is_none());
     Ok(())
+}
+
+#[test]
+fn shutdown_preserves_queued_cancellation_alongside_file_failure_and_panic() -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_time()
+        .build()?;
+    runtime.block_on(async {
+        let stages = BlockingStages::new();
+        let (started, ready) = oneshot::channel();
+        let (release, wait) = mpsc::channel();
+        drop(stages.state()?.tasks.spawn_blocking(move || {
+            started
+                .send(())
+                .map_err(|_| anyhow!("barrier not received"))?;
+            wait.recv()?;
+            Err(anyhow!("injected artifact error"))
+        }));
+        ready.await?;
+        let abort = stages.state()?.tasks.spawn_blocking(|| {
+            panic!("aborted queued job must not run");
+        });
+        abort.abort();
+        drop(stages.state()?.tasks.spawn_blocking(|| {
+            panic!("injected stage panic");
+        }));
+        release.send(())?;
+
+        let error = stages.drain().await.expect_err("drain failed");
+        assert!(error.to_string().contains("3 owned blocking stages failed"));
+        assert!(error.to_string().contains("injected artifact error"));
+        assert!(error.to_string().contains("injected stage panic"));
+        let failures = error.downcast_ref::<BlockingDrainFailures>().unwrap();
+        assert!(failures.panicked().is_some());
+        let cancelled = std::error::Error::source(failures.cancelled().unwrap())
+            .and_then(|source| source.downcast_ref::<tokio::task::JoinError>())
+            .unwrap();
+        assert!(cancelled.is_cancelled());
+        assert_eq!(cancelled.id(), abort.id());
+        assert_eq!(failures.outstanding(), 0);
+        Ok(())
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn drain_timeout_reports_work_still_owned_and_later_drain_joins_it() -> Result<()> {
+    let stages = BlockingStages::new();
+    let (started, ready) = oneshot::channel();
+    let (release, wait) = mpsc::channel();
+    drop(stages.state()?.tasks.spawn_blocking(move || {
+        started
+            .send(())
+            .map_err(|_| anyhow!("barrier not received"))?;
+        wait.recv()?;
+        Ok(())
+    }));
+    ready.await?;
+    let mut shutdown = std::pin::pin!(stages.drain());
+    assert!(futures::poll!(&mut shutdown).is_pending());
+    tokio::time::advance(DRAIN_BUDGET + std::time::Duration::from_millis(1)).await;
+    let error = shutdown.await.expect_err("blocked stage exceeds deadline");
+    assert_eq!(
+        error
+            .downcast_ref::<BlockingDrainFailures>()
+            .unwrap()
+            .outstanding(),
+        1
+    );
+    release.send(())?;
+    stages.drain().await
 }
 
 #[tokio::test]

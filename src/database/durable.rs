@@ -49,12 +49,12 @@ impl Database {
             serde_json::from_value(binding_value).context("decoding retained extension owner")?;
         let target_sha256 = crate::durable::page::value_digest(&job.target)?;
         ensure!(
-            binding.operation_id == operation_id
-                && binding.page_id == job.id
-                && binding.target_sha256 == target_sha256,
+            binding.operation_id() == operation_id
+                && binding.page_id() == job.id
+                && binding.target_sha256() == target_sha256,
             "retained deadline extension owner does not match selected page"
         );
-        let old_scope = &binding.scope;
+        let old_scope = binding.scope();
         ensure!(
             old_scope.run_generation == scope.run_generation
                 && old_scope.config_sha256 == scope.config_sha256
@@ -100,7 +100,7 @@ impl Database {
         let row: Option<(serde_json::Value, Option<serde_json::Value>)> = sqlx::query_as(
             "SELECT binding,outcome FROM durable_page_operations WHERE operation_id=$1",
         )
-        .bind(&request.binding.operation_id)
+        .bind(request.binding.operation_id())
         .fetch_optional(&self.pool)
         .await?;
         row.map(|(binding, outcome)| {
@@ -130,11 +130,11 @@ async fn lock_request(
     crate::durable::page::validate_request(request)?;
     let (cursor, status): (serde_json::Value, String) =
         sqlx::query_as("SELECT cursor,status FROM scrape_pages WHERE id=$1 FOR UPDATE")
-            .bind(request.binding.page_id)
+            .bind(request.binding.page_id())
             .fetch_one(&mut *connection)
             .await?;
     let (binding,state,cycle,attempts,due,outcome): (serde_json::Value,String,i32,i32,Option<i64>,Option<serde_json::Value>) = sqlx::query_as("SELECT binding,state,cycle,cycle_attempts,retry_at_ms,outcome FROM durable_page_operations WHERE operation_id=$1 FOR UPDATE")
-        .bind(&request.binding.operation_id).fetch_one(&mut *connection).await?;
+        .bind(request.binding.operation_id()).fetch_one(&mut *connection).await?;
     ensure!(
         binding == serde_json::to_value(&request.binding)?,
         "durable operation binding mismatch"
@@ -159,9 +159,9 @@ async fn lock_reservation(
     let actual: (String,i32,i32,i32) = sqlx::query_as("SELECT operation_id,cycle,ordinal,total_attempts FROM durable_page_attempts WHERE attempt_id=$1 FOR UPDATE")
         .bind(&reservation.attempt_id).fetch_one(connection).await?;
     ensure!(
-        actual
+        (actual.0.as_str(), actual.1, actual.2, actual.3)
             == (
-                reservation.request.binding.operation_id.clone(),
+                reservation.request.binding.operation_id(),
                 reservation.cycle,
                 reservation.ordinal,
                 reservation.total_attempts

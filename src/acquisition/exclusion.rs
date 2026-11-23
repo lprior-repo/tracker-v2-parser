@@ -22,16 +22,16 @@ impl ScopeExclusion {
             .acquisition
             .exclusion_reason(&request.target)
             .map(|reason| Self {
-                config_sha256: request.binding.scope.config_sha256.clone(),
-                target_sha256: request.binding.target_sha256.clone(),
+                config_sha256: request.binding.scope().config_sha256.clone(),
+                target_sha256: request.binding.target_sha256().to_owned(),
                 reason,
             }))
     }
 
     pub fn check(&self, request: &PageRequest) -> Result<()> {
         ensure!(
-            self.config_sha256 == request.binding.scope.config_sha256
-                && self.target_sha256 == request.binding.target_sha256,
+            self.config_sha256 == request.binding.scope().config_sha256
+                && self.target_sha256 == request.binding.target_sha256(),
             "durable scope exclusion binding mismatch"
         );
         Ok(())

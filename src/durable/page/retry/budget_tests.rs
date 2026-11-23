@@ -30,13 +30,13 @@ async fn settle_old_attempts(state: &'static str) -> Result<()> {
         let ReservationDecision::Reserved {reservation}=page::reserve_configured(&database,&config,&request,now).await? else {anyhow::bail!("reservation")};
         database.durable_fail_with_policy(&reservation,failure(now),&policy).await?;
         sqlx::query("INSERT INTO durable_page_attempts(attempt_id,operation_id,cycle,ordinal,total_attempts,state,outcome) SELECT repeat(md5($1||':'||n::text),2),$1,((n-1)/3)+1,((n-1)%3)+1,n,'failed',jsonb_build_object('state','deferred','retry_at_ms',$2::bigint,'cycle',((n-1)/3)+1) FROM generate_series(2,45) n")
-            .bind(&request.binding.operation_id).bind(now+60_000).execute(pool).await?;
-        sqlx::query("UPDATE scrape_pages SET attempts=45 WHERE id=$1").bind(request.binding.page_id).execute(pool).await?;
+            .bind(request.binding.operation_id()).bind(now+60_000).execute(pool).await?;
+        sqlx::query("UPDATE scrape_pages SET attempts=45 WHERE id=$1").bind(request.binding.page_id()).execute(pool).await?;
         sqlx::query("UPDATE durable_page_operations SET cycle=15,cycle_attempts=3,retry_at_ms=$2,outcome=jsonb_build_object('state','deferred','retry_at_ms',$2::bigint,'cycle',15) WHERE operation_id=$1")
-            .bind(&request.binding.operation_id).bind(now+60_000).execute(pool).await?;
+            .bind(request.binding.operation_id()).bind(now+60_000).execute(pool).await?;
         if state == "active" {
             sqlx::query("UPDATE durable_page_operations SET state='active',outcome=NULL,retry_at_ms=NULL WHERE operation_id=$1")
-                .bind(&request.binding.operation_id).execute(pool).await?;
+                .bind(request.binding.operation_id()).execute(pool).await?;
         }
         let old_attempts:serde_json::Value=sqlx::query_scalar("SELECT jsonb_agg(to_jsonb(a) ORDER BY attempt_id) FROM durable_page_attempts a").fetch_one(pool).await?;
         assert!(matches!(page::reserve_configured(&database,&config,&request,now).await?,ReservationDecision::Settled {outcome:PageOutcome::Exhausted {detail}} if detail.contains("45") && detail.contains("3") && detail.contains("DNS lookup failed")));

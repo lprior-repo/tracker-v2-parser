@@ -31,7 +31,7 @@ pub(super) async fn run(
     let submission = submit(runtime, &path).await?;
     let root_id = io::invocation(&submission)?.to_owned();
     evidence::identifier(&root_id, "inv_")?;
-    let (child_id, child_key) = child(runtime, &seeded.request.generation).await?;
+    let (child_id, child_key) = child(runtime, seeded.request.generation()).await?;
     journal::wait_for_sleep(runtime, &child_id).await?;
     let restart = runtime.restart_active(&root_id).await?;
     let report = runtime

@@ -28,7 +28,7 @@ impl ExtensionPage {
         Json(input): Json<PageExecution>,
     ) -> HandlerResult<Json<PageOutcome>> {
         page::validate_request(&input.request).terminal()?;
-        if input.request.binding.page_id != self.page_id
+        if input.request.binding.page_id() != self.page_id
             || input.request.deadline_extension.is_none()
         {
             return Err(TerminalError::new(
@@ -38,7 +38,7 @@ impl ExtensionPage {
         }
         ctx.sleep(Duration::from_secs(30)).await?;
         if crate::durable::model::page_config_digest(&input.config).terminal()?
-            != input.request.binding.scope.config_sha256
+            != input.request.binding.scope().config_sha256
         {
             return Err(
                 TerminalError::new("extension fixture configuration binding mismatch").into(),
@@ -74,7 +74,7 @@ impl ExtensionPage {
         if !matches!(
             &outcome,
             PageOutcome::Deferred { retry_at_ms, .. }
-                if *retry_at_ms > input.request.binding.scope.deadline_ms
+                if *retry_at_ms > input.request.binding.scope().deadline_ms
                     && *retry_at_ms < input.request.effective_deadline_ms()
         ) {
             return Err(TerminalError::new(

@@ -31,7 +31,7 @@ async fn real_fetch_admission_contention_is_persisted_as_deferred_and_resumes_wi
         assert_eq!(cycle, 1);
         assert!(retry_at_ms >= now + 1000);
         let state: (String, i64, serde_json::Value) = sqlx::query_as("SELECT state,retry_at_ms,outcome FROM durable_page_operations WHERE operation_id=$1")
-            .bind(&request.binding.operation_id).fetch_one(pool).await?;
+            .bind(request.binding.operation_id()).fetch_one(pool).await?;
         assert_eq!(state, ("deferred".into(), retry_at_ms, serde_json::json!({"state":"deferred","retry_at_ms":retry_at_ms,"cycle":1})));
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests").fetch_one(pool).await?, 0);
         assert!(matches!(page::reserve(&database, &request, retry_at_ms - 1).await?, ReservationDecision::Settled { outcome: PageOutcome::Deferred { .. } }));

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow};
 use futures::{TryStreamExt, future::poll_fn, stream};
 use tokio::{
     sync::{Mutex as AsyncMutex, oneshot},
@@ -32,10 +32,10 @@ impl fmt::Display for BlockingStageUnavailable {
 
 impl std::error::Error for BlockingStageUnavailable {}
 
-#[derive(Debug)]
-enum BlockingJoinFailure {
-    Panicked(JoinError),
-    Cancelled(JoinError),
+#[derive(Clone, Debug)]
+pub enum BlockingJoinFailure {
+    Panicked(Arc<JoinError>),
+    Cancelled(Arc<JoinError>),
 }
 
 impl fmt::Display for BlockingJoinFailure {
@@ -50,50 +50,140 @@ impl fmt::Display for BlockingJoinFailure {
     }
 }
 
-impl std::error::Error for BlockingJoinFailure {}
+impl std::error::Error for BlockingJoinFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Panicked(error) | Self::Cancelled(error) => Some(error.as_ref()),
+        }
+    }
+}
 
 impl From<JoinError> for BlockingJoinFailure {
     fn from(error: JoinError) -> Self {
         if error.is_panic() {
-            Self::Panicked(error)
+            Self::Panicked(Arc::new(error))
         } else {
-            Self::Cancelled(error)
+            Self::Cancelled(Arc::new(error))
         }
     }
 }
 
-#[derive(Default)]
-struct Failures {
-    details: Vec<String>,
-    count: u64,
+#[derive(Clone, Debug, Default)]
+pub struct BlockingDrainFailures {
+    file_details: Vec<String>,
+    file_count: u64,
+    panic_count: u64,
+    cancellation_count: u64,
+    first_panic: Option<BlockingJoinFailure>,
+    first_cancellation: Option<BlockingJoinFailure>,
+    outstanding: usize,
 }
 
-impl Failures {
-    fn record(&mut self, detail: String) {
-        self.count = self.count.saturating_add(1);
-        if self.details.len() < MAX_TASKS {
-            self.details.push(detail);
+impl BlockingDrainFailures {
+    #[must_use]
+    pub const fn panicked(&self) -> Option<&BlockingJoinFailure> {
+        self.first_panic.as_ref()
+    }
+
+    #[must_use]
+    pub const fn cancelled(&self) -> Option<&BlockingJoinFailure> {
+        self.first_cancellation.as_ref()
+    }
+
+    #[must_use]
+    pub const fn outstanding(&self) -> usize {
+        self.outstanding
+    }
+
+    const fn count(&self) -> u64 {
+        self.file_count
+            .saturating_add(self.panic_count)
+            .saturating_add(self.cancellation_count)
+    }
+
+    fn record_file(&mut self, detail: String) {
+        self.file_count = self.file_count.saturating_add(1);
+        if self.file_details.len() < MAX_TASKS {
+            self.file_details.push(detail);
         }
     }
+
+    fn record_join(&mut self, error: JoinError) {
+        let (count, first) = if error.is_panic() {
+            (&mut self.panic_count, &mut self.first_panic)
+        } else {
+            (&mut self.cancellation_count, &mut self.first_cancellation)
+        };
+        *count = count.saturating_add(1);
+        first.get_or_insert_with(|| BlockingJoinFailure::from(error));
+    }
 }
+
+impl fmt::Display for BlockingDrainFailures {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.outstanding != 0 {
+            write!(
+                formatter,
+                "owned blocking stage drain exceeded {} seconds; {} stages still owned; running blocking work cannot be cancelled",
+                DRAIN_BUDGET.as_secs(),
+                self.outstanding
+            )?;
+            if self.count() != 0 {
+                formatter.write_str("; ")?;
+            }
+        }
+        if self.count() == 0 {
+            return Ok(());
+        }
+        write!(formatter, "{} owned blocking stages failed", self.count())?;
+        self.file_details
+            .iter()
+            .try_for_each(|detail| write!(formatter, "; {detail}"))?;
+        self.first_panic
+            .iter()
+            .chain(&self.first_cancellation)
+            .try_for_each(|error| write!(formatter, "; {error}"))
+    }
+}
+
+impl std::error::Error for BlockingDrainFailures {}
 
 #[derive(Clone, Default)]
-struct FailureLog(Arc<Mutex<Failures>>);
+struct FailureLog(Arc<Mutex<BlockingDrainFailures>>);
 
 impl FailureLog {
-    fn lock(&self) -> Result<MutexGuard<'_, Failures>> {
+    fn lock(&self) -> Result<MutexGuard<'_, BlockingDrainFailures>> {
         self.0
             .lock()
             .map_err(|_| anyhow!("owned blocking stage failure log is poisoned"))
     }
 
-    fn record(&self, error: &anyhow::Error) {
+    fn record_file(&self, error: &anyhow::Error) {
         let detail: String = format!("{error:#}").chars().take(2048).collect();
         tracing::error!(error = %detail, "owned blocking stage failed");
         match self.lock() {
-            Ok(mut failures) => failures.record(detail),
+            Ok(mut failures) => failures.record_file(detail),
             Err(error) => tracing::error!(%error, "could not retain blocking stage failure"),
         }
+    }
+
+    fn record_join(&self, error: JoinError) {
+        tracing::error!(%error, panicked = error.is_panic(), "owned blocking stage join failed");
+        match self.lock() {
+            Ok(mut failures) => failures.record_join(error),
+            Err(error) => tracing::error!(%error, "could not retain blocking stage failure"),
+        }
+    }
+
+    fn outcome(&self, outstanding: usize) -> Result<()> {
+        let failures = self.lock()?;
+        if failures.count() == 0 && outstanding == 0 {
+            return Ok(());
+        }
+        let mut report = failures.clone();
+        drop(failures);
+        report.outstanding = outstanding;
+        Err(report.into())
     }
 }
 
@@ -105,7 +195,7 @@ struct UndeliveredFailure {
 impl Drop for UndeliveredFailure {
     fn drop(&mut self) {
         if let Some(error) = &self.error {
-            self.log.record(error);
+            self.log.record_file(error);
         }
     }
 }
@@ -121,10 +211,8 @@ impl State {
     fn observe(&self, result: std::result::Result<Result<()>, JoinError>) {
         match result {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => self.failures.record(&error),
-            Err(error) => self
-                .failures
-                .record(&BlockingJoinFailure::from(error).into()),
+            Ok(Err(error)) => self.failures.record_file(&error),
+            Err(error) => self.failures.record_join(error),
         }
     }
 
@@ -137,20 +225,7 @@ impl State {
     }
 
     fn outcome(&self) -> Result<()> {
-        ensure!(
-            self.tasks.is_empty(),
-            "{} owned blocking stages remain running; blocking work cannot be cancelled",
-            self.tasks.len()
-        );
-        let failures = self.failures.lock()?;
-        ensure!(
-            failures.count == 0,
-            "{} owned blocking stages failed: {}",
-            failures.count,
-            failures.details.join("; ")
-        );
-        drop(failures);
-        Ok(())
+        self.failures.outcome(self.tasks.len())
     }
 }
 
@@ -303,18 +378,13 @@ impl BlockingStages {
                 .try_for_each(|_| self.join_next(false))
                 .await
         };
-        if let Ok(result) = tokio::time::timeout(DRAIN_BUDGET, drain).await {
-            result?;
-        } else {
-            let mut state = self.state()?;
-            state.reap();
-            let outstanding = state.tasks.len();
-            drop(state);
-            return Err(anyhow!(
-                "owned blocking stage drain exceeded 90 seconds; {outstanding} stages still owned; running blocking work cannot be cancelled"
-            ));
+        let result = tokio::time::timeout(DRAIN_BUDGET, drain).await;
+        let mut state = self.state()?;
+        match result {
+            Ok(result) => result?,
+            Err(_) => state.reap(),
         }
-        self.state()?.outcome()
+        state.outcome()
     }
 }
 

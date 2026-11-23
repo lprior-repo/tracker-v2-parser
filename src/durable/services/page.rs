@@ -124,7 +124,7 @@ impl AthleticPage {
         let database = &self.runtime.database;
         crate::runner::durable::check_stops(database, &input.config).await?;
         transport.set_wire_context(
-            &reservation.request.binding.operation_id,
+            reservation.request.binding.operation_id(),
             &reservation.attempt_id,
         )?;
         page::fetch_configured(
@@ -174,7 +174,7 @@ impl AthleticPage {
 fn validate_execution(input: &PageExecution) -> HandlerResult<()> {
     page::validate_request(&input.request).terminal()?;
     if crate::durable::model::page_config_digest(&input.config).terminal()?
-        != input.request.binding.scope.config_sha256
+        != input.request.binding.scope().config_sha256
     {
         return Err(TerminalError::new("page configuration binding mismatch").into());
     }

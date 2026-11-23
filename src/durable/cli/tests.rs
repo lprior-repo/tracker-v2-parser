@@ -27,9 +27,9 @@ fn given_run_settings_when_crawl_is_built_then_request_uses_configured_bounds() 
     let config =
         Config::parse("states=['WI']\n[run]\nhours=6\nmax_batches=25\ncooldown_seconds=120")?;
     let request = commands::crawl_request(config, "configured-run".into(), overrides(&[])?, 1000)?;
-    assert_eq!(request.deadline_ms, 21_601_000);
-    assert_eq!(request.max_batches, 25);
-    assert_eq!(request.cooldown_ms, 120_000);
+    assert_eq!(request.deadline_ms(), 21_601_000);
+    assert_eq!(request.max_batches(), 25);
+    assert_eq!(request.cooldown_ms(), 120_000);
     assert_eq!(request.workflow_key(), "configured-run-000000");
     assert_eq!(request.page_scope()?.cooldown_ms, 120_000);
     let encoded = serde_json::to_value(&request)?;
@@ -50,11 +50,11 @@ fn given_cli_overrides_when_crawl_is_built_then_flags_take_precedence() -> Resul
         "15",
     ])?;
     let request = commands::crawl_request(config, "overridden-run".into(), flags, 1000)?;
-    assert_eq!(request.deadline_ms, 7_201_000);
-    assert_eq!(request.max_batches, 7);
-    assert_eq!(request.cooldown_ms, 15_000);
+    assert_eq!(request.deadline_ms(), 7_201_000);
+    assert_eq!(request.max_batches(), 7);
+    assert_eq!(request.cooldown_ms(), 15_000);
     let effective = request
-        .config
+        .config()
         .run
         .ok_or_else(|| anyhow::anyhow!("resolved run settings missing"))?;
     assert_eq!(
@@ -71,7 +71,10 @@ fn given_cli_overrides_when_crawl_is_built_then_flags_take_precedence() -> Resul
         overrides(&["--hours", "1"])?,
         1000,
     )?;
-    assert_eq!((partial.max_batches, partial.cooldown_ms), (25, 120_000));
+    assert_eq!(
+        (partial.max_batches(), partial.cooldown_ms()),
+        (25, 120_000)
+    );
     Ok(())
 }
 
@@ -91,14 +94,14 @@ fn given_legacy_config_when_no_flags_are_set_then_original_request_defaults_rema
     );
     assert!(serde_json::to_value(&config)?.get("run").is_none());
     let request = commands::crawl_request(config, "legacy-run".into(), overrides(&[])?, 1000)?;
-    assert_eq!(request.deadline_ms, 86_401_000);
-    assert_eq!(request.max_batches, 10_000);
-    assert_eq!(request.cooldown_ms, 60_000);
+    assert_eq!(request.deadline_ms(), 86_401_000);
+    assert_eq!(request.max_batches(), 10_000);
+    assert_eq!(request.cooldown_ms(), 60_000);
     let encoded = serde_json::to_string(&request)?;
     let decoded: crate::durable::model::CrawlRequest = serde_json::from_str(&encoded)?;
     assert_eq!(serde_json::to_string(&decoded)?, encoded);
     assert_eq!(
-        decoded.config.run,
+        decoded.config().run,
         Some(crate::config::RunSettings::default())
     );
     let mut legacy = serde_json::to_value(&request)?;
@@ -107,7 +110,7 @@ fn given_legacy_config_when_no_flags_are_set_then_original_request_defaults_rema
         .ok_or_else(|| anyhow::anyhow!("config object"))?
         .remove("run");
     let legacy: crate::durable::model::CrawlRequest = serde_json::from_value(legacy)?;
-    assert!(legacy.config.run.is_none());
+    assert!(legacy.config().run.is_none());
     assert_eq!(
         legacy.page_scope()?.config_sha256,
         "ad2511ee99d77d866b9647ecb8dfd75225571788e15f5ba98cc86cabf4aeb3b2"
@@ -163,8 +166,11 @@ fn given_partial_or_boundary_settings_when_loaded_then_valid_bounds_and_defaults
         overrides(&[])?,
         1000,
     )?;
-    assert_eq!(request.deadline_ms, 43_201_000);
-    assert_eq!((request.max_batches, request.cooldown_ms), (10_000, 60_000));
+    assert_eq!(request.deadline_ms(), 43_201_000);
+    assert_eq!(
+        (request.max_batches(), request.cooldown_ms()),
+        (10_000, 60_000)
+    );
     Ok(())
 }
 
@@ -194,7 +200,7 @@ fn given_run_templates_when_loaded_then_operational_settings_are_explicit() -> R
         );
         let request =
             commands::crawl_request(config, "template-run".into(), overrides(&[])?, 1000)?;
-        assert_eq!(request.max_batches, settings.max_batches);
+        assert_eq!(request.max_batches(), settings.max_batches);
     }
     Ok(())
 }
@@ -208,7 +214,7 @@ fn new_cli_crawl_defaults_to_the_single_current_rolling_scheduler() -> Result<()
         1000,
     )?;
     assert_eq!(
-        request.scheduler_version,
+        request.scheduler_version(),
         Some(crate::durable::model::SchedulerVersion::RollingV2)
     );
     assert_eq!(
