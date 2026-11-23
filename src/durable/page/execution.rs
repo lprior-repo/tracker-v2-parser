@@ -1,3 +1,4 @@
+mod encoding;
 mod fetch;
 
 pub use fetch::fetch;
@@ -179,7 +180,22 @@ pub async fn parse(
     if target.source == Source::MileSplit && target.kind == PageKind::Athlete {
         artifacts::attach(files.root, reference, &target.url, &mut page)?;
     }
-    let bytes = serde_json::to_vec(&page)?;
+    let encoded = encoding::encode(&page)?;
+    drop(page);
+    let bytes = match encoded {
+        encoding::EncodedPage::Json(bytes) => bytes,
+        encoding::EncodedPage::TooLarge => {
+            let outcome = reject_source_data(
+                database,
+                reservation,
+                &capture,
+                "parsed page exceeds the 64 MiB durable artifact grant",
+                now_ms,
+            )
+            .await?;
+            return Ok(ParseDecision::Settled { outcome });
+        }
+    };
     let body = artifacts::write(files, bytes, artifacts::MAX_PARSED_BYTES).await?;
     let parsed = ParsedRef {
         body,
@@ -200,7 +216,41 @@ pub async fn persist(
     let bytes = artifacts::read(files, &parsed.body, artifacts::MAX_PARSED_BYTES).await?;
     let page: ParsedPage =
         serde_json::from_slice(&bytes).context("decoding durable parsed page")?;
-    database
+    let result = database
         .durable_persist(reservation, reference, parsed, &capture, &page)
+        .await;
+    match result {
+        Err(error) if error.is::<crate::database::PageDataRejected>() => {
+            reject_source_data(
+                database,
+                reservation,
+                &capture,
+                &format!("{error:#}"),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+        }
+        outcome => outcome,
+    }
+}
+
+async fn reject_source_data(
+    database: &Database,
+    reservation: &PageReservation,
+    capture: &Capture,
+    detail: &str,
+    now_ms: i64,
+) -> Result<PageOutcome> {
+    database
+        .durable_fail(
+            reservation,
+            FailureRecord {
+                class: FailureClass::Rejected,
+                detail: &super::failures::bounded_detail(detail),
+                capture: Some(capture),
+                stopped_origin: None,
+                observed_at_ms: now_ms,
+            },
+        )
         .await
 }

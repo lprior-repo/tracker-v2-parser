@@ -33,6 +33,14 @@ async fn cancellation_while_waiting_for_local_fence_retains_unconfirmed_intent()
         assert!(!called);
         drop(hold);
         assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_requests WHERE state='intent' AND execute_started_at IS NULL").fetch_one(pool).await?,1);
+        assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM durable_wire_pacing WHERE lease_token IS NOT NULL AND next_allowed_at>clock_timestamp()+INTERVAL '44 seconds'").fetch_one(pool).await?,2);
+        let restarted = PersistentPacing::new(pool.clone()).with_overlapped_starts().with_wire_context(&"2".repeat(64), &"c".repeat(64))?;
+        let mut restarted_called = false;
+        assert!(tokio::time::timeout(Duration::from_millis(75), restarted.send(request()?, Duration::from_millis(1), async {
+            restarted_called = true;
+            anyhow::bail!("cancelled dispatch must retain its crash reservation")
+        })).await.is_err());
+        assert!(!restarted_called);
         let replay = sending.restart_wire_sequence()?;
         assert!(replay.send(request()?,Duration::from_millis(1),async {
             called = true;
@@ -74,20 +82,41 @@ async fn overlapping_waiter_rechecks_new_403_before_client_execute() -> Result<(
                 .retry(reqwest::retry::never())
                 .build()?;
             let gate = PersistentPacing::new(pool.clone()).with_overlapped_starts();
-            let results = join_all((1..=2).map(|index| {
-                let client = &client;
-                let url = fixture.url.clone();
-                let gate = gate.clone();
-                async move {
-                    gate
-                        .with_wire_context(&format!("{index:064x}"), &"b".repeat(64))?
-                        .send(request()?, Duration::from_millis(500), async {
-                            Ok(client.get(url).send().await?)
-                        })
-                        .await
+            let fixture_url = fixture.url.clone();
+            let (entered, observed) = tokio::sync::oneshot::channel();
+            let (release_headers, headers_released) = tokio::sync::oneshot::channel();
+            let first = gate.clone().with_wire_context(&"1".repeat(64), &"b".repeat(64))?;
+            let first_send = first.send(request()?, Duration::from_millis(500), async {
+                entered.send(()).expect("first operation observer");
+                let response = client.get(fixture_url.clone()).send().await?;
+                headers_released.await.context("header release observer")?;
+                Ok(response)
+            });
+            tokio::pin!(first_send);
+            tokio::select! {
+                result = observed => result.context("first operation entry")?,
+                result = &mut first_send => anyhow::bail!("first operation ended before release: {result:?}"),
+            }
+            let held = tokio::select! {
+                held = gate.starts.admit(Source::MileSplit, Duration::from_millis(1)) => held?,
+                result = &mut first_send => anyhow::bail!("first headers ended before release: {result:?}"),
+            };
+            let second = gate.clone().with_wire_context(&"2".repeat(64), &"b".repeat(64))?;
+            let second_send = second.send(request()?, Duration::from_millis(500), async {
+                Ok(client.get(fixture_url.clone()).send().await?)
+            });
+            tokio::pin!(second_send);
+            tokio::time::timeout(Duration::from_secs(3), async {
+                tokio::select! {
+                    observed = wait_for_wire_count(pool, 2) => observed,
+                    result = &mut second_send => anyhow::bail!("second operation escaped held fence: {result:?}"),
                 }
-            }))
-            .await;
+            }).await??;
+            release_headers.send(()).expect("first header release");
+            let first_result = first_send.await;
+            drop(held);
+            let second_result = second_send.await;
+            let results = [first_result, second_result];
             assert_eq!(
                 results
                     .iter()

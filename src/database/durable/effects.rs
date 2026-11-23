@@ -86,28 +86,21 @@ impl Database {
             timings.measure(Stage::Commit, transaction.commit()).await?;
             return Ok(outcome);
         }
-        let (saved_capture, saved_parsed, state): (
-            Option<serde_json::Value>,
-            Option<serde_json::Value>,
-            String,
-        ) = sqlx::query_as(
-            "SELECT capture,parsed,state FROM durable_page_attempts WHERE attempt_id=$1",
+        if let Some(outcome) = saved_attempt_outcome(
+            &mut transaction,
+            &reservation.attempt_id,
+            &capture_json,
+            &parsed_json,
+            capture_matches,
+            parsed_digest,
+            parsed_ref,
         )
-        .bind(&reservation.attempt_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        ensure!(
-            saved_capture.as_ref() == Some(&capture_json)
-                && saved_parsed.as_ref() == Some(&parsed_json)
-                && state == "parsed",
-            "durable persistence requires its exact recorded parse and capture"
-        );
-        ensure!(capture_matches, "durable effect capture bytes mismatch");
-        ensure!(
-            parsed_digest? == parsed_ref.body.sha256,
-            "durable effect parsed bytes mismatch"
-        );
-        let page_id = timings
+        .await?
+        {
+            timings.measure(Stage::Commit, transaction.commit()).await?;
+            return Ok(outcome);
+        }
+        let result = timings
             .measure(
                 Stage::Domain,
                 Box::pin(records::persist_locked(
@@ -118,7 +111,17 @@ impl Database {
                     parsed,
                 )),
             )
-            .await?;
+            .await;
+        let page_id = match result {
+            Ok(page_id) => page_id,
+            Err(error) => {
+                transaction
+                    .rollback()
+                    .await
+                    .with_context(|| format!("rolling back failed page persistence: {error:#}"))?;
+                return Err(super::super::page_data::classify(error));
+            }
+        };
         let receipt_sha256 = receipt_digest?;
         let outcome = PageOutcome::Completed {
             page_id,
@@ -145,6 +148,53 @@ impl Database {
             .context("committing durable domain effects and receipt")?;
         Ok(outcome)
     }
+}
+
+#[tracing::instrument(skip_all)]
+async fn saved_attempt_outcome(
+    connection: &mut sqlx::PgConnection,
+    attempt_id: &str,
+    capture_json: &serde_json::Value,
+    parsed_json: &serde_json::Value,
+    capture_matches: bool,
+    parsed_digest: Result<String>,
+    parsed_ref: &ParsedRef,
+) -> Result<Option<PageOutcome>> {
+    let (saved_capture, saved_parsed, state, saved_outcome): (
+        Option<serde_json::Value>,
+        Option<serde_json::Value>,
+        String,
+        Option<serde_json::Value>,
+    ) = sqlx::query_as(
+        "SELECT capture,parsed,state,outcome FROM durable_page_attempts WHERE attempt_id=$1",
+    )
+    .bind(attempt_id)
+    .fetch_one(connection)
+    .await?;
+    ensure!(
+        saved_capture.as_ref() == Some(capture_json) && saved_parsed.as_ref() == Some(parsed_json),
+        "durable persistence requires its exact recorded parse and capture"
+    );
+    ensure!(capture_matches, "durable effect capture bytes mismatch");
+    ensure!(
+        parsed_digest? == parsed_ref.body.sha256,
+        "durable effect parsed bytes mismatch"
+    );
+    if state == "failed" {
+        let outcome: PageOutcome = serde_json::from_value(
+            saved_outcome.context("failed durable attempt has no recorded outcome")?,
+        )?;
+        ensure!(
+            !matches!(outcome, PageOutcome::Completed { .. }),
+            "failed durable attempt has a completed outcome"
+        );
+        return Ok(Some(outcome));
+    }
+    ensure!(
+        state == "parsed",
+        "durable persistence requires a parsed attempt"
+    );
+    Ok(None)
 }
 
 #[tracing::instrument(skip_all)]

@@ -138,6 +138,12 @@ impl Transport {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_http_test_budget(mut self, budget: std::time::Duration) -> Self {
+        self.http_test_budget = Some(budget);
+        self
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_pacing_test_polls(mut self, polls: usize) -> Result<Self> {
         let pacing = self
             .persistent_pacing

@@ -119,3 +119,118 @@ async fn disk_full_sqlstate_retries_while_unique_violation_stays_terminal_withou
     })
     .await
 }
+
+async fn failed_receipt_with_sqlstate(pool: &sqlx::PgPool, code: &str) -> Result<anyhow::Error> {
+    let statement = format!(
+        "DO $owned$ BEGIN RAISE SQLSTATE '{code}' USING MESSAGE='owned recovery fixture'; END $owned$;"
+    );
+    let failure: Result<Value> = with_receipt(
+        pool,
+        &format!("recovery-{code}"),
+        &"a".repeat(64),
+        move |connection| {
+            Box::pin(async move {
+                sqlx::query("INSERT INTO athletes(name) VALUES('Uncommitted recovery fixture')")
+                    .execute(&mut *connection)
+                    .await?;
+                sqlx::query(sqlx::AssertSqlSafe(statement))
+                    .execute(connection)
+                    .await?;
+                Ok(json!({"unexpected":"committed"}))
+            })
+        },
+    )
+    .await;
+    let failure = failure.expect_err("PostgreSQL must raise the requested SQLSTATE");
+    let database_error = failure
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .context("real SQLx database error absent")?;
+    assert_eq!(
+        database_error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some(code)
+    );
+    Ok(failure.context("journaled database effect"))
+}
+
+#[tokio::test]
+async fn postgres_restart_and_connection_failures_remain_retryable_without_receipts() -> Result<()>
+{
+    with_database(|pool| {
+        Box::pin(async move {
+            let before = committed_counts(pool).await?;
+            let mut observed = std::collections::BTreeMap::new();
+            for code in ["08001", "08003", "08006", "57P02", "57P03", "57P05"] {
+                let failure = failed_receipt_with_sqlstate(pool, code).await?;
+                observed.insert(code, super::transient(&failure));
+                assert_eq!(committed_counts(pool).await?, before);
+            }
+            assert_eq!(
+                observed,
+                std::collections::BTreeMap::from([
+                    ("08001", true),
+                    ("08003", true),
+                    ("08006", true),
+                    ("57P02", true),
+                    ("57P03", true),
+                    ("57P05", true),
+                ])
+            );
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn postgres_authentication_protocol_corruption_and_schema_failures_stay_terminal()
+-> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let before = committed_counts(pool).await?;
+            for code in [
+                "08004", "08P01", "28P01", "57P04", "23505", "42601", "54000", "XX001",
+            ] {
+                let failure = failed_receipt_with_sqlstate(pool, code).await?;
+                assert_classification(failure, false);
+                assert_eq!(committed_counts(pool).await?, before);
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn retrying_database_effect_after_recovery_commits_exactly_once() -> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let failure = failed_receipt_with_sqlstate(pool, "57P03").await?;
+            assert_classification(failure, true);
+            let first: Value = with_receipt(pool, "recovery-57P03", &"a".repeat(64), |connection| {
+                Box::pin(async move {
+                    sqlx::query("INSERT INTO athletes(name) VALUES('Recovered receipt fixture')")
+                        .execute(connection)
+                        .await?;
+                    Ok(json!({"recovered":true}))
+                })
+            })
+            .await?;
+            let repeated: Value = with_receipt(pool, "recovery-57P03", &"a".repeat(64), |_| {
+                Box::pin(async { anyhow::bail!("committed effect must not execute twice") })
+            })
+            .await?;
+            assert_eq!(first, json!({"recovered":true}));
+            assert_eq!(repeated, first);
+            assert_eq!(
+                committed_counts(pool).await?,
+                json!({"athletes":1,"operation_receipts":1,"page_receipts":0,"pages":0,"wire_requests":0})
+            );
+            Ok(())
+        })
+    })
+    .await
+}

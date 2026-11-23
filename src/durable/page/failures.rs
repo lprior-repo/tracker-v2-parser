@@ -99,5 +99,12 @@ pub(super) fn transient_detail(detail: &str) -> bool {
 }
 
 pub(super) fn bounded_detail(detail: &str) -> String {
-    detail.chars().take(2000).collect()
+    detail
+        .chars()
+        .take(2000)
+        .flat_map(|value| {
+            std::iter::once(if value == '\0' { '\\' } else { value })
+                .chain((value == '\0').then_some('0'))
+        })
+        .collect()
 }

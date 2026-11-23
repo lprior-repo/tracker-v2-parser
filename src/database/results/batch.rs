@@ -17,8 +17,6 @@ mod serialization;
 
 const MIN_ROWS: usize = 8;
 const MAX_BYTES: usize = 1024 * 1024;
-const CROSS_ATHLETE_ERROR: &str =
-    "source result ID belongs to a different athlete; refusing to overwrite its identity";
 
 pub(super) enum BatchOutcome {
     Saved,
@@ -209,7 +207,7 @@ async fn persist(
     let returned = returned.into_iter().collect::<BTreeSet<_>>();
     let missing = rows.iter().find(|row| !returned.contains(&row.key));
     if missing.is_some() {
-        bail!(CROSS_ATHLETE_ERROR);
+        bail!(super::super::PageDataRejected::ConflictingResultOwner);
     }
     Ok(())
 }

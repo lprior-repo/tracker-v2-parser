@@ -210,16 +210,16 @@ impl WireScope {
                 && url.password().is_none(),
             "persistent pacing requires an HTTP origin without credentials"
         );
-        let interval_micros = i64::try_from(interval.as_micros())
-            .context("persistent pacing interval exceeds database range")?;
         ensure!(
-            interval_micros > 0,
+            interval >= Duration::from_micros(1),
             "persistent pacing interval is below one microsecond"
         );
+        let interval_micros = i64::try_from(interval.as_nanos().div_ceil(1_000))
+            .context("persistent pacing interval exceeds database range")?;
         let reservation = interval
             .checked_add(WIRE_TIMEOUT)
             .context("persistent wire reservation overflow")?;
-        let reservation_micros = i64::try_from(reservation.as_micros())
+        let reservation_micros = i64::try_from(reservation.as_nanos().div_ceil(1_000))
             .context("persistent wire reservation exceeds database range")?;
         let keys = [
             format!("provider:{}", source.as_str()),

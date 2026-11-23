@@ -72,3 +72,25 @@ fn invalid_configured_pacing_capacity_remains_terminal() {
     let classified = effects::classify(failure.context("journaled source download"));
     assert!(format!("{classified:?}").starts_with("HandlerError(Terminal("));
 }
+
+#[test]
+fn three_rps_sql_intervals_round_up_without_admitting_submicrosecond_rates() -> Result<()> {
+    let scope = WireScope::parse(
+        Source::MileSplit,
+        "https://wi.milesplit.com",
+        Duration::try_from_secs_f64(1.0 / 3.0)?,
+        Spacing::RequestStarts,
+    )?;
+    assert_eq!(scope.interval_micros, 333_334);
+    assert_eq!(scope.reservation_micros, 45_333_334);
+    assert!(
+        WireScope::parse(
+            Source::MileSplit,
+            "https://wi.milesplit.com",
+            Duration::from_nanos(999),
+            Spacing::RequestStarts,
+        )
+        .is_err()
+    );
+    Ok(())
+}

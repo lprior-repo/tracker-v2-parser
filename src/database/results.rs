@@ -158,9 +158,7 @@ async fn upsert(connection: &mut PgConnection, row: ResultRow<'_>) -> Result<i64
     } else {
         saved
     };
-    saved.context(
-        "source result ID belongs to a different athlete; refusing to overwrite its identity",
-    )
+    saved.ok_or_else(|| super::PageDataRejected::ConflictingResultOwner.into())
 }
 
 #[tracing::instrument(skip_all)]

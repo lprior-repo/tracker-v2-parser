@@ -1,3 +1,4 @@
+mod delayed_worker;
 mod measurement;
 
 use std::{sync::Arc, time::Duration};
@@ -124,6 +125,7 @@ async fn late_wire_completion_cannot_rewind_a_newer_provider_start_timestamp() -
                     .await?
                     .is_none()
             );
+            release_reserved_start(&first, &first_receipt, Duration::from_millis(1)).await?;
             tokio::time::sleep(Duration::from_millis(5)).await;
             assert!(
                 second
@@ -227,6 +229,7 @@ async fn three_pending_intents_keep_capacity_debt_without_advancing_a_fourth_sta
                         .await?
                         .is_none()
                 );
+                release_reserved_start(&gate, &receipt, Duration::from_millis(1)).await?;
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             let fourth = PersistentPacing::new(pool.clone())
@@ -266,4 +269,37 @@ async fn three_pending_intents_keep_capacity_debt_without_advancing_a_fourth_sta
         })
     })
     .await
+}
+
+async fn release_reserved_start(
+    gate: &PersistentPacing,
+    receipt: &super::WireReceipt,
+    interval: Duration,
+) -> Result<()> {
+    let request = request()?;
+    let scope = WireScope::parse(
+        request.source,
+        &request.address,
+        interval,
+        Spacing::RequestStarts,
+    )?;
+    gate.complete(
+        &scope,
+        super::store::start_token(receipt)?,
+        Some(Instant::now()),
+    )
+    .await
+}
+
+async fn wait_for_wire_count(pool: &sqlx::PgPool, expected: i64) -> Result<()> {
+    for _ in 0..300 {
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_wire_requests")
+            .fetch_one(pool)
+            .await?;
+        if count == expected {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    anyhow::bail!("expected {expected} committed wire intents were not observed")
 }

@@ -18,6 +18,7 @@ mod identity;
 mod keys;
 pub(crate) mod local_access_stop;
 pub mod operation_receipts;
+mod page_data;
 mod performance;
 mod profile_coverage;
 mod queue;
@@ -36,6 +37,7 @@ pub use export_snapshot::{
     EXPORT_COMPONENT_BYTES, EXPORT_MAX_OBSERVATIONS, ExportLimitExceeded, ExportSnapshot,
     ExportSnapshotInvalidated,
 };
+pub(crate) use page_data::PageDataRejected;
 
 #[derive(Debug)]
 pub struct Database {

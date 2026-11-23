@@ -53,8 +53,8 @@ impl PersistentPacing {
             inserted == 1,
             "durable wire network interruption: overlapped intent already exists; bounded next attempt required"
         );
-        let changed = sqlx::query("WITH clock AS(SELECT clock_timestamp() AS now) UPDATE durable_wire_pacing SET next_allowed_at=clock.now+$2::bigint*INTERVAL '1 microsecond',lease_token=NULL,updated_at=clock.now FROM clock WHERE pacing_key=ANY($1)")
-            .bind(scope.keys.as_slice()).bind(scope.interval_micros).execute(&mut *transaction).await?;
+        let changed = sqlx::query("WITH clock AS(SELECT clock_timestamp() AS now) UPDATE durable_wire_pacing SET next_allowed_at=clock.now+$2::bigint*INTERVAL '1 microsecond',lease_token=$3,updated_at=clock.now FROM clock WHERE pacing_key=ANY($1)")
+            .bind(scope.keys.as_slice()).bind(scope.reservation_micros).bind(start_token(receipt)?).execute(&mut *transaction).await?;
         ensure!(
             changed.rows_affected() == 2,
             "overlapped admission lost pacing rows"
@@ -65,6 +65,13 @@ impl PersistentPacing {
             .context("committing durable start admission and wire intent")?;
         Ok(None)
     }
+}
+
+pub(super) fn start_token(receipt: &WireReceipt) -> Result<&str> {
+    receipt
+        .wire_id
+        .get(..32)
+        .context("durable wire identity has no pacing token")
 }
 
 async fn check_stops(

@@ -504,6 +504,25 @@ Checkpoints remain available when the bounded run ends. Nonblocked page failures
 remain recorded while untouched pages continue; automatic attempts and saved
 access stops are preserved across restarts and new runs.
 
+Source data rejected during persistence also becomes a recorded page rejection.
+This includes text PostgreSQL cannot represent, source values that exceed the
+verified PostgreSQL index-entry limits, and a published result identity that
+conflicts with a different athlete. The complete page transaction rolls
+back before the rejection is saved; earlier accepted data stays intact. Its
+capture and parsed artifact remain available for review, and replay returns the
+same rejection without another request or partial write. Other pages can continue.
+This rejects the complete conflicting page, so valid rows from that page remain
+in its retained evidence until the conflict is reviewed.
+
+NUL characters in failure diagnostics are escaped before saving the bounded
+message. Raw capture bytes retain the original evidence. A parsed page that
+would exceed the 64 MiB artifact grant is rejected with its capture retained.
+JSON encoding stops at that limit; the already constructed parser model and
+parser CPU time are separate resource costs. Authentication, unexpected SQL
+constraints, schema failures, corrupt artifacts and changed bindings remain
+errors requiring intervention. PostgreSQL restart, unavailable-connection and
+idle-session-disconnect errors use the existing durable retry policy.
+
 Assigned result writes use one parameterized upsert for eligible chunks of 8–128
 rows, within a 1 MiB encoded bind budget. Reference lookups remain bounded to the
 same chunk. Sparse marks/events, repeated result keys, unresolved references,
@@ -929,6 +948,46 @@ Slow preparation therefore cannot consume the interval reserved for dispatch.
 Legacy durable request-start spacing anchors its cooldown to entry into the HTTP
 operation, after preflight SQL and durable intent recording. Database waits before
 that entry cannot consume the interval between operations.
+Rolling requests commit provider and origin ownership with their wire intent,
+retain that lease until the first poll of the HTTP operation, and release it with
+a cooldown anchored to that start. Independent workers therefore share the start
+fence while response headers remain concurrent. Pacing transactions finish before
+waiting for the HTTP response; acquisition admission retains its existing
+transaction-scoped guards. Interrupted ownership retains the existing bounded crash debt;
+expired or replaced lease tokens cannot release another request's ownership.
+Persisted intervals round up to microseconds. Update or drain every active worker
+before relying on this repair; an older rolling worker still has its older
+admission behavior.
+
+Three RPS is a provider and origin request-start ceiling. It counts retries,
+redirects and preflight requests as requests, and does not mean three successfully
+parsed pages per second. The next-states profile enables only MileSplit at three
+RPS with three acquisition slots. Slots, response latency, parsing, persistence,
+available work and batch continuation delays can lower the achieved rate.
+For pages requiring one request each, three fully occupied page slots and an
+average slot occupancy of two seconds cannot sustain more than 1.5 pages per
+second. HTTP 503s, truncated bodies and network failures retain finite retries;
+HTTP 401/402/403/429/451 and detected challenges retain their access stops.
+Database outages and required provider pauses take precedence over throughput.
+
+Run the opt-in mixed-failure qualification against a disposable PostgreSQL test
+database after the ordinary quality gates:
+
+```sh
+RESILIENCE_CADENCE_REPORT=/absolute/path/resilience-cadence.json \
+  cargo test --workspace --release --all-features --locked --lib \
+  release_mixed_failure_page_cadence -- --ignored --nocapture
+```
+
+This exercises real local HTTP, shared PostgreSQL acquisition admission and
+pacing, retained artifacts, parsing, persistence, finite retries and replay. The
+responsive scenario combines valid profiles, malformed JSON-LD, HTTP 503s and
+truncated bodies and requires at least 90% of the configured three-RPS cadence.
+The slow scenario also stalls response bodies beyond an explicit test-only
+eight-second timeout and checks progress and exact attempt counts without imposing
+a throughput floor. Production HTTP budgets stay unchanged. Reports measure
+operation-start timestamps; they do not measure remote packet arrival or qualify
+live providers, and the bounded page driver does not measure Restate scheduling.
 The configured page budget and access-stop guards still apply. Profiles already fetched
 without public marks do not gain invented PRs; this mode does not establish
 statewide completeness.
@@ -949,8 +1008,8 @@ start a new generation; a running generation keeps its frozen configuration.
 | `run.cooldown_seconds` | Bound workflow cooldown, from 15 to 3,600 seconds; never replenishes page attempts |
 | `acquisition.profile_coverage_only` | `true` sweeps saved school chains; use `false` to discover an empty state/cohort |
 | `acquisition.collect_contacts` | Discover and parse published school contacts |
-| `limits.requests_per_second` | Shared global request ceiling, at most 3 |
-| `limits.contact_requests_per_second` | Contact request ceiling within the global limit |
+| `limits.requests_per_second` | Shared provider and origin request ceiling, at most 3 |
+| `limits.contact_requests_per_second` | Contact request ceiling within the provider limit |
 | `limits.concurrency` | At most 3 simultaneous acquisition slots, shared across campaigns |
 | `limits.public_results_every` | Public discovery reservation frequency across batch boundaries, from 1 to 128 |
 | `limits.max_pages` | Work units per durable batch |

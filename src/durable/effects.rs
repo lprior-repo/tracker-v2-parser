@@ -68,7 +68,18 @@ pub fn transient(error: &anyhow::Error) -> bool {
                 sqlx::Error::Database(database) => database.code().is_some_and(|code| {
                     matches!(
                         code.as_ref(),
-                        "40001" | "40P01" | "55P03" | "57P01" | "53100" | "53300"
+                        "08001"
+                            | "08003"
+                            | "08006"
+                            | "40001"
+                            | "40P01"
+                            | "55P03"
+                            | "57P01"
+                            | "57P02"
+                            | "57P03"
+                            | "57P05"
+                            | "53100"
+                            | "53300"
                     )
                 }),
                 _ => false,

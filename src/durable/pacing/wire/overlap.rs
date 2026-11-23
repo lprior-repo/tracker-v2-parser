@@ -15,8 +15,18 @@ use tokio::time::Instant;
 
 use super::{PersistentPacing, WireReceipt, WireRequest, preserve_status};
 use crate::durable::pacing::{
-    MAX_ADMISSION_POLLS, MAX_ADMISSION_WAIT, WIRE_TIMEOUT, admission_delay,
+    MAX_ADMISSION_POLLS, MAX_ADMISSION_WAIT, Spacing, WIRE_TIMEOUT, WireScope, admission_delay,
 };
+
+struct StartLease<'a> {
+    scope: WireScope,
+    token: &'a str,
+    deadline: Instant,
+    started: Option<Instant>,
+    executed_at: Option<chrono::DateTime<chrono::Utc>>,
+    observed_status: Option<u16>,
+    completion_attempted: bool,
+}
 
 impl PersistentPacing {
     #[tracing::instrument(level = "debug", skip_all)]
@@ -30,62 +40,116 @@ impl PersistentPacing {
     where
         F: Future<Output = Result<Response>> + Send,
     {
+        let scope = WireScope::parse(
+            request.source,
+            &request.address,
+            interval,
+            Spacing::RequestStarts,
+        )?;
+        let token = store::start_token(receipt)?;
         let deadline = self.admit_overlapped(request, receipt, interval).await?;
-        let mut executed_at = None;
-        let result = tokio::time::timeout_at(deadline, async {
-            let mut start = self.starts.admit(request.source, interval).await?;
-            self.check_wire_origin(request).await?;
-            self.check_contact_origin(request).await?;
-            if Instant::now() >= deadline {
-                return Err(
-                    anyhow::Error::from(crate::durable::AcquisitionBusy).context(
-                        "durable start admission exhausted its HTTP ownership deadline before wire",
-                    ),
-                );
-            }
-            *start = Some(
-                Instant::now()
-                    .checked_add(interval)
-                    .context("client start fence overflow")?,
-            );
-            let mut operation = std::pin::pin!(operation);
-            executed_at = Some(chrono::Utc::now());
-            let immediate = poll_fn(|cx| {
-                Poll::Ready(match operation.as_mut().poll(cx) {
-                    Poll::Ready(result) => Some(result),
-                    Poll::Pending => None,
-                })
-            })
-            .await;
-            *start = Some(
-                Instant::now()
-                    .checked_add(interval)
-                    .context("client start fence overflow")?,
-            );
-            drop(start);
-            match immediate {
-                Some(result) => result,
-                None => operation.await,
-            }
-        })
+        let mut lease = StartLease {
+            scope,
+            token,
+            deadline,
+            started: None,
+            executed_at: None,
+            observed_status: None,
+            completion_attempted: false,
+        };
+        let result = tokio::time::timeout_at(
+            deadline,
+            self.execute_overlapped(request, interval, operation, &mut lease),
+        )
         .await
         .context("durable overlapped HTTP ownership deadline reached")
         .and_then(std::convert::identity);
+        let result = if lease.completion_attempted {
+            result
+        } else {
+            finish(
+                result,
+                self.release_start(&mut lease).await,
+                &request.address,
+                "wire start pacing completion failed",
+            )
+        };
         let status = result
             .as_ref()
             .ok()
-            .map(|response| response.status().as_u16());
+            .map(|response| response.status().as_u16())
+            .or(lease.observed_status);
         let recorded = self
-            .complete_wire_executed(receipt, status, executed_at)
+            .complete_wire_executed(receipt, status, lease.executed_at)
             .await;
-        match (result, recorded) {
-            (Ok(response), Ok(())) => Ok(response),
-            (Err(error), Ok(())) => Err(error),
-            (Ok(_), Err(error)) => Err(preserve_status(status, error, &request.address)),
-            (Err(error), Err(recording)) => {
-                Err(error.context(format!("wire result recording failed: {recording:#}")))
-            }
+        finish_observed(result, recorded, status, &request.address)
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn execute_overlapped<F>(
+        &self,
+        request: &WireRequest,
+        interval: Duration,
+        operation: F,
+        lease: &mut StartLease<'_>,
+    ) -> Result<Response>
+    where
+        F: Future<Output = Result<Response>> + Send,
+    {
+        let mut start = self.starts.admit(request.source, interval).await?;
+        self.check_wire_origin(request).await?;
+        self.check_contact_origin(request).await?;
+        if Instant::now() >= lease.deadline {
+            return Err(
+                anyhow::Error::from(crate::durable::AcquisitionBusy).context(
+                    "durable start admission exhausted its HTTP ownership deadline before wire",
+                ),
+            );
         }
+        *start = Some(
+            Instant::now()
+                .checked_add(interval)
+                .context("client start fence overflow")?,
+        );
+        let mut operation = std::pin::pin!(operation);
+        lease.started = Some(Instant::now());
+        lease.executed_at = Some(chrono::Utc::now());
+        let immediate = poll_fn(|cx| {
+            Poll::Ready(match operation.as_mut().poll(cx) {
+                Poll::Ready(result) => Some(result),
+                Poll::Pending => None,
+            })
+        })
+        .await;
+        lease.observed_status = immediate
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(|response| response.status().as_u16());
+        *start = Some(
+            Instant::now()
+                .checked_add(interval)
+                .context("client start fence overflow")?,
+        );
+        drop(start);
+        let completed = self.release_start(lease).await;
+        if let Some(result) = immediate {
+            finish(
+                result,
+                completed,
+                &request.address,
+                "wire start pacing completion failed",
+            )
+        } else {
+            completed.context("wire start pacing completion failed")?;
+            operation.await
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all)]
+    async fn release_start(&self, lease: &mut StartLease<'_>) -> Result<()> {
+        lease.completion_attempted = true;
+        self.complete(&lease.scope, lease.token, lease.started)
+            .await
     }
 
     #[tracing::instrument(level = "debug", skip_all)]
@@ -117,5 +181,40 @@ impl PersistentPacing {
             .context("overlapped wire admission exceeded bounded wait budget")??
             .ok_or(crate::durable::AcquisitionBusy)
             .context("overlapped wire admission exceeded bounded contention budget")
+    }
+}
+
+fn finish_observed(
+    result: Result<Response>,
+    recorded: Result<()>,
+    status: Option<u16>,
+    address: &str,
+) -> Result<Response> {
+    finish(result, recorded, address, "wire result recording failed").map_err(|error| {
+        if error.is::<crate::transport::AccessStop>()
+            || error.is::<crate::transport::AccessStopCaptureError>()
+        {
+            error
+        } else {
+            preserve_status(status, error, address)
+        }
+    })
+}
+
+fn finish(
+    result: Result<Response>,
+    completed: Result<()>,
+    address: &str,
+    context: &str,
+) -> Result<Response> {
+    match (result, completed) {
+        (Ok(response), Ok(())) => Ok(response),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(response), Err(error)) => Err(preserve_status(
+            Some(response.status().as_u16()),
+            error,
+            address,
+        )),
+        (Err(error), Err(completion)) => Err(error.context(format!("{context}: {completion:#}"))),
     }
 }
