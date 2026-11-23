@@ -102,16 +102,19 @@ impl PersistentPacing {
     where
         F: Future<Output = Result<T>>,
     {
+        let scope = WireScope::parse(source, address, interval, self.spacing)?;
         let started = OnceLock::new();
         self.execute_guarded(
-            source,
+            &scope,
             address,
-            interval,
-            async {
-                started
-                    .set(Instant::now())
-                    .map_err(|_| anyhow::anyhow!("wire operation start was already recorded"))?;
-                operation.await
+            None,
+            |deadline| {
+                wire::before(Some(deadline), async {
+                    started.set(Instant::now()).map_err(|_| {
+                        anyhow::anyhow!("wire operation start was already recorded")
+                    })?;
+                    operation.await
+                })
             },
             |_| None,
             &started,
@@ -121,10 +124,10 @@ impl PersistentPacing {
 
     async fn execute_guarded<T, F, S>(
         &self,
-        source: Source,
+        scope: &WireScope,
         address: &str,
-        interval: Duration,
-        operation: F,
+        deadline: Option<Instant>,
+        operation: impl FnOnce(Instant) -> F,
         status: S,
         started: &OnceLock<Instant>,
     ) -> Result<T>
@@ -132,13 +135,10 @@ impl PersistentPacing {
         F: Future<Output = Result<T>>,
         S: Fn(&T) -> Option<u16>,
     {
-        let scope = WireScope::parse(source, address, interval, self.spacing)?;
-        let token = self.admit(&scope).await?;
-        let result = tokio::time::timeout(WIRE_TIMEOUT, operation)
-            .await
-            .context("persistent paced wire request timed out")
-            .and_then(std::convert::identity);
-        let completed = self.complete(&scope, &token, started.get().copied()).await;
+        let token = wire::before(deadline, self.admit(scope)).await?;
+        let wire_end = Instant::now() + WIRE_TIMEOUT;
+        let result = operation(deadline.map_or(wire_end, |deadline| deadline.min(wire_end))).await;
+        let completed = wire::settle(self.complete(scope, &token, started.get().copied())).await;
         match (result, completed) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(error), Ok(())) => Err(error),

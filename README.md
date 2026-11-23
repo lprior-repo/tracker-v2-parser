@@ -952,8 +952,8 @@ Rolling requests commit provider and origin ownership with their wire intent.
 They recheck both lease tokens and their database expiry under lock before
 polling the HTTP operation, then release ownership with a cooldown anchored to
 that start. Independent workers share the start fence without serializing
-response headers. The network deadline stops waiting for I/O; bounded ledger
-settlement can extend past it so observed access stops are still recorded.
+response headers. For durable HTTP requests, the network deadline stops waiting
+for I/O without cancelling the bounded settlement of known outcomes and leases.
 Interrupted ownership retains bounded crash debt, and an expired or replaced
 token cannot release another request's lease. Persisted intervals round up to
 microseconds. Update or drain every active worker before relying on the new

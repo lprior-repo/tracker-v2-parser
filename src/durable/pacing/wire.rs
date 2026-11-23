@@ -12,10 +12,12 @@ use futures::{FutureExt, future::Either};
 use reqwest::Response;
 use tokio::time::Instant;
 
-use super::PersistentPacing;
+use super::{PersistentPacing, WireScope};
 
 pub use identity::WireRequest;
 pub(super) use identity::{WireContext, WireReceipt};
+
+const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl PersistentPacing {
     pub fn with_wire_context(mut self, operation_id: &str, attempt_id: &str) -> Result<Self> {
@@ -80,17 +82,17 @@ impl PersistentPacing {
             );
             return response.await;
         }
+        let scope = WireScope::parse(request.source, &request.address, interval, self.spacing)?;
         let started = OnceLock::new();
-        before(
+        self.execute_guarded(
+            &scope,
+            &request.address,
             deadline,
-            self.execute_guarded(
-                request.source,
-                &request.address,
-                interval,
-                self.send_recorded(&request, receipt.as_ref(), operation, &started),
-                |response| Some(response.status().as_u16()),
-                &started,
-            ),
+            |deadline| {
+                self.send_recorded(&request, receipt.as_ref(), operation, &started, deadline)
+            },
+            |response| Some(response.status().as_u16()),
+            &started,
         )
         .await
     }
@@ -115,25 +117,35 @@ impl PersistentPacing {
         receipt: Option<&WireReceipt>,
         operation: F,
         started: &OnceLock<Instant>,
+        deadline: Instant,
     ) -> Result<Response>
     where
         F: Future<Output = Result<Response>>,
     {
-        self.check_wire_origin(request).await?;
-        self.check_contact_origin(request).await?;
-        if let Some(receipt) = receipt {
-            self.begin_wire(receipt, request).await?;
-        }
-        started
-            .set(Instant::now())
-            .map_err(|_| anyhow::anyhow!("wire operation start was already recorded"))?;
-        let result = operation.await;
+        before(Some(deadline), async {
+            self.check_wire_origin(request).await?;
+            self.check_contact_origin(request).await?;
+            if let Some(receipt) = receipt {
+                self.begin_wire(receipt, request).await?;
+            }
+            Ok(())
+        })
+        .await?;
+        let result = before(Some(deadline), async {
+            let now = Instant::now();
+            anyhow::ensure!(now < deadline, "source HTTP request timed out");
+            started
+                .set(now)
+                .map_err(|_| anyhow::anyhow!("wire operation start was already recorded"))?;
+            operation.await
+        })
+        .await;
         let status = result
             .as_ref()
             .ok()
             .map(|response| response.status().as_u16());
         let recorded = match receipt {
-            Some(receipt) => self.complete_wire(receipt, status).await,
+            Some(receipt) => settle(self.complete_wire(receipt, status)).await,
             None => Ok(()),
         };
         match (result, recorded) {
@@ -158,6 +170,11 @@ pub(super) fn before<T>(
         ),
         None => Either::Right(operation),
     }
+}
+
+pub(super) fn settle(action: impl Future<Output = Result<()>>) -> impl Future<Output = Result<()>> {
+    tokio::time::timeout(SETTLEMENT_TIMEOUT, action)
+        .map(|result| result.context("durable wire settlement timed out")?)
 }
 
 pub(super) fn preserve_status(

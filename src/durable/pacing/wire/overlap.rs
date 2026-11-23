@@ -9,17 +9,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use futures::{FutureExt, TryStreamExt, stream};
+use futures::{TryStreamExt, stream};
 use reqwest::Response;
 use sqlx::{Postgres, Transaction};
 use tokio::time::Instant;
 
-use super::{PersistentPacing, WireReceipt, WireRequest, before, preserve_status};
+use super::{PersistentPacing, WireReceipt, WireRequest, before, preserve_status, settle};
 use crate::durable::pacing::{
     MAX_ADMISSION_POLLS, MAX_ADMISSION_WAIT, Spacing, WIRE_TIMEOUT, WireScope, admission_delay,
 };
-
-const SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct OverlappedWire<'a> {
     request: &'a WireRequest,
@@ -210,11 +208,6 @@ impl PersistentPacing {
             .ok_or(crate::durable::AcquisitionBusy)
             .context("overlapped wire admission exceeded bounded contention budget")
     }
-}
-
-fn settle(action: impl Future<Output = Result<()>>) -> impl Future<Output = Result<()>> {
-    tokio::time::timeout(SETTLEMENT_TIMEOUT, action)
-        .map(|result| result.context("durable wire settlement timed out")?)
 }
 
 fn finish(

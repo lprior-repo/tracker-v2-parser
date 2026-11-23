@@ -22,6 +22,46 @@ fn request() -> Result<WireRequest> {
 }
 
 #[tokio::test]
+async fn given_an_admitted_exclusive_wire_when_http_times_out_then_intent_and_lease_settle()
+-> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let gate = PersistentPacing::new(pool.clone())
+                .with_wire_context(&"1".repeat(64), &"2".repeat(64))?;
+            let mut started = false;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+            let error = gate
+                .send_with_deadline(
+                    request()?,
+                    Duration::from_millis(500),
+                    async {
+                        started = true;
+                        futures::future::pending().await
+                    },
+                    Some(deadline),
+                )
+                .await
+                .expect_err("pending HTTP operation must time out");
+
+            assert!(started);
+            assert!(format!("{error:#}").contains("source HTTP request timed out"));
+            let wire: (String, Option<i32>, Option<String>) =
+                sqlx::query_as("SELECT state, status, error_class FROM durable_wire_requests")
+                    .fetch_one(pool)
+                    .await?;
+            assert_eq!(wire, ("failed".into(), None, Some("transport".into())));
+            let leases: (i64, i64) =
+                sqlx::query_as("SELECT count(*), count(lease_token) FROM durable_wire_pacing")
+                    .fetch_one(pool)
+                    .await?;
+            assert_eq!(leases, (2, 0));
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn given_a_crash_after_wire_when_same_attempt_replays_then_intent_prevents_another_http_call()
 -> Result<()> {
     with_database(|pool| Box::pin(async move {
