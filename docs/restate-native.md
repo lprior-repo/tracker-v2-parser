@@ -124,8 +124,9 @@ Verification compares every `Athletes` cell with frozen rows. With
 checkpoint rows for a second `Review` sheet, including durable state and retry UTC.
 Every Review header/cell is also verified before publication; zero failures still
 produces its header row. The default remains a single Athletes sheet. Review is
-bounded to 10,000 rows and 16 MiB with explicit cell limits, excludes unrelated
-states, and includes unscoped discovery roots and existing disabled-provider stops.
+bounded to 100,000 rows and 64 MiB of serialized review rows, with explicit cell
+limits. It excludes unrelated states and includes unscoped discovery roots and
+existing disabled-provider stops.
 URLs/errors omit credentials and raw response payloads. Deferred rows advise
 waiting for automatic retry; blocked rows require human handling and prohibit bypass.
 The Review presentation flag does not change acquisition identity or retry counters;
