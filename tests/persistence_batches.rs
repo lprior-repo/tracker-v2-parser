@@ -33,14 +33,11 @@ async fn given_many_results_when_persisted_then_exact_references_are_loaded_in_b
             unrelated_result?;
             assert_eq!(queries.count("SELECT source_id,id FROM athlete_sources"), 3);
             assert_eq!(queries.count("SELECT source_id,id FROM schools"), 3);
-            let replay_locks = queries.count(
-                "SELECT id FROM athlete_sources WHERE source='milesplit' AND source_id=ANY($1)",
-            );
-            assert!(replay_locks <= 1);
             assert_eq!(
-                queries.count("SELECT id FROM athlete_sources"),
-                replay_locks
+                queries.count("SELECT id FROM athlete_sources WHERE id IN"),
+                1
             );
+            assert_eq!(queries.count("SELECT id FROM athlete_sources"), 1);
             assert_eq!(queries.count("SELECT id FROM schools"), 0);
             eprintln!(
                 "257 results: profile reference queries={}, school reference queries={}",

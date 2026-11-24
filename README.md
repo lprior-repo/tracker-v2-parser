@@ -954,8 +954,10 @@ polling the HTTP operation, then release ownership with a cooldown anchored to
 that start. Independent workers share the start fence without serializing
 response headers. For durable HTTP requests, the network deadline stops waiting
 for I/O without cancelling the bounded settlement of known outcomes and leases.
-Interrupted ownership retains bounded crash debt, and an expired or replaced
-token cannot release another request's lease. Persisted intervals round up to
+External cancellation cannot run settlement: any committed intent prevents the
+same attempt from sending again, and a new attempt must honor any outstanding
+lease until its bounded expiry. An expired or replaced token cannot release
+another request's lease. Persisted intervals round up to
 microseconds. Update or drain every active worker before relying on the new
 start fence; older rolling workers still use their previous admission behavior.
 

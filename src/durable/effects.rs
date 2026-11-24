@@ -64,7 +64,14 @@ pub fn transient(error: &anyhow::Error) -> bool {
         if cause
             .downcast_ref::<sqlx::Error>()
             .is_some_and(|error| match error {
-                sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
+                sqlx::Error::Io(error) => !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::InvalidInput
+                        | std::io::ErrorKind::InvalidData
+                        | std::io::ErrorKind::Unsupported
+                        | std::io::ErrorKind::PermissionDenied
+                ),
+                sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
                 sqlx::Error::Database(database) => database.code().is_some_and(|code| {
                     matches!(
                         code.as_ref(),

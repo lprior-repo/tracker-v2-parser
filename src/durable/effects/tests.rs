@@ -50,6 +50,27 @@ async fn elapsed_runtime_timeout_is_retryable_through_persistent_wire_context() 
 }
 
 #[test]
+fn sqlx_transport_loss_retries_but_invalid_socket_configuration_is_terminal() {
+    use std::io::{Error, ErrorKind};
+
+    for (kind, retryable) in [
+        (ErrorKind::UnexpectedEof, true),
+        (ErrorKind::ConnectionReset, true),
+        (ErrorKind::BrokenPipe, true),
+        (ErrorKind::InvalidInput, false),
+        (ErrorKind::InvalidData, false),
+        (ErrorKind::Unsupported, false),
+        (ErrorKind::PermissionDenied, false),
+    ] {
+        assert_classification(
+            anyhow::Error::from(sqlx::Error::Io(Error::from(kind)))
+                .context("opening PostgreSQL connection for a recorded effect"),
+            retryable,
+        );
+    }
+}
+
+#[test]
 fn immutable_capacity_validation_and_access_stops_remain_terminal() {
     for message in [
         "frozen export exceeds capacity",
@@ -157,28 +178,19 @@ async fn failed_receipt_with_sqlstate(pool: &sqlx::PgPool, code: &str) -> Result
 }
 
 #[tokio::test]
-async fn postgres_restart_and_connection_failures_remain_retryable_without_receipts() -> Result<()>
+async fn postgres_connection_contention_and_resource_failures_retry_without_receipts() -> Result<()>
 {
     with_database(|pool| {
         Box::pin(async move {
             let before = committed_counts(pool).await?;
-            let mut observed = std::collections::BTreeMap::new();
-            for code in ["08001", "08003", "08006", "57P02", "57P03", "57P05"] {
+            for code in [
+                "08001", "08003", "08006", "40001", "40P01", "55P03", "57P01", "57P02", "57P03",
+                "57P05", "53300",
+            ] {
                 let failure = failed_receipt_with_sqlstate(pool, code).await?;
-                observed.insert(code, super::transient(&failure));
+                assert_classification(failure, true);
                 assert_eq!(committed_counts(pool).await?, before);
             }
-            assert_eq!(
-                observed,
-                std::collections::BTreeMap::from([
-                    ("08001", true),
-                    ("08003", true),
-                    ("08006", true),
-                    ("57P02", true),
-                    ("57P03", true),
-                    ("57P05", true),
-                ])
-            );
             Ok(())
         })
     })

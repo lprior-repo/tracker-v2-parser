@@ -122,6 +122,7 @@ impl PersistentPacing {
         .await
     }
 
+    #[tracing::instrument(skip_all)]
     async fn execute_guarded<T, F, S>(
         &self,
         scope: &WireScope,

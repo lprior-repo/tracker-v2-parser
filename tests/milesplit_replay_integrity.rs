@@ -361,6 +361,73 @@ async fn profile_replay_waiting_on_a_result_writer_does_not_lock_its_result() ->
 }
 
 #[tokio::test]
+async fn masked_only_replay_waits_for_the_profile_before_locking_its_retained_result() -> Result<()>
+{
+    support::with_schema(|test| {
+        Box::pin(async move {
+            let database = Database::connect(&test.url).await?;
+            let target = career_target();
+            let masked = seed_old_masked_career(&database, &target, true).await?;
+            let mut replay = sources::parse(&target, &masked)?;
+            replay.athletes.clear();
+            assert!(replay.performances.is_empty());
+            sqlx::query("UPDATE athletes SET needs_review=FALSE")
+                .execute(&test.pool)
+                .await?;
+
+            let mut writer = test.pool.begin().await?;
+            let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *writer)
+                .await?;
+            sqlx::query("SELECT id FROM athlete_sources WHERE source='milesplit' FOR UPDATE")
+                .fetch_one(&mut *writer)
+                .await?;
+            sqlx::query("SELECT id FROM athletes FOR NO KEY UPDATE")
+                .fetch_one(&mut *writer)
+                .await?;
+            let write = async {
+                loop {
+                    let blocked: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+                    )
+                    .bind(pid)
+                    .fetch_one(&test.pool)
+                    .await?;
+                    if blocked {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                sqlx::query("SELECT id FROM results WHERE source_url=$1 FOR UPDATE")
+                    .bind(&target.url)
+                    .fetch_one(&mut *writer)
+                    .await?;
+                writer.commit().await?;
+                Ok::<_, anyhow::Error>(())
+            };
+            let (replayed, written) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                tokio::join!(persist(&database, &target, &masked, &replay), write)
+            })
+            .await?;
+            replayed?;
+            written?;
+            assert_eq!(
+                career_observations(&test.pool).await?,
+                [("1:50.00".into(), Some("unverified_prior_revision".into()))]
+            );
+            assert!(
+                sqlx::query_scalar::<_, bool>("SELECT needs_review FROM athletes")
+                    .fetch_one(&test.pool)
+                    .await?
+            );
+            database.close().await;
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[tokio::test]
 async fn given_retained_self_masked_career_when_replayed_then_quarantine_clears_only_on_public_reconfirmation()
 -> Result<()> {
     for indexed in [false, true] {

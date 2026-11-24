@@ -5,7 +5,7 @@ use futures::{TryStreamExt, stream};
 use serde_json::Value;
 use sqlx::PgConnection;
 
-use crate::model::{Capture, ParsedPage, Source, Target};
+use crate::model::{Capture, PageKind, ParsedPage, Source, Target};
 
 mod adoption;
 
@@ -18,15 +18,21 @@ pub(in crate::database) async fn prepare(
     page: &ParsedPage,
 ) -> Result<()> {
     if target.source == Source::MileSplit {
-        lock_profiles(connection, page).await?;
+        let athlete_url = (target.kind == PageKind::Athlete).then_some(capture.url.as_str());
+        lock_profiles(connection, page, athlete_url).await?;
         super::legacy_history::review_masked(connection, target, capture).await?;
         adoption::reconcile(connection, page).await?;
     }
     Ok(())
 }
 
-async fn lock_profiles(connection: &mut PgConnection, page: &ParsedPage) -> Result<()> {
-    if page.performances.is_empty() {
+#[tracing::instrument(skip_all)]
+async fn lock_profiles(
+    connection: &mut PgConnection,
+    page: &ParsedPage,
+    athlete_url: Option<&str>,
+) -> Result<()> {
+    if page.performances.is_empty() && athlete_url.is_none() {
         return Ok(());
     }
     let ids = page
@@ -36,10 +42,19 @@ async fn lock_profiles(connection: &mut PgConnection, page: &ParsedPage) -> Resu
         .collect::<std::collections::BTreeSet<_>>();
     let ids = ids.into_iter().collect::<Vec<_>>();
     sqlx::query(
-        "SELECT id FROM athlete_sources WHERE source='milesplit' AND source_id=ANY($1) \
-         ORDER BY id FOR SHARE",
+        "SELECT id FROM athlete_sources WHERE id IN ( \
+           SELECT id FROM athlete_sources WHERE source='milesplit' AND source_id=ANY($1) \
+           UNION ALL \
+           SELECT athlete_source_id FROM ( \
+             SELECT athlete_source_id FROM results \
+             WHERE source='milesplit' AND source_url=$2 \
+             AND raw#>>'{source_values,kind}' IN ('career_result','personal_record') \
+             ORDER BY id LIMIT 10001 \
+           ) AS retained \
+         ) ORDER BY id FOR SHARE",
     )
     .bind(ids)
+    .bind(athlete_url)
     .execute(connection)
     .await?;
     Ok(())

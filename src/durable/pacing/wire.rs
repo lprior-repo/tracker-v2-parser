@@ -111,6 +111,7 @@ impl PersistentPacing {
         Ok(receipt)
     }
 
+    #[tracing::instrument(skip_all)]
     async fn send_recorded<F>(
         &self,
         request: &WireRequest,
