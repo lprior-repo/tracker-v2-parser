@@ -19,6 +19,7 @@ pub(super) async fn prove(
     runtime.rotate_worker_port()?;
     runtime.start_worker().await?;
     let registered = runtime.register_named("upgraded-registration.json").await?;
+    let page_privacy = runtime.verify_page_privacy().await?;
     let schema_preservation = schema::verify(&schema_before, &schema::capture(runtime).await?)?;
     let deployment = io::text(&registered, "/id")?;
     evidence::identifier(deployment, "dp_")?;
@@ -30,11 +31,11 @@ pub(super) async fn prove(
         evidence::journal(runtime, &root.id).await? == root.prefix,
         "historical journal changed while drained"
     );
-    let status = runtime
-        .patch_owned(&format!(
-            "/invocations/{}/resume?deployment={deployment}",
-            root.id
-        ))
+    let (status, _) = runtime
+        .patch_owned(
+            &format!("/invocations/{}/resume?deployment={deployment}", root.id),
+            None,
+        )
         .await?;
     ensure!(status == 200, "owned root migration failed HTTP {status}");
     let report = runtime
@@ -71,7 +72,7 @@ pub(super) async fn prove(
         "prefix_rows":root.prefix.len(),"prefix_sha256":io::digest(&serde_json::to_vec(&root.prefix)?),
         "prefix_unchanged":true,"input_bytes_unchanged":true,"future_continuation_input":child_input,
         "report":report,"continuation_report":next,"checkpoint_records_unchanged":true,"attempts":attempts,
-        "schema_preservation":schema_preservation});
+        "schema_preservation":schema_preservation,"page_privacy_after_registration":page_privacy});
     io::save(
         &runtime.args.evidence.join("historical-prefix.json"),
         &json!(root.prefix),

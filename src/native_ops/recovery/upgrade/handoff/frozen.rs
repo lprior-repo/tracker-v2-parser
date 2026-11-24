@@ -123,8 +123,8 @@ async fn observe_partial(runtime: &Runtime, id: &str, previous: &Value) -> Resul
         !serde_json::to_string(&partial)?.contains("OneWayCall"),
         "historical root sent work before pause"
     );
-    let status = runtime
-        .patch_owned(&format!("/invocations/{id}/pause"))
+    let (status, _) = runtime
+        .patch_owned(&format!("/invocations/{id}/pause"), None)
         .await?;
     ensure!(
         matches!(status, 200 | 202),

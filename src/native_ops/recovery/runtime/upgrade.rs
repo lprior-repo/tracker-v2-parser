@@ -55,7 +55,8 @@ impl Runtime {
         Ok(())
     }
 
-    pub async fn patch_owned(&self, route: &str) -> Result<u16> {
+    #[tracing::instrument(skip_all)]
+    pub async fn patch_owned(&self, route: &str, value: Option<&Value>) -> Result<(u16, Value)> {
         let url = url::Url::parse(&self.admin)?;
         ensure!(
             url.scheme() == "http"
@@ -63,14 +64,9 @@ impl Runtime {
                 && url.port() == self.ports.get(1).copied(),
             "proof control escaped owned admin endpoint"
         );
-        Ok(reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()?
-            .patch(format!("{}{route}", self.admin))
-            .send()
-            .await?
-            .status()
-            .as_u16())
+        self.http
+            .request_with_method(reqwest::Method::PATCH, &self.admin, route, value, None)
+            .await
     }
 
     pub async fn register_fixture(&self, endpoint: &str, label: &str) -> Result<Value> {

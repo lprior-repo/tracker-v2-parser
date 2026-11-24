@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 
 use super::{io, runtime::Runtime};
 
+pub(super) const PAGE_SERVICE: &str = "/services/AthleticPage";
+pub(super) const PAGE_SEND: &str = "/restate/send/AthleticPage/handle";
+
 impl Runtime {
     pub async fn register(&self) -> Result<Value> {
         self.register_named("registration.json").await
@@ -61,6 +64,50 @@ impl Runtime {
                 && io::text(&value, "/abort_timeout")? == "2m",
             "registered Operations timeout mismatch"
         );
-        Ok(json!({"service":"AthleticOperations","inactivity_timeout":"10m","abort_timeout":"2m"}))
+        let page = self.verify_page_privacy().await?;
+        Ok(
+            json!({"service":"AthleticOperations","inactivity_timeout":"10m","abort_timeout":"2m",
+            "page":page}),
+        )
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub(super) async fn verify_page_privacy(&self) -> Result<Value> {
+        ensure!(!self.page_public().await?, "AthleticPage must be private");
+        let (status, rejection) = self
+            .http
+            .request(&self.ingress, PAGE_SEND, Some(&json!({})), None)
+            .await?;
+        ensure!(
+            status == 400
+                && io::text(&rejection, "/message")? == "the invoked service is not public",
+            "direct AthleticPage submission was not rejected by Restate (HTTP {status})"
+        );
+        Ok(json!({"public":false,"direct_submit_status":status}))
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub(super) async fn page_public(&self) -> Result<bool> {
+        let (status, service) = self
+            .http
+            .request(&self.admin, PAGE_SERVICE, None, None)
+            .await?;
+        ensure!(status == 200, "AthleticPage metadata HTTP {status}");
+        service
+            .get("public")
+            .and_then(Value::as_bool)
+            .context("AthleticPage visibility missing from metadata")
+    }
+
+    #[tracing::instrument(skip_all, fields(public))]
+    pub(super) async fn set_page_public(&self, public: bool) -> Result<()> {
+        let (status, service) = self
+            .patch_owned(PAGE_SERVICE, Some(&json!({"public":public})))
+            .await?;
+        ensure!(
+            status == 200 && service.get("public").and_then(Value::as_bool) == Some(public),
+            "owned AthleticPage visibility update failed (HTTP {status})"
+        );
+        Ok(())
     }
 }

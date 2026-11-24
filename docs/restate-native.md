@@ -74,6 +74,11 @@ Omitting the option preserves existing configuration identities and contact
 defaults. Source stops are checked again after admission. These limits are
 ceilings; network latency, browser work and exports can reduce observed throughput.
 
+`AthleticCrawl` and `AthleticOperations` are the ingress services.
+`AthleticPage` is private to Restate service-to-service calls. Page scheduling
+and request construction belong to the orchestrators; do not submit page work
+directly through ingress.
+
 `AthleticPage` records reservation, fetch/capture, parse and atomic persistence
 as separate Restate steps. Capture and parse blobs are bounded, fsynced and hash
 checked. A capture manifest can recover the interval between retaining bytes
@@ -100,6 +105,11 @@ rotate before school order so a failing earlier school cannot stall later work.
 Public reference CSV downloads use the same durable wire rules with a separate
 three-chain budget and approved redirects. Production imports verify hashes and
 commit their domain writes and operation receipt in one PostgreSQL transaction.
+
+A Restate step can run again if the worker completes an external effect but
+Restate does not durably record its result. A stable invocation key deduplicates
+submissions; the PostgreSQL receipts and immutable artifacts reconcile effects
+across that acknowledgement gap.
 
 ## Spreadsheet durability
 
@@ -133,6 +143,11 @@ Install the publisher's native server/CLI archive for the machine architecture
 and verify its published SHA-256. Keep the complete server state on persistent
 local storage. Bind the server, ingress, administration and worker to loopback.
 Use fixed node/cluster names and preserve them with the data directory.
+Loopback assumes a trusted local host; it does not authenticate local processes.
+Do not expose these listeners as-is. For a shared deployment, restrict access to
+the admin and worker listeners, authenticate ingress, and verify [Restate request
+identity](https://docs.restate.dev/services/security#locking-down-service-access)
+at the worker.
 
 The installed machine uses ingress `127.0.0.1:18095`, admin `127.0.0.1:19095`,
 fabric `127.0.0.1:15152`, and application worker `127.0.0.1:9089`. Both the server
@@ -153,6 +168,11 @@ track-scrapper-v2 durable crawl --config profiles.toml \
 track-scrapper-v2 durable status --key wi-2027-unique-run-000000
 track-scrapper-v2 durable export --config config.toml --operation-id reviewed-export-1
 ```
+
+When upgrading an existing deployment, register the new worker and check
+`GET /services/AthleticPage` on the admin endpoint for `"public": false`.
+Submit crawl or operations requests through the supported commands rather
+than posting page work directly.
 
 Configure both `RESTATE_ADMIN_URL` and `RESTATE_INGRESS_URL` for the native CLI.
 `durable submit --request file.json` accepts a saved, bounded `CrawlRequest`;
@@ -230,9 +250,11 @@ windows with seven unique children split across five-page and two-page batches,
 rechecks both parallel reports after backup restoration, replays a local
 fixture twice, accepts work while the worker is stopped, restarts
 the native server with the same state, replaces the worker and verifies retained
-invocation IDs, hashes and a reopened single-sheet XLSX. Its evidence explicitly
-separates those protocol checks from native chunk recovery and provider-outage
-scenarios. It never sends a source request to a public provider.
+invocation IDs, hashes and a reopened XLSX. It verifies that Restate rejects
+direct page submissions both before and after restore while internal calls
+still run. Its evidence explicitly separates these protocol checks from native
+chunk recovery and provider-outage scenarios. It never sends a source request
+to a public provider.
 
 `moon run pipeline:native-cadence` compares completed-response cooldown with
 parallel start spacing using an isolated PostgreSQL schema and a delayed local
@@ -272,5 +294,10 @@ Configuration preparation additionally requires `--prior-config /absolute/live/p
 Prepare configuration with the qualified maintenance role able to observe all PostgreSQL settings. A restricted crawler role may lack access to preload settings; preparation fails closed instead of assuming an empty preload list. The crawler role itself needs no additional privileges. Recheck observation freshness and the prior configuration digest at installation time.
 
 The native recovery command also accepts `--previous-worker /absolute/retained-immutable-worker`. This adds a separate owned schema and Restate process rehearsal before the standard fixture proof. The previous binary initializes that empty schema before the new binary can apply newer migrations. A frozen historical request omits the scheduler version, pauses before the first child send, and resumes the same invocation on a different owned deployment. Evidence binds both binary hashes, exact retained input bytes, the prior journal prefix, original failed checkpoints and the future continuation's unchanged configuration, lineage and deadline with `rolling_v2` added.
+
+The reserved-page recovery scenario temporarily exposes `AthleticPage` only
+on its owned loopback proof server to resubmit an exact retained page input.
+It restores the private setting and verifies ingress rejects direct calls
+after each submission. Production recovery does not change visibility.
 
 The additional scheduler rehearsal runs the production root scheduler against a local `AthleticPage` fixture adapter using real configured reservations for exhausted checkpoints. One child durably sleeps while four fast siblings finish; the root must refill while that first child's journaled timer remains pending with no output. Restate may report that invocation as running or suspended. The owned Restate server and actual crawl worker then restart from a verified stopped-state backup clone. The proof checks the same root, same children and keys, exact retained journal prefix, a maximum of three uncompleted children and zero source acquisitions or provider HTTP requests. This isolates scheduler protocol behavior; the local adapter is not evidence of public-provider throughput. The standard seven-child proof retains its strict historical ordering oracle and uses a separate version-aware oracle for new rolling requests.

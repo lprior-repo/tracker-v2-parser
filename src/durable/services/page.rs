@@ -28,6 +28,7 @@ pub struct PageExecution {
 }
 
 #[restate_sdk::service(
+    ingress_private,
     idempotency_retention = "90 days",
     journal_retention = "90 days",
     invocation_retry_policy(

@@ -126,6 +126,24 @@ impl Http {
         value: Option<&Value>,
         key: Option<&str>,
     ) -> Result<(u16, Value)> {
+        let method = if value.is_some() {
+            reqwest::Method::POST
+        } else {
+            reqwest::Method::GET
+        };
+        self.request_with_method(method, base, route, value, key)
+            .await
+    }
+
+    #[tracing::instrument(skip_all, fields(method = %method))]
+    pub(super) async fn request_with_method(
+        &self,
+        method: reqwest::Method,
+        base: &str,
+        route: &str,
+        value: Option<&Value>,
+        key: Option<&str>,
+    ) -> Result<(u16, Value)> {
         let url = url::Url::parse(base)?;
         ensure!(
             url.scheme() == "http"
@@ -134,12 +152,14 @@ impl Http {
                     .is_ok_and(|ip| ip.is_loopback())),
             "proof HTTP must use loopback"
         );
-        let request = value
-            .map_or_else(
-                || self.client.get(format!("{base}{route}")),
-                |value| self.client.post(format!("{base}{route}")).json(value),
-            )
+        let request = self
+            .client
+            .request(method, format!("{base}{route}"))
             .header(reqwest::header::ACCEPT, "application/json");
+        let request = match value {
+            Some(value) => request.json(value),
+            None => request,
+        };
         let request = match key {
             Some(key) => request.header("idempotency-key", key),
             None => request,
