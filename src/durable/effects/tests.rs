@@ -246,3 +246,57 @@ async fn retrying_database_effect_after_recovery_commits_exactly_once() -> Resul
     })
     .await
 }
+
+#[tokio::test]
+async fn unknown_commit_outcome_retries_and_returns_the_already_committed_receipt() -> Result<()> {
+    with_database(|pool| {
+        Box::pin(async move {
+            let key = "ambiguous-commit";
+            let digest = "a".repeat(64);
+            let first: Result<Value> = async {
+                let saved = with_receipt(pool, key, &digest, |connection| {
+                    Box::pin(async move {
+                        let id: i64 = sqlx::query_scalar(
+                            "INSERT INTO athletes(name) VALUES('Ambiguous commit fixture') RETURNING id",
+                        )
+                        .fetch_one(connection)
+                        .await?;
+                        Ok(json!({"athlete_id":id}))
+                    })
+                })
+                .await?;
+                sqlx::query(
+                    "DO $$ BEGIN RAISE SQLSTATE '08007' USING MESSAGE='owned lost-acknowledgement fixture'; END $$;",
+                )
+                .execute(pool)
+                .await
+                .context("observing operation commit acknowledgement")?;
+                Ok(saved)
+            }
+            .await;
+            let error = first.expect_err("PostgreSQL must report an unknown outcome");
+            assert_eq!(
+                error.downcast_ref::<sqlx::Error>()
+                    .and_then(sqlx::Error::as_database_error)
+                    .and_then(|error| error.code())
+                    .as_deref(),
+                Some("08007")
+            );
+            assert_classification(error, true);
+            let repeated: Value = with_receipt(pool, key, &digest, |_| {
+                Box::pin(async { anyhow::bail!("ambiguous commit already applied") })
+            })
+            .await?;
+            let id: i64 = sqlx::query_scalar("SELECT id FROM athletes")
+                .fetch_one(pool)
+                .await?;
+            assert_eq!(repeated, json!({"athlete_id":id}));
+            assert_eq!(
+                committed_counts(pool).await?,
+                json!({"athletes":1,"operation_receipts":1,"page_receipts":0,"pages":0,"wire_requests":0})
+            );
+            Ok(())
+        })
+    })
+    .await
+}

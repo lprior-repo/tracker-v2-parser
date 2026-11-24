@@ -78,6 +78,7 @@ pub fn transient(error: &anyhow::Error) -> bool {
                         "08001"
                             | "08003"
                             | "08006"
+                            | "08007"
                             | "40001"
                             | "40P01"
                             | "55P03"
